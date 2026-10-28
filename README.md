@@ -71,10 +71,24 @@ Configuration (environment variables):
 
 | Variable                  | Default            | Purpose                              |
 |----------------------------|---------------------|---------------------------------------|
-| `LUMINARY_DATA_DIR`        | `/data/photos`      | Root directory for originals/thumbnails |
+| `LUMINARY_PHOTOS_URI`      | `/data/photos`      | Where originals/thumbnails are stored |
 | `LUMINARY_DATABASE_PATH`   | `/data/photos.db`   | SQLite database file                  |
 | `LUMINARY_CORS_ORIGINS`    | `*`                 | Comma-separated list of allowed origins |
 | `PORT`                     | `8080`              | Port uvicorn listens on                |
+
+`LUMINARY_PHOTOS_URI` is resolved with [fsspec](https://filesystem-spec.readthedocs.io/),
+so it accepts any of the following:
+
+| Backend          | Example                                 | Notes                                   |
+|-------------------|------------------------------------------|-------------------------------------------|
+| Local path / NFS  | `/data/photos`                          | NFS works by mounting the share at the OS level (e.g. the PVC below) and pointing here — there's no separate NFS protocol handler |
+| Explicit local    | `file:///data/photos`                   | Same as above, spelled out               |
+| Amazon S3         | `s3://my-bucket/photos`                 | Credentials via standard AWS env vars/IAM role |
+| SMB/CIFS          | `smb://user:pass@server/share/photos`   | Pure-Python client, no OS-level mount needed |
+| HTTP(S)           | `https://host/photos`                   | Read-only — uploads/deletes will fail    |
+
+The database always stays on local disk regardless of `LUMINARY_PHOTOS_URI`
+(SQLite needs real filesystem locking).
 
 ## Local development
 

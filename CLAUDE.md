@@ -48,16 +48,24 @@ Request flow: `main.py` wires CORS + the `health` and `photos` routers under
 is thin — all actual work (file I/O, thumbnailing, SQLite) lives in
 `storage.py`:
 
-- `config.py` reads `LUMINARY_DATA_DIR`, `LUMINARY_DATABASE_PATH`,
+- `config.py` reads `LUMINARY_PHOTOS_URI`, `LUMINARY_DATABASE_PATH`,
   `LUMINARY_CORS_ORIGINS` from env **lazily per-call** (not cached at import
   time) specifically so tests can override them per-case with
   `monkeypatch.setenv` — see `tests/conftest.py`'s `client` fixture, which
   points both at a fresh `tmp_path` per test.
-- `storage.py` owns the photo lifecycle: on upload it writes the original to
-  `{DATA_DIR}/originals/{uuid}{ext}`, tries to generate a 320x320 JPEG
-  thumbnail at `{DATA_DIR}/thumbnails/{uuid}.jpg` via Pillow, and always
-  records metadata in SQLite even if thumbnailing fails (non-image or
-  corrupt upload still gets stored — thumbnail is best-effort).
+- `storage.py` owns the photo lifecycle, and resolves `LUMINARY_PHOTOS_URI`
+  through [fsspec](https://filesystem-spec.readthedocs.io/) (`fsspec.core.url_to_fs`)
+  rather than touching `pathlib` directly — the URI can be a bare local
+  path/NFS mount, `s3://`, `smb://`, or read-only `https://` (see README's
+  config table). On upload it writes the original to
+  `{root}/originals/{uuid}{ext}`, tries to generate a 320x320 JPEG thumbnail
+  at `{root}/thumbnails/{uuid}.jpg` via Pillow (reading/writing through
+  `fs.open()`, never assuming a local path), and always records metadata in
+  SQLite even if thumbnailing fails (non-image or corrupt upload still gets
+  stored — thumbnail is best-effort). Because the backend may not be a real
+  filesystem, `routers/photos.py` serves originals/thumbnails via
+  `StreamingResponse` over `storage.stream_original`/`stream_thumbnail`
+  rather than FastAPI's `FileResponse` (which requires a local path).
 - `database.py` opens a fresh sqlite3 connection per operation (no pooling);
   `init_db()` just creates the `photos` table if missing — there are no
   migrations, so schema changes need a manual `ALTER TABLE` added here.

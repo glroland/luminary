@@ -1,5 +1,5 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 from .. import storage
 from ..models import Photo, PhotoList
@@ -28,19 +28,20 @@ def get_photo(photo_id: str) -> dict:
 
 
 @router.get("/photos/{photo_id}/original")
-def get_photo_original(photo_id: str) -> FileResponse:
-    path = storage.find_original_path(photo_id)
-    if not path:
+def get_photo_original(photo_id: str) -> StreamingResponse:
+    photo = storage.get_photo(photo_id)
+    stream = storage.stream_original(photo_id) if photo else None
+    if not stream:
         raise HTTPException(status_code=404, detail="Photo not found")
-    return FileResponse(path)
+    return StreamingResponse(stream, media_type=photo["content_type"])
 
 
 @router.get("/photos/{photo_id}/thumbnail")
-def get_photo_thumbnail(photo_id: str) -> FileResponse:
-    path = storage.find_thumbnail_path(photo_id)
-    if not path:
+def get_photo_thumbnail(photo_id: str) -> StreamingResponse:
+    stream = storage.stream_thumbnail(photo_id)
+    if not stream:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return FileResponse(path, media_type="image/jpeg")
+    return StreamingResponse(stream, media_type="image/jpeg")
 
 
 @router.delete("/photos/{photo_id}", status_code=204)

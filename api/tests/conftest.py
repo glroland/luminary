@@ -10,7 +10,7 @@ if str(SRC_DIR) not in sys.path:
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("LUMINARY_DATA_DIR", str(tmp_path / "photos"))
+    monkeypatch.setenv("LUMINARY_PHOTOS_URI", str(tmp_path / "photos"))
     monkeypatch.setenv("LUMINARY_DATABASE_PATH", str(tmp_path / "photos.db"))
 
     from fastapi.testclient import TestClient

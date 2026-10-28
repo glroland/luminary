@@ -8,8 +8,14 @@ import os
 from pathlib import Path
 
 
-def get_data_dir() -> Path:
-    return Path(os.environ.get("LUMINARY_DATA_DIR", "/data/photos"))
+def get_photos_uri() -> str:
+    """Where original/thumbnail files live, as an fsspec URI.
+
+    Accepts anything fsspec understands: a bare local path (default),
+    ``file:///...``, ``s3://bucket/prefix``, ``smb://server/share/path``,
+    ``https://host/path`` (read-only), etc.
+    """
+    return os.environ.get("LUMINARY_PHOTOS_URI", "/data/photos")
 
 
 def get_database_path() -> Path:

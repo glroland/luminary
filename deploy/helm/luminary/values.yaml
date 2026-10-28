@@ -22,6 +22,10 @@ api:
     accessMode: ReadWriteOnce
   env:
     corsOrigins: "*"
+    # fsspec URI for photo storage: a bare path or file:// uses the PVC
+    # below; s3://, smb://, https://, etc. point at an external backend
+    # instead (set api.persistence.enabled=false in that case).
+    photosUri: /data/photos
   route:
     enabled: true
     host: ""

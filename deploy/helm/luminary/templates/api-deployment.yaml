@@ -24,8 +24,8 @@ spec:
           ports:
             - containerPort: {{ .Values.api.port }}
           env:
-            - name: LUMINARY_DATA_DIR
-              value: /data/photos
+            - name: LUMINARY_PHOTOS_URI
+              value: {{ .Values.api.env.photosUri | quote }}
             - name: LUMINARY_DATABASE_PATH
               value: /data/photos.db
             - name: LUMINARY_CORS_ORIGINS
