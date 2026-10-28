@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_cors_origins
 from .database import init_db
-from .routers import health, photos
+from .routers import health, photos, sync
 
 
 @asynccontextmanager
@@ -26,3 +26,4 @@ app.add_middleware(
 
 app.include_router(health.router, prefix="/api")
 app.include_router(photos.router, prefix="/api")
+app.include_router(sync.router, prefix="/api")

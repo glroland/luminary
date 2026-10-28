@@ -16,6 +16,9 @@ def client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.main import app
+    from app.sync import progress as sync_progress
+
+    sync_progress.reset()
 
     with TestClient(app) as test_client:
         yield test_client

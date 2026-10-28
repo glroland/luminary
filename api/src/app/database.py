@@ -27,7 +27,10 @@ def init_db() -> None:
                 size_bytes INTEGER NOT NULL,
                 width INTEGER,
                 height INTEGER,
-                uploaded_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                latitude REAL,
+                longitude REAL,
+                thumbnail BLOB
             )
             """
         )

@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Luminary is a simple photo management app: upload, browse in a gallery, view
-full-size, delete. Two independently deployable components, each its own
-container image, deployed together via Helm/ArgoCD on OpenShift:
+Luminary is a simple photo management app: browse a gallery, view full-size,
+delete. There's no upload button in the web UI currently (`POST /api/photos`
+still exists and works, it's just not wired up in `web/`) — the expected way
+photos show up is by placing files on the configured storage backend and
+triggering a sync (`POST /api/sync`) to index them. Two independently
+deployable components, each its own container image, deployed together via
+Helm/ArgoCD on OpenShift:
 
 - **`web/`** — React SPA (Vite). In production, served as a static bundle by
   unprivileged nginx, which also reverse-proxies `/api/*` to the API service
@@ -21,25 +25,38 @@ contract — no shared code, no shared types.
 ## Commands
 
 ```bash
-make install     # creates api/.venv, installs web/node_modules
+make install     # creates target/venv, installs web/node_modules
 make test        # pytest (api) + vitest (web)
-make test-api    # api/.venv/bin/python -m pytest api/tests -v
+make test-api    # target/venv/bin/python -m pytest api/tests -v
 make test-web    # cd web && npm run test
 make lint        # eslint on web/src (no Python linter configured)
-make run-api     # uvicorn --reload on :8080 (PYTHONPATH=src)
+make run-api     # uvicorn --reload on :8080 (PYTHONPATH=api/src)
 make run-web     # vite dev server on :5173, proxies /api -> :8080
 make build       # builds luminary-api and luminary-web container images
 make helm-lint   # helm lint deploy/helm/luminary
 make helm-template
+make clean       # rm -rf target/ (+ web/node_modules, web/dist)
 ```
 
-Single test, api: `api/.venv/bin/python -m pytest api/tests/test_photos.py::test_name -v`
+Single test, api: `target/venv/bin/python -m pytest api/tests/test_photos.py::test_name -v`
 
 Single test, web: `cd web && npx vitest run src/App.test.jsx -t "test name"`
 
 There's no `api` virtualenv activation step baked into other targets —
-`run-api` and `test-api` call `api/.venv/bin/python`/`uvicorn` directly, so
+`run-api` and `test-api` call `target/venv/bin/python`/`uvicorn` directly, so
 run commands the same way instead of assuming an activated venv.
+
+All local run/build artifacts — the venv, the local SQLite DB + photo
+storage `make run-api` defaults to (`LUMINARY_PHOTOS_URI`/
+`LUMINARY_DATABASE_PATH` set to paths under `target/data/`), and the pytest
+cache (`cache_dir` in `api/pyproject.toml`) — live under `target/` at the
+repo root (gitignored), so `make clean` is just `rm -rf target/`. The one
+exception is `web/node_modules`/`web/dist`: left in `web/` rather than moved
+under `target/`, since `web/Containerfile`'s container build (`COPY
+--from=build /app/dist ...`) expects `dist` there and Node's module
+resolution requires `node_modules` to live alongside `package.json` — both
+are still covered by `make clean` explicitly, just not by the `target/`
+rename.
 
 ## API architecture (`api/src/app/`)
 
@@ -57,25 +74,60 @@ is thin — all actual work (file I/O, thumbnailing, SQLite) lives in
   through [fsspec](https://filesystem-spec.readthedocs.io/) (`fsspec.core.url_to_fs`)
   rather than touching `pathlib` directly — the URI can be a bare local
   path/NFS mount, `s3://`, `smb://`, or read-only `https://` (see README's
-  config table). On upload it writes the original to
-  `{root}/originals/{uuid}{ext}`, tries to generate a 320x320 JPEG thumbnail
-  at `{root}/thumbnails/{uuid}.jpg` via Pillow (reading/writing through
-  `fs.open()`, never assuming a local path), and always records metadata in
-  SQLite even if thumbnailing fails (non-image or corrupt upload still gets
-  stored — thumbnail is best-effort). Because the backend may not be a real
-  filesystem, `routers/photos.py` serves originals/thumbnails via
-  `StreamingResponse` over `storage.stream_original`/`stream_thumbnail`
-  rather than FastAPI's `FileResponse` (which requires a local path).
+  config table). Only the **original** file goes to that backend, at
+  `{root}/originals/{uuid}{ext}`; the **thumbnail** (320x320 JPEG, best-effort
+  via Pillow) is stored as a `BLOB` directly in SQLite instead, so thumbnails
+  stay fast to serve and work even on read-only (`https://`) backends where
+  writing a second file isn't possible. The `filename` column holds the
+  path *relative to the photos root* (`originals/{uuid}{ext}`), not the
+  client's original upload filename — `stream_original`/`delete_photo` build
+  the backend path directly from it rather than globbing. `created_at`
+  prefers the photo's EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime`
+  (falling back to upload time if absent or unparseable), and `latitude`/
+  `longitude` come from the EXIF GPS IFD when present (`_extract_exif` in
+  `storage.py`) — both are best-effort and null when EXIF is missing.
+  Because the originals backend may not be a real filesystem,
+  `routers/photos.py` serves originals via `StreamingResponse` over
+  `storage.stream_original` rather than FastAPI's `FileResponse` (which
+  requires a local path); thumbnails are served as a plain `Response` read
+  straight from the database. `list_photos`/`get_photo` select an explicit
+  column list (`storage.METADATA_COLUMNS`) that excludes the thumbnail blob,
+  so listing photos never pulls thumbnail bytes off disk — only
+  `get_thumbnail` does that, per photo, on demand. There are no DB
+  migrations (see `database.py` below), so an existing local `photos.db`
+  from before this schema needs to be deleted/recreated to pick up the new
+  columns.
 - `database.py` opens a fresh sqlite3 connection per operation (no pooling);
   `init_db()` just creates the `photos` table if missing — there are no
   migrations, so schema changes need a manual `ALTER TABLE` added here.
-- Photo IDs are UUIDs; original file extension is preserved from the upload
-  filename so `find_original_path` has to glob (`{uuid}.*`) rather than know
-  the extension up front.
+- `sync.py` reconciles the SQLite index against whatever is actually present
+  on the configured photos backend (for files added, changed, or removed
+  directly on the backend rather than through the API) — see
+  `routers/sync.py`'s `POST /api/sync` / `GET /api/sync/status` and the
+  README's API table. `filename` (the path relative to the photos root) is
+  the correlation key between a discovered file and its DB row; a file is
+  "unchanged" if its size matches the DB row, "updated" (re-extracts
+  width/height/EXIF/thumbnail, same `id`) if the size differs, "inserted"
+  (new `id`) if there's no row for that path yet, and any DB row whose path
+  wasn't seen in the scan gets deleted. The reconciliation is deliberately
+  run in its **own thread with its own `asyncio.run()` event loop**
+  (`sync.start_sync()`), not as a bare `asyncio.create_task()` on the API's
+  request-handling loop — the latter only makes progress while that loop
+  happens to be ticking, which isn't guaranteed in general (e.g. it stalls
+  indefinitely under FastAPI's `TestClient` between requests, which is how
+  this was caught). Within that thread, files are fanned out across a
+  `ThreadPoolExecutor` via `asyncio.gather`/`run_in_executor` so slow,
+  network-bound backends (S3/SMB/NFS) aren't processed one file at a time.
+  Progress (`processed`/`total`/`inserted`/`updated`/`deleted`/`status`) is
+  a thread-safe module-level singleton (`sync.progress`, lock-protected) —
+  tests must call `sync.progress.reset()` between cases (see
+  `conftest.py`'s `client` fixture) since it isn't reset per-request.
 
 SQLite + on-disk files means the API is single-replica only (see
 `api.replicaCount` note in Helm values) — don't add code that assumes
 multiple API pods share storage without also changing the storage layer.
+The same applies to `sync.py`'s in-memory progress state and thread: it
+isn't shared across replicas either.
 
 ## Web architecture (`web/src/`)
 
@@ -83,10 +135,23 @@ multiple API pods share storage without also changing the storage layer.
   components call through it, never `fetch` directly. `API_BASE` defaults to
   `/api` (same-origin via the nginx proxy in prod, or Vite's dev proxy
   locally) and can be overridden with `VITE_API_BASE_URL`.
-- `App.jsx` holds top-level state (photo list, loading/error) and composes
-  `components/{PhotoGrid,PhotoCard,PhotoModal,UploadButton}.jsx`.
+- `App.jsx` holds top-level state (photo list, loading/error, sync status) and
+  composes `components/{PhotoGrid,PhotoCard,PhotoModal,SyncStatus}.jsx`.
+- The header's Refresh control is `SyncStatus.jsx`: it renders a plain button
+  when idle, or (while a backend sync is running/just finished) a small
+  progress bar polled from `GET /api/sync/status` every second. Clicking it
+  calls `POST /api/sync` and optimistically shows the progress UI right away
+  — the backend response can still read `status: "idle"` for an instant
+  before the background thread calls in with `"running"` (see `sync.py`), so
+  `App.jsx`'s `handleRefresh` doesn't trust that field literally. On
+  `"completed"` it refetches the photo list; either terminal state
+  (`"completed"`/`"error"`) is shown briefly then cleared back to the
+  button. `App.jsx` also checks sync status once on mount so a page reload
+  mid-sync resumes polling instead of losing the progress UI.
 - Tests mock the API client module rather than hitting a real server (see
-  `App.test.jsx`) to cover loading, empty, populated, and error states.
+  `App.test.jsx`) to cover loading, empty, populated, error, and sync-progress
+  states; the sync-progress test uses fake timers (`vi.useFakeTimers()` +
+  `vi.advanceTimersByTimeAsync`) to drive the 1s poll loop deterministically.
 
 ## Container builds and proxying
 

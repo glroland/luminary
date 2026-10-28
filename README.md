@@ -53,6 +53,8 @@ deploy/
   Jenkinsfile         Jenkins pipeline: build, package, and push both images
 
 Makefile             install / test / build / deploy helpers
+target/               (generated, gitignored) local venv, SQLite DB, photo
+                      storage, pytest cache -- see "Local development"
 ```
 
 ## API
@@ -66,6 +68,17 @@ Makefile             install / test / build / deploy helpers
 | GET    | `/api/photos/{id}/thumbnail`| Thumbnail JPEG                      |
 | GET    | `/api/photos/{id}/original` | Original uploaded file              |
 | DELETE | `/api/photos/{id}`          | Delete a photo and its files        |
+| POST   | `/api/sync`                 | Start a background reconciliation of the SQLite index against the configured photos backend (insert new files, update changed ones, delete rows for files no longer present) |
+| GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, error}` |
+
+`POST /api/sync` is for when files were added, changed, or removed directly
+on the storage backend (outside the app) and the index needs to catch up —
+it's not needed for uploads/deletes made through the API, which already keep
+the index current. It returns immediately; the reconciliation runs in a
+background thread (concurrently across files, since backends like S3/SMB/NFS
+are network-bound) and `GET /api/sync/status` is polled for progress. Only
+one sync runs at a time — calling `POST /api/sync` while one is already in
+flight just returns its current status rather than starting another.
 
 Configuration (environment variables):
 
@@ -95,12 +108,19 @@ The database always stays on local disk regardless of `LUMINARY_PHOTOS_URI`
 Requires Python 3.12+, Node 20+, and `podman` (or `docker`) on your `PATH`.
 
 ```bash
-make install     # creates api/.venv and installs web/node_modules
+make install     # creates target/venv and installs web/node_modules
 make test        # runs pytest (api) and vitest (web)
 make run-api     # starts the API on http://localhost:8080 (reload)
 make run-web     # starts the Vite dev server on http://localhost:5173
                  # (proxies /api to http://localhost:8080 by default)
 ```
+
+All local `make` run/build artifacts — the Python venv, the local SQLite
+database, local photo storage (`make run-api`'s default
+`LUMINARY_PHOTOS_URI`/`LUMINARY_DATABASE_PATH`), and the pytest cache — live
+under `target/` at the repo root. `make clean` removes it (along with
+`web/node_modules` and `web/dist`, which stay in `web/` since the container
+build expects them there).
 
 See `make help` for all targets.
 

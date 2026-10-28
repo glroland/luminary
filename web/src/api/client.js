@@ -31,6 +31,14 @@ export async function deletePhoto(photoId) {
   await request(`/photos/${photoId}`, { method: "DELETE" });
 }
 
+export async function startSync() {
+  return request("/sync", { method: "POST" });
+}
+
+export async function fetchSyncStatus() {
+  return request("/sync/status");
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

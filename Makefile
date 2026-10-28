@@ -4,6 +4,12 @@ API_IMAGE        ?= $(IMAGE_REGISTRY)/luminary-api
 WEB_IMAGE        ?= $(IMAGE_REGISTRY)/luminary-web
 TAG              ?= latest
 
+# All local, gitignored run/build artifacts (venv, local SQLite DB + photo
+# storage, pytest cache) live under here -- `make clean` just removes it.
+TARGET_DIR  ?= target
+VENV_DIR    := $(TARGET_DIR)/venv
+DATA_DIR    := $(TARGET_DIR)/data
+
 .PHONY: help install install-api install-web \
         test test-api test-web \
         lint lint-web \
@@ -32,9 +38,9 @@ help:
 install: install-api install-web
 
 install-api:
-	python3 -m venv api/.venv
-	api/.venv/bin/pip install --upgrade pip
-	api/.venv/bin/pip install -r api/requirements-dev.txt
+	python3 -m venv $(VENV_DIR)
+	$(VENV_DIR)/bin/pip install --upgrade pip
+	$(VENV_DIR)/bin/pip install -r api/requirements-dev.txt
 
 install-web:
 	cd web && npm install
@@ -44,7 +50,7 @@ install-web:
 test: test-api test-web
 
 test-api:
-	api/.venv/bin/python -m pytest api/tests -v
+	$(VENV_DIR)/bin/python -m pytest api/tests -v
 
 test-web:
 	cd web && npm run test
@@ -57,7 +63,8 @@ lint-web:
 ## --- Local run -----------------------------------------------------------
 
 run-api:
-	cd api && PYTHONPATH=src ../api/.venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
+	LUMINARY_PHOTOS_URI=$(DATA_DIR)/photos LUMINARY_DATABASE_PATH=$(DATA_DIR)/photos.db \
+		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:
 	cd web && npm run dev
@@ -93,5 +100,5 @@ helm-template:
 ## --- Housekeeping ----------------------------------------------------------
 
 clean:
-	rm -rf api/.venv api/.pytest_cache web/node_modules web/dist
+	rm -rf $(TARGET_DIR) web/node_modules web/dist
 	find . -name "__pycache__" -type d -exec rm -rf {} +

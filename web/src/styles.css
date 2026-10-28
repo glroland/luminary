@@ -28,6 +28,47 @@ body {
   display: block;
 }
 
+.refresh-button {
+  background: #1d4e8c;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.refresh-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.sync-status-error {
+  color: #b91c1c;
+}
+
+.sync-progress-track {
+  width: 80px;
+  height: 6px;
+  background: #dce6f2;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sync-progress-fill {
+  height: 100%;
+  background: #1d4e8c;
+  transition: width 0.2s ease;
+}
+
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

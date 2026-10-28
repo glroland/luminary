@@ -12,7 +12,7 @@ export default function PhotoModal({ photo, onClose }) {
           <p>
             {photo.width} &times; {photo.height}
           </p>
-          <p>{new Date(photo.uploaded_at).toLocaleString()}</p>
+          <p>{new Date(photo.created_at).toLocaleString()}</p>
         </div>
         <button type="button" className="close-button" onClick={onClose}>
           Close
