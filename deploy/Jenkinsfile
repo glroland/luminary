@@ -1,0 +1,72 @@
+pipeline
+{
+   agent any
+
+   options
+   {
+      disableConcurrentBuilds()
+      buildDiscarder(logRotator(numToKeepStr: '3'))
+   }
+
+   stages
+   {
+      stage('Prepare')
+      {
+         steps
+         {
+            sh '''
+                    echo "PATH = ${PATH}"
+                '''
+
+            git branch: 'main',
+                url: 'https://github.com/glroland/luminary.git'
+         }
+      }
+
+      stage('Create Container Image for api')
+      {
+         steps
+         {
+            sh 'cd api ; docker build --no-cache . --file Containerfile --tag luminary-api:$BUILD_NUMBER'
+            sh 'cd api ; docker save luminary-api:$BUILD_NUMBER > luminary-api-dockerimage.tar'
+            step(followSymlinks: false, artifacts: 'api/luminary-api-dockerimage.tar', $class: 'ArtifactArchiver')
+            sh 'cd api ; docker rmi luminary-api:$BUILD_NUMBER'
+         }
+      }
+
+      stage('Create Container Image for web')
+      {
+         steps
+         {
+            sh 'cd web ; docker build --no-cache . --file Containerfile --tag luminary-web:$BUILD_NUMBER'
+            sh 'cd web ; docker save luminary-web:$BUILD_NUMBER > luminary-web-dockerimage.tar'
+            step(followSymlinks: false, artifacts: 'web/luminary-web-dockerimage.tar', $class: 'ArtifactArchiver')
+            sh 'cd web ; docker rmi luminary-web:$BUILD_NUMBER'
+         }
+      }
+
+      stage('Reload then push images to quay')
+      {
+         steps
+         {
+            script
+            {
+               docker.withRegistry('https://registry.home.glroland.com/', 'quay')
+               {
+                  sh 'docker load -i api/luminary-api-dockerimage.tar'
+                  sh 'docker tag luminary-api:$BUILD_NUMBER registry.home.glroland.com/luminary/luminary-api:$BUILD_NUMBER'
+                  sh 'docker rmi luminary-api:$BUILD_NUMBER'
+                  sh 'docker push registry.home.glroland.com/luminary/luminary-api:$BUILD_NUMBER'
+                  sh 'docker rmi registry.home.glroland.com/luminary/luminary-api:$BUILD_NUMBER'
+
+                  sh 'docker load -i web/luminary-web-dockerimage.tar'
+                  sh 'docker tag luminary-web:$BUILD_NUMBER registry.home.glroland.com/luminary/luminary-web:$BUILD_NUMBER'
+                  sh 'docker rmi luminary-web:$BUILD_NUMBER'
+                  sh 'docker push registry.home.glroland.com/luminary/luminary-web:$BUILD_NUMBER'
+                  sh 'docker rmi registry.home.glroland.com/luminary/luminary-web:$BUILD_NUMBER'
+               }
+            }
+         }
+      }
+   }
+}

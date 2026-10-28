@@ -1,0 +1,45 @@
+nameOverride: ""
+fullnameOverride: ""
+
+api:
+  image:
+    repository: quay.io/yourorg/luminary-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+  env:
+    corsOrigins: "*"
+  route:
+    enabled: true
+    host: ""
+
+web:
+  image:
+    repository: quay.io/yourorg/luminary-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  port: 8080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  route:
+    enabled: true
+    host: ""

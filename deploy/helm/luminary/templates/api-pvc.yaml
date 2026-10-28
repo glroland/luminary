@@ -1,0 +1,17 @@
+{{- if .Values.api.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "luminary.apiFullname" . }}-data
+  labels:
+    {{- include "luminary.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.api.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.api.persistence.size }}
+  {{- if .Values.api.persistence.storageClassName }}
+  storageClassName: {{ .Values.api.persistence.storageClassName }}
+  {{- end }}
+{{- end }}

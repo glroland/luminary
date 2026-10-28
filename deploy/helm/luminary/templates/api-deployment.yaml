@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "luminary.apiFullname" . }}
+  labels:
+    {{- include "luminary.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "luminary.name" . }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "luminary.name" . }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.api.port }}
+          env:
+            - name: LUMINARY_DATA_DIR
+              value: /data/photos
+            - name: LUMINARY_DATABASE_PATH
+              value: /data/photos.db
+            - name: LUMINARY_CORS_ORIGINS
+              value: {{ .Values.api.env.corsOrigins | quote }}
+            - name: PORT
+              value: {{ .Values.api.port | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.api.port }}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.api.port }}
+            initialDelaySeconds: 10
+      volumes:
+        - name: data
+          {{- if .Values.api.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "luminary.apiFullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

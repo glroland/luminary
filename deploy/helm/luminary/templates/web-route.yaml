@@ -1,0 +1,20 @@
+{{- if .Values.web.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "luminary.webFullname" . }}
+  labels:
+    {{- include "luminary.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.web.route.host }}
+  host: {{ .Values.web.route.host }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "luminary.webFullname" . }}
+  port:
+    targetPort: {{ .Values.web.port }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+{{- end }}
