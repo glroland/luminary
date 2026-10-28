@@ -1,0 +1,16 @@
+<svg width="300" height="72" viewBox="0 0 300 72" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Luminary">
+  <g stroke="#2f6fb8" stroke-width="3" stroke-linecap="round">
+    <line x1="36" y1="2" x2="36" y2="10" />
+    <line x1="36" y1="62" x2="36" y2="70" />
+    <line x1="2" y1="36" x2="10" y2="36" />
+    <line x1="62" y1="36" x2="70" y2="36" />
+    <line x1="13" y1="13" x2="19" y2="19" />
+    <line x1="53" y1="53" x2="59" y2="59" />
+    <line x1="59" y1="13" x2="53" y2="19" />
+    <line x1="19" y1="53" x2="13" y2="59" />
+  </g>
+  <circle cx="36" cy="36" r="26" fill="none" stroke="#163a6b" stroke-width="5" />
+  <circle cx="36" cy="36" r="18" fill="#1d4e8c" />
+  <circle cx="32" cy="31" r="6.5" fill="#bcdcf7" opacity="0.9" />
+  <text x="86" y="47" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="0.5" fill="#163a6b">Luminary</text>
+</svg>

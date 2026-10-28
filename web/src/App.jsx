@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
-import UploadButton from "./components/UploadButton.jsx";
 import { deletePhoto, fetchPhotos } from "./api/client.js";
+import logo from "./assets/logo.svg";
 
 export default function App() {
   const [photos, setPhotos] = useState([]);
@@ -27,10 +27,6 @@ export default function App() {
     loadPhotos();
   }, [loadPhotos]);
 
-  function handleUploaded(photo) {
-    setPhotos((current) => [photo, ...current]);
-  }
-
   async function handleDelete(photoId) {
     try {
       await deletePhoto(photoId);
@@ -43,8 +39,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Luminary</h1>
-        <UploadButton onUploaded={handleUploaded} />
+        <img className="app-logo" src={logo} alt="Luminary" />
       </header>
       {error && (
         <p className="error" role="alert">
