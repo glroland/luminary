@@ -208,19 +208,42 @@ body {
   padding-top: 1rem;
 }
 
+.photo-chat-backend {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #163a6b;
+  cursor: pointer;
+}
+
+.photo-chat-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #4a6fa1;
+  font-style: italic;
+}
+
 .photo-chat-messages {
   flex: 1;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  margin: 0.75rem 0 0.5rem;
 }
 
-.photo-chat-empty {
+.photo-chat-empty,
+.photo-chat-pending {
   margin: 0;
   color: #4a6fa1;
   font-size: 0.85rem;
+}
+
+.photo-chat-error {
+  margin: 0 0 0.5rem;
+  color: #b91c1c;
+  font-size: 0.8rem;
 }
 
 .photo-chat-message {
@@ -267,6 +290,12 @@ body {
   padding: 0.5rem 0.9rem;
   font-size: 0.85rem;
   cursor: pointer;
+}
+
+.photo-chat-form input:disabled,
+.photo-chat-form button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .close-button {

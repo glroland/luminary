@@ -49,3 +49,36 @@ def redact_uri(uri: str) -> str:
     """Strip embedded credentials (e.g. ``smb://user:pass@host/...``) from a
     URI so it's safe to put in logs."""
     return re.sub(r"//[^/@\s]+@", "//***@", uri)
+
+
+# --- Photo chat: path 1, any OpenAI-compatible multimodal endpoint --------
+
+
+def get_openai_api_key() -> Optional[str]:
+    return os.environ.get("LUMINARY_OPENAI_API_KEY") or None
+
+
+def get_openai_base_url() -> Optional[str]:
+    """Base URL of an OpenAI-*compatible* endpoint (vLLM, Ollama, LM Studio,
+    a self-hosted gateway, etc). Deliberately has no default -- the openai
+    SDK defaults to api.openai.com if this is left unset, which is only
+    correct if that's genuinely the intended backend; never assume it."""
+    return os.environ.get("LUMINARY_OPENAI_BASE_URL") or None
+
+
+def get_openai_model() -> Optional[str]:
+    """No sensible default -- a self-hosted OpenAI-compatible server's model
+    name is whatever that deployment calls it, so this must be set
+    explicitly rather than guessed."""
+    return os.environ.get("LUMINARY_OPENAI_MODEL") or None
+
+
+# --- Photo chat: path 2, local Florence-2 vision-language model -----------
+
+
+def get_florence_model() -> str:
+    return os.environ.get("LUMINARY_FLORENCE_MODEL", "microsoft/Florence-2-base")
+
+
+def get_florence_device() -> str:
+    return os.environ.get("LUMINARY_FLORENCE_DEVICE", "cpu")

@@ -3,8 +3,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from .. import storage
-from ..models import Photo, PhotoList
+from .. import chat, storage
+from ..models import ChatRequest, ChatResponse, Photo, PhotoList
 
 logger = logging.getLogger(__name__)
 
@@ -75,3 +75,43 @@ def remove_photo(photo_id: str) -> None:
     # is never touched. If it's still there, the next sync re-indexes it.
     if not storage.delete_photo(photo_id):
         raise HTTPException(status_code=404, detail="Photo not found")
+
+
+@router.post("/photos/{photo_id}/chat", response_model=ChatResponse)
+def chat_about_photo(photo_id: str, body: ChatRequest) -> dict:
+    photo = storage.get_photo(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    try:
+        original_bytes = storage.read_original_bytes(photo)
+    except Exception:
+        logger.exception(
+            "Failed to read original for photo %s (%s) from the photos backend", photo_id, photo["filename"]
+        )
+        raise HTTPException(status_code=502, detail="Could not read the original from the photos backend")
+
+    if original_bytes is None:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    try:
+        reply = chat.ask(
+            body.backend,
+            original_bytes,
+            photo["content_type"],
+            body.message,
+            [turn.model_dump() for turn in body.history],
+        )
+    except chat.ChatNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception:
+        # Deliberately broad: this must also catch things like
+        # pydantic.ValidationError (a ValueError subclass) raised from
+        # inside the openai SDK when parsing a non-conforming response from
+        # a self-hosted OpenAI-compatible server -- that's a backend
+        # failure, not a malformed request, and must not come back as a
+        # misleading 400.
+        logger.exception("Chat backend %r failed for photo %s", body.backend, photo_id)
+        raise HTTPException(status_code=502, detail="Chat backend failed")
+
+    return {"reply": reply}

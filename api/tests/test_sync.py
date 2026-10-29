@@ -1,3 +1,4 @@
+import io
 import logging
 
 import pytest
@@ -123,6 +124,30 @@ def test_sync_logs_and_reports_an_error_on_failure(client, monkeypatch, caplog):
     assert status["status"] == "error"
     assert "backend unreachable" in status["error"]
     assert any(record.levelno == logging.ERROR and record.exc_info for record in caplog.records)
+
+
+def test_sync_applies_exif_orientation_so_portrait_photos_arent_indexed_as_landscape(client, tmp_path):
+    # A phone held sideways: the sensor captures landscape pixels (wide x
+    # short) and the EXIF Orientation tag says "rotate 90 CW to display" --
+    # i.e. this is actually a portrait photo.
+    exif = Image.Exif()
+    exif[274] = 6  # Orientation: rotate 90 CW
+    image = Image.new("RGB", (400, 300), color="red")  # landscape pixel data
+    path = tmp_path / "photos" / "portrait.jpg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, "JPEG", exif=exif)
+
+    sync_and_wait(client)
+    photo = client.get("/api/photos").json()["photos"][0]
+
+    # Width/height in the index should reflect the corrected, as-displayed
+    # orientation, not the raw sensor pixel grid.
+    assert photo["width"] == 300
+    assert photo["height"] == 400
+
+    thumbnail_response = client.get(f"/api/photos/{photo['id']}/thumbnail")
+    thumbnail = Image.open(io.BytesIO(thumbnail_response.content))
+    assert thumbnail.width < thumbnail.height
 
 
 def test_sync_status_defaults_to_idle(client):

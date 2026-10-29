@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
@@ -166,15 +166,22 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     thumbnail_bytes = None
     try:
         with fs.open(path, "rb") as f:
-            with Image.open(f) as image:
-                width, height = image.size
-                created_at, latitude, longitude = _extract_exif(image)
+            with Image.open(f) as raw_image:
+                created_at, latitude, longitude = _extract_exif(raw_image)
 
-                thumbnail = image.convert("RGB")
-                thumbnail.thumbnail(THUMBNAIL_SIZE)
-                buffer = io.BytesIO()
-                thumbnail.save(buffer, "JPEG")
-                thumbnail_bytes = buffer.getvalue()
+                # Camera sensors commonly store pixels in landscape with an
+                # EXIF Orientation tag saying how to rotate for display (e.g.
+                # a portrait shot held sideways) -- bake that rotation in
+                # before reading dimensions or thumbnailing, or portrait
+                # photos end up indexed and thumbnailed as landscape.
+                with ImageOps.exif_transpose(raw_image) as image:
+                    width, height = image.size
+
+                    thumbnail = image.convert("RGB")
+                    thumbnail.thumbnail(THUMBNAIL_SIZE)
+                    buffer = io.BytesIO()
+                    thumbnail.save(buffer, "JPEG")
+                    thumbnail_bytes = buffer.getvalue()
     except Exception:
         logger.warning(
             "Could not read/thumbnail %r; indexing metadata only", relative_path, exc_info=True

@@ -14,6 +14,17 @@ DATA_DIR    := $(TARGET_DIR)/data
 # HTTP instead, e.g. `make run-api LUMINARY_PHOTOS_URI=s3://my-bucket/photos`.
 LUMINARY_PHOTOS_URI ?= "smb://data.home.glroland.com/photo/2019 Spring Break in Boone"
 
+# Base URL of the OpenAI-*compatible* endpoint run-api's photo chat uses --
+# never assumed to be api.openai.com. Empty means "use the openai SDK's own
+# default" (api.openai.com), which is only right if that's really the
+# target. Override e.g. `make run-api LUMINARY_OPENAI_BASE_URL=http://localhost:11434/v1`.
+LUMINARY_OPENAI_BASE_URL ?= https://maas.apps.ocp.home.glroland.com/sandbox/gemma-4/v1
+
+# Model name as LUMINARY_OPENAI_BASE_URL's server calls it -- matches the
+# default base URL above; override alongside it if you point run-api at a
+# different endpoint, e.g. `make run-api LUMINARY_OPENAI_BASE_URL=... LUMINARY_OPENAI_MODEL=...`.
+LUMINARY_OPENAI_MODEL ?= gemma-4
+
 .PHONY: help install install-api install-web \
         test test-api test-web \
         lint lint-web \
@@ -68,6 +79,7 @@ lint-web:
 
 run-api:
 	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) LUMINARY_DATABASE_PATH=$(DATA_DIR)/photos.db \
+		LUMINARY_OPENAI_BASE_URL=$(LUMINARY_OPENAI_BASE_URL) LUMINARY_OPENAI_MODEL=$(LUMINARY_OPENAI_MODEL) \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:

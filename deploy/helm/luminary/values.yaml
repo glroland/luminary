@@ -31,6 +31,28 @@ api:
     # backend needs no credentials (local/NFS, or S3 via IAM role). Never
     # put credentials directly in photosUri or in this values file.
     photosCredentialsSecret: ""
+    # --- Photo chat: path 1, any OpenAI-*compatible* multimodal endpoint ---
+    # Base URL of the endpoint -- never assumed to be api.openai.com; point
+    # this at a self-hosted OpenAI-compatible server (vLLM, Ollama, LM
+    # Studio, etc). Leave empty only if the endpoint genuinely *is*
+    # api.openai.com (the openai SDK's own default).
+    openaiBaseUrl: ""
+    # Model name as that server calls it -- required, no default.
+    openaiModel: ""
+    # Name of a Secret (same namespace, key `apiKey`) holding the API key.
+    # Leave empty if the endpoint needs no key. Never put the key directly
+    # in this values file.
+    openaiApiKeySecret: ""
+    # --- Photo chat: path 2, local Florence-2 vision-language model -------
+    # https://huggingface.co/microsoft/Florence-2-base . Runs in-process in
+    # the api pod via torch/transformers -- substantially increases memory
+    # use (bump api.resources above; budget several GiB for CPU inference,
+    # more for -large) and cold-start time (weights are downloaded and
+    # loaded into memory on first chat request, then cached).
+    florenceModel: microsoft/Florence-2-base
+    # "cpu" or "cuda" (a GPU-scheduled node/runtime class is required for
+    # "cuda"; not set up by this chart).
+    florenceDevice: cpu
   route:
     enabled: true
     host: ""

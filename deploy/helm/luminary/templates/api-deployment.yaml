@@ -42,6 +42,25 @@ spec:
               value: /data/photos.db
             - name: LUMINARY_CORS_ORIGINS
               value: {{ .Values.api.env.corsOrigins | quote }}
+            {{- if .Values.api.env.openaiBaseUrl }}
+            - name: LUMINARY_OPENAI_BASE_URL
+              value: {{ .Values.api.env.openaiBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.api.env.openaiModel }}
+            - name: LUMINARY_OPENAI_MODEL
+              value: {{ .Values.api.env.openaiModel | quote }}
+            {{- end }}
+            {{- if .Values.api.env.openaiApiKeySecret }}
+            - name: LUMINARY_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.env.openaiApiKeySecret }}
+                  key: apiKey
+            {{- end }}
+            - name: LUMINARY_FLORENCE_MODEL
+              value: {{ .Values.api.env.florenceModel | quote }}
+            - name: LUMINARY_FLORENCE_DEVICE
+              value: {{ .Values.api.env.florenceDevice | quote }}
             - name: PORT
               value: {{ .Values.api.port | quote }}
           volumeMounts:

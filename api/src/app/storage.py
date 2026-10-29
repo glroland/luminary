@@ -128,6 +128,17 @@ def stream_original(metadata: dict):
     return _iter_file(fs, path) if fs.exists(path) else None
 
 
+def read_original_bytes(metadata: dict) -> Optional[bytes]:
+    """Return the full original file as bytes (for photo chat, which needs
+    the whole image rather than a streamed response), or None if missing."""
+    fs, root = _fs_and_root()
+    path = f"{root}/{metadata['filename']}"
+    if not fs.exists(path):
+        return None
+    with fs.open(path, "rb") as f:
+        return f.read()
+
+
 def delete_photo(photo_id: str) -> bool:
     """Remove a photo from the SQLite index only. Never touches the file on
     the photos backend -- that's someone else's data, not ours to delete.

@@ -39,6 +39,15 @@ export async function fetchSyncStatus() {
   return request("/sync/status");
 }
 
+export async function chatAboutPhoto(photoId, backend, message, history) {
+  const data = await request(`/photos/${photoId}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backend, message, history }),
+  });
+  return data.reply;
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

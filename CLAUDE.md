@@ -153,6 +153,19 @@ SQLite) lives in `storage.py`/`sync.py`:
   whose path wasn't seen in the scan gets its *row* deleted (never the
   file — if it's still there, the next sync re-inserts it).
 
+  `_sync_one_file` runs `ImageOps.exif_transpose()` on the opened image
+  *before* reading `.size` or building the thumbnail — camera sensors
+  commonly store pixels in landscape with an EXIF `Orientation` tag saying
+  how to rotate for display (e.g. a phone held sideways for a portrait
+  shot), and `_extract_exif` is called on the pre-transpose image since
+  `exif_transpose` doesn't guarantee the other EXIF tags (DateTime/GPS)
+  survive on the returned copy. Skipping the transpose was a real bug: both
+  the indexed `width`/`height` and the generated thumbnail came out
+  landscape for portrait photos, since the raw sensor pixel grid is
+  landscape regardless of the orientation tag. Don't read `image.size` or
+  thumbnail straight off the `Image.open()` result again without
+  transposing first.
+
   The reconciliation runs in its **own thread with its own `asyncio.run()`
   event loop** (`sync.start_sync()`), not as a bare `asyncio.create_task()`
   on the API's request-handling loop — the latter only makes progress while
@@ -198,7 +211,72 @@ SQLite + on-disk files means the API is single-replica only (see
 `api.replicaCount` note in Helm values) — don't add code that assumes
 multiple API pods share storage without also changing the storage layer.
 The same applies to `sync.py`'s in-memory progress state and thread: it
-isn't shared across replicas either.
+isn't shared across replicas either. Florence-2's loaded model (`chat.py`'s
+module-level `_florence_model`/`_florence_processor`, lazily populated and
+cached) is also per-pod, in-memory state — same caveat.
+
+- `chat.py` backs `POST /api/photos/{photo_id}/chat`
+  (`routers/photos.py:chat_about_photo`), which reads the full original via
+  `storage.read_original_bytes` (unlike `stream_original`, chat needs the
+  whole image in memory, not a chunked HTTP response) and calls
+  `chat.ask(backend, photo_bytes, content_type, message, history)`.
+  `backend` is `"openai"` or `"florence"`, picked per-request by the
+  frontend's checkbox — there's no server-side default/fallback between
+  them. Validated as a `Literal["openai", "florence"]` on `ChatRequest`
+  (`models.py`), not by `chat.ask()`'s own `ValueError` check — an
+  unrecognized value is rejected as a `422` by FastAPI's request parsing
+  before the handler body even runs. That's deliberate, not incidental: an
+  earlier version let `chat.ask()`'s `ValueError` (meant only for "unknown
+  backend") be caught by a bare `except ValueError` in the router and
+  mapped to `400`, which also silently caught `pydantic.ValidationError`
+  bubbling up from inside the `openai` SDK (e.g. parsing a non-conforming
+  response from a self-hosted OpenAI-compatible server — it **is** a
+  `ValueError` subclass) and misreported a real backend failure as a
+  malformed request. `chat_about_photo` must not have an `except
+  ValueError` branch — let anything chat.ask() raises other than
+  `ChatNotConfigured` fall through to the generic `except Exception` → `502`
+  (full traceback goes to the log either way).
+
+  Both backends' real dependencies (`openai`; `torch`/`transformers`/
+  `timm`/`einops`) are imported **lazily inside the functions that use
+  them**, not at module top — `chat.py` itself, and the rest of the app,
+  must keep importing cleanly whether or not either is installed. Don't
+  move those imports to module level. Missing config or missing deps both
+  surface as `chat.ChatNotConfigured`, mapped to a `503` with a message
+  naming what's missing — never let either reach the client as a bare
+  `ImportError`/`500`.
+
+  **OpenAI-compatible path** (`_ask_openai`): `LUMINARY_OPENAI_BASE_URL` has
+  no default of our own choosing — leaving it unset falls through to the
+  `openai` SDK's own default (`api.openai.com`), which is only correct if
+  that's genuinely the target; don't special-case or assume it elsewhere.
+  `LUMINARY_OPENAI_MODEL` likewise has no default — a self-hosted server's
+  model name is arbitrary, there's nothing sensible to guess. The image is
+  base64 data-URL-encoded and attached to the *current* message on every
+  call (not just the first turn), so it works the same regardless of
+  whether a given OpenAI-compatible server retains image content referenced
+  from earlier turns in the conversation.
+
+  **Florence-2 path** (`_ask_florence` / `_load_florence`): loads
+  `LUMINARY_FLORENCE_MODEL` (default `microsoft/Florence-2-base`) via
+  `transformers.AutoModelForCausalLM`/`AutoProcessor` with
+  `trust_remote_code=True`, per the
+  [model card](https://huggingface.co/microsoft/Florence-2-base)'s sample
+  code — lazily, on first use, under a lock, then cached in the module
+  globals for the life of the process. **This is not a conversational VQA
+  model**: its public API is a fixed set of task-prompt tokens (captioning,
+  OCR, object detection, phrase grounding) with no token for open-ended
+  question answering, so `_ask_florence` ignores the user's message
+  entirely and always runs `<MORE_DETAILED_CAPTION>`
+  (`chat._FLORENCE_TASK`). Don't try to route the user's message into a
+  task token without re-reading the model card first — e.g.
+  `<CAPTION_TO_PHRASE_GROUNDING>` takes free text but means something
+  different (grounding a given phrase to image regions, returned as boxes,
+  not an answer). `_ask_florence` must not `import torch` at its own top
+  level before calling `_load_florence()` — that import has to happen after
+  `_load_florence()` has already succeeded (confirming torch is actually
+  importable), or a missing-dependency environment raises a raw
+  `ImportError` instead of the intended `ChatNotConfigured`.
 
 ## Web architecture (`web/src/`)
 
@@ -223,6 +301,29 @@ isn't shared across replicas either.
   `App.test.jsx`) to cover loading, empty, populated, error, and sync-progress
   states; the sync-progress test uses fake timers (`vi.useFakeTimers()` +
   `vi.advanceTimersByTimeAsync`) to drive the 1s poll loop deterministically.
+- `PhotoModal.jsx` (opened by clicking a photo card) is a two-pane layout
+  filling most of the viewport (`.photo-modal`: 94vw × 92vh) — a large
+  image pane plus a sidebar composing `PhotoMap.jsx` and `PhotoChat.jsx`.
+  Stacks vertically under 700px width.
+- `PhotoMap.jsx` renders an interactive map (Leaflet + OpenStreetMap tiles,
+  no API key) centered on `photo.latitude`/`photo.longitude`, or a "No
+  location data" placeholder when either is null. Leaflet's default marker
+  icon path doesn't resolve through Vite's bundler by default — the PNG
+  assets are imported explicitly and wired via `L.Icon.Default.mergeOptions`
+  at module load; don't drop that if touching this file.
+- `PhotoChat.jsx` talks to `POST /api/photos/{id}/chat` via
+  `client.js`'s `chatAboutPhoto(photoId, backend, message, history)`. A
+  checkbox picks `backend` ("florence" when checked, "openai" otherwise,
+  per the two chat paths in `chat.py`) — checking it also shows a static
+  hint that Florence-2 always returns a description rather than answering
+  the specific question (see `chat.py`'s module docstring for why). Message
+  history sent on each call is built from the component's own local
+  `messages` state (`{role, text}` per turn, oldest first) — there's no
+  server-side conversation state, each request carries the full relevant
+  history itself. Resets (`messages`/`draft`/`error`) when `photoId`
+  changes. A failed request (e.g. the `503` "not configured" case) surfaces
+  `err.message` in a `role="alert"` element rather than silently dropping
+  the user's message.
 
 ## Container builds and proxying
 

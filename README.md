@@ -78,6 +78,7 @@ target/               (generated, gitignored) local venv, SQLite DB, photo
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
 | POST   | `/api/sync`                 | Start a background reconciliation of the SQLite index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, error}` |
+| POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{backend: "openai"\|"florence", message, history}` → `{reply}`; see "Photo chat" below |
 
 `POST /api/sync` is the only way photos enter the index — point
 `LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
@@ -164,6 +165,48 @@ so it accepts any of the following:
 The database always stays on local disk regardless of `LUMINARY_PHOTOS_URI`
 (SQLite needs real filesystem locking).
 
+### Photo chat
+
+`POST /api/photos/{id}/chat` answers questions about a photo via one of two
+backends, picked per-request with the `backend` field (the web UI exposes
+this as a checkbox):
+
+- **`"openai"`** — any OpenAI-*compatible* multimodal chat endpoint, via the
+  `openai` Python SDK. `LUMINARY_OPENAI_BASE_URL` is never assumed to be
+  `api.openai.com` — point it at a self-hosted server (vLLM, Ollama, LM
+  Studio, etc.) if that's what you're running. The image is base64-encoded
+  and attached to the current message on every call.
+- **`"florence"`** — a local [Florence-2](https://huggingface.co/microsoft/Florence-2-base)
+  vision-language model, run in-process via `torch`/`transformers`
+  (`trust_remote_code=True`, per the model card). The model loads lazily on
+  first use and is cached in memory afterward. **Florence-2 is not a
+  conversational VQA model** — its public API is a fixed set of task tokens
+  (captioning, OCR, object detection, phrase grounding), with no token for
+  "answer this arbitrary question". This backend always runs
+  `<MORE_DETAILED_CAPTION>` and returns that, regardless of the message text.
+
+| Variable                   | Default                     | Purpose                              |
+|-----------------------------|------------------------------|---------------------------------------|
+| `LUMINARY_OPENAI_API_KEY`  | *(none)*                    | Required for the `openai` backend     |
+| `LUMINARY_OPENAI_BASE_URL` | *(none — SDK default)*      | OpenAI-compatible endpoint URL        |
+| `LUMINARY_OPENAI_MODEL`    | *(none)*                    | Required — the model name as your server calls it |
+| `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint             |
+| `LUMINARY_FLORENCE_DEVICE` | `cpu`                       | `cpu` or `cuda`                       |
+
+A backend that's missing required config returns `503` with a message
+naming the missing variable, rather than a generic failure.
+
+In Kubernetes, `LUMINARY_OPENAI_API_KEY` is sourced from a `Secret` via the
+Helm chart's `api.env.openaiApiKeySecret` (key `apiKey`), same pattern as
+the photos-backend credentials above — never put it directly in
+`values.yaml`.
+
+Enabling the Florence-2 backend substantially increases the `api` pod's
+memory footprint and image size (`torch`/`transformers`/`timm`/`einops`,
+plus the downloaded model weights) — bump `api.resources` accordingly if you
+turn it on. `api/requirements.txt` has a note on using the CPU-only `torch`
+wheel index to avoid pulling in CUDA libraries you don't need without a GPU.
+
 ## Local development
 
 Requires Python 3.12+, Node 20+, and `podman` (or `docker`) on your `PATH`.
@@ -237,8 +280,13 @@ this repository and self-heal any drift.
 ## Testing
 
 - **api**: `pytest` with FastAPI's `TestClient`, exercising sync/list/
-  metadata/thumbnail/original/delete flows against a temporary photos
-  directory and SQLite database per test (`make test-api`).
+  metadata/thumbnail/original/delete/chat flows against a temporary photos
+  directory and SQLite database per test (`make test-api`). Chat tests mock
+  the `openai` client and the `chat.ask`/`chat._ask_florence` boundary
+  rather than hitting a real endpoint or loading real model weights;
+  `torch`/`transformers` aren't installed in CI/dev by default, so the
+  Florence-2 "not configured" error path is exercised for real rather than
+  mocked.
 - **web**: `vitest` + `@testing-library/react`, mocking the API client to
   test loading, empty, populated, and error states (`make test-web`).
 
@@ -252,6 +300,12 @@ this repository and self-heal any drift.
 - Photo metadata is stored in a single SQLite file; this is fine for a
   single-replica deployment but is not meant for `api.replicaCount > 1`
   without moving to a shared database.
+- The Florence-2 chat backend isn't installed or exercised in this repo's
+  own dev/test environment (`torch`/`transformers` are multi-GB) — it's
+  implemented and unit-tested against the documented boundary
+  (`chat._load_florence`/`chat._ask_florence`), but hasn't been run
+  end-to-end against real model weights here. Worth a manual smoke test
+  with `LUMINARY_FLORENCE_DEVICE` set appropriately before relying on it.
 
 ## CI
 
