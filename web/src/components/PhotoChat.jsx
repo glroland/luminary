@@ -74,21 +74,6 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
 
   return (
     <div className="photo-chat">
-      <label className="photo-chat-backend">
-        <input
-          type="checkbox"
-          checked={useFlorence}
-          onChange={(event) => setUseFlorence(event.target.checked)}
-        />
-        Natural Language Object Detection
-      </label>
-      {useFlorence && (
-        <p className="photo-chat-hint">
-          Locates objects from a short phrase (e.g. "the dog") using the local Florence-2 model — it
-          doesn't answer questions. Leave the message blank for a general description instead.
-        </p>
-      )}
-
       <div className="photo-chat-messages">
         {messages.length === 0 ? (
           !useFlorence && <p className="photo-chat-empty">Ask something about this photo.</p>
@@ -121,6 +106,21 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
           Send
         </button>
       </form>
+
+      <label className="photo-chat-backend">
+        <input
+          type="checkbox"
+          checked={useFlorence}
+          onChange={(event) => setUseFlorence(event.target.checked)}
+        />
+        Natural Language Object Detection
+      </label>
+      {useFlorence && (
+        <p className="photo-chat-hint">
+          Locates objects from a short phrase (e.g. "the dog") using the local Florence-2 model — it
+          doesn't answer questions. Leave the message blank for a general description instead.
+        </p>
+      )}
     </div>
   );
 }
