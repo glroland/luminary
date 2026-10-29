@@ -39,12 +39,14 @@ export async function fetchSyncStatus() {
   return request("/sync/status");
 }
 
-// The server may answer with a normal {reply} JSON body, or (when
+// The server may answer with a normal {reply, boxes} JSON body, or (when
 // LUMINARY_OPENAI_STREAMING is enabled server-side) a streamed
 // text/plain body delivering the reply incrementally -- which one it did
 // is read from the response's own content-type, not decided here. Either
-// way this resolves to the full reply text; pass onChunk to also be
-// notified of each piece as it arrives (never called for a JSON reply).
+// way this resolves to {reply, boxes} (boxes always [] for a streamed
+// reply -- streaming is openai-only, and only florence ever returns
+// boxes); pass onChunk to also be notified of each reply piece as it
+// arrives (never called for a JSON reply).
 export async function chatAboutPhoto(photoId, backend, message, history, onChunk) {
   let response;
   try {
@@ -66,7 +68,7 @@ export async function chatAboutPhoto(photoId, backend, message, history, onChunk
 
   if (isJson) {
     const data = await response.json();
-    return data.reply;
+    return { reply: data.reply, boxes: data.boxes || [] };
   }
 
   const reader = response.body.getReader();
@@ -79,7 +81,7 @@ export async function chatAboutPhoto(photoId, backend, message, history, onChunk
     full += chunk;
     onChunk?.(chunk);
   }
-  return full;
+  return { reply: full, boxes: [] };
 }
 
 export function thumbnailUrl(photoId) {

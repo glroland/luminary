@@ -145,11 +145,46 @@ body {
   padding: 1rem;
 }
 
+.photo-modal-image-wrap {
+  /* Fills the pane with a *definite* size (not shrink-to-content) so the
+     img's width/height: 100% below resolves correctly -- max-width/
+     max-height percentages on the img failed silently when this wrap had
+     an auto (content-derived) height instead, rendering the image at full
+     natural size and letting the modal's overflow:hidden truncate it
+     rather than scaling it down (see PhotoModal.jsx's measureVisibleImageRect,
+     which box overlays are positioned from instead of CSS percentages of
+     this wrap, since object-fit: contain can still letterbox within it). */
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
 .photo-modal-image-pane img {
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
   display: block;
   object-fit: contain;
+}
+
+.photo-modal-bbox {
+  position: absolute;
+  border: 2px solid #ffcc00;
+  background: rgba(255, 204, 0, 0.15);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.photo-modal-bbox-label {
+  position: absolute;
+  top: -1.5rem;
+  left: -2px;
+  background: #ffcc00;
+  color: #163a6b;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  white-space: nowrap;
 }
 
 .photo-modal-sidebar {

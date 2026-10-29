@@ -125,7 +125,7 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
         return StreamingResponse(generate(), media_type="text/plain")
 
     try:
-        reply = chat.ask(body.backend, original_bytes, photo["content_type"], body.message, history)
+        result = chat.ask(body.backend, original_bytes, photo["content_type"], body.message, history)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
@@ -138,4 +138,4 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
         logger.exception("Chat backend %r failed for photo %s", body.backend, photo_id)
         raise HTTPException(status_code=502, detail="Chat backend failed")
 
-    return {"reply": reply}
+    return {"reply": result.text, "boxes": result.boxes}

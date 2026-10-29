@@ -23,7 +23,9 @@ ground, whenever the message is non-empty; an empty message falls back to
 <MORE_DETAILED_CAPTION>. The frontend should make this limitation visible
 rather than implying it's a general-purpose chat model: a user's question
 ("where was this taken?") won't be answered, but a phrase ("the dog") will
-be located.
+be located. ask() returns a ChatReply (not a bare string) so that
+grounding's bounding boxes can travel alongside the reply text -- see its
+docstring -- for the frontend to draw as an overlay on the full-size image.
 
 The openai backend can optionally stream its reply back token-by-token
 (LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
@@ -34,6 +36,7 @@ import base64
 import io
 import logging
 import threading
+from dataclasses import dataclass, field
 
 from .config import (
     get_florence_device,
@@ -58,12 +61,27 @@ class ChatNotConfigured(Exception):
     """Raised when the selected backend is missing required configuration."""
 
 
-def ask(backend: str, photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> str:
+@dataclass
+class ChatReply:
+    """Return shape of ask(): `text` is always the human-readable reply.
+    `boxes` is non-empty only for a florence grounding result (never for
+    openai, which has no concept of image regions) -- each is
+    {"label": str, "x1"/"y1"/"x2"/"y2": float} in the *original* photo's
+    pixel coordinate space (matching Photo.width/height from the API, not
+    whatever resolution the model processed internally), so the frontend
+    can position an overlay directly against the full-size image without
+    knowing anything about Florence-2's internals."""
+
+    text: str
+    boxes: list[dict] = field(default_factory=list)
+
+
+def ask(backend: str, photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> ChatReply:
     """Ask a question about a photo, returning the full reply at once.
     `history` is a list of {"role": "user"|"assistant", "text": str}
     dicts, oldest first."""
     if backend == "openai":
-        return _ask_openai(photo_bytes, content_type, message, history)
+        return ChatReply(text=_ask_openai(photo_bytes, content_type, message, history))
     if backend == "florence":
         return _ask_florence(photo_bytes, message)
     raise ValueError(f"Unknown chat backend: {backend!r}")
@@ -247,8 +265,8 @@ def _load_florence():
         return _florence_model, _florence_processor
 
 
-def _ask_florence(photo_bytes: bytes, message: str) -> str:
-    from PIL import Image  # Pillow is a core dependency, always safe to import
+def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:
+    from PIL import Image, ImageOps  # Pillow is a core dependency, always safe to import
 
     # _load_florence() raises ChatNotConfigured (not ImportError) if
     # torch/transformers aren't installed -- only import torch here, after
@@ -261,6 +279,12 @@ def _ask_florence(photo_bytes: bytes, message: str) -> str:
     dtype = torch.float16 if device.startswith("cuda") else torch.float32
 
     image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+    # Match sync.py's indexing: the raw sensor pixel grid ignores EXIF
+    # Orientation, but the browser (and Photo.width/height, recorded from
+    # sync.py post-transpose) both honor it. Grounding box coordinates must
+    # be computed in that same post-transpose space, or they'll be rotated
+    # relative to what the frontend overlays them on.
+    image = ImageOps.exif_transpose(image) or image
 
     phrase = message.strip()
     task = _FLORENCE_GROUNDING_TASK if phrase else _FLORENCE_CAPTION_TASK
@@ -280,17 +304,28 @@ def _ask_florence(photo_bytes: bytes, message: str) -> str:
     result = parsed[task]
 
     if task == _FLORENCE_GROUNDING_TASK:
-        return _format_grounding_result(result, phrase)
-    return result
+        text, boxes = _format_grounding_result(result, phrase)
+        return ChatReply(text=text, boxes=boxes)
+    return ChatReply(text=result)
 
 
-def _format_grounding_result(result: dict, phrase: str) -> str:
+def _format_grounding_result(result: dict, phrase: str) -> tuple[str, list[dict]]:
     """<CAPTION_TO_PHRASE_GROUNDING> returns {"bboxes": [...], "labels":
-    [...]} -- box coordinates, not a sentence. Render that as readable text
-    for the chat UI, since this is still presented as a chat reply."""
+    [...]} -- box coordinates (in the image_size passed to
+    post_process_generation, i.e. the original photo's pixel space), not a
+    sentence. Render readable text for the chat transcript, and return the
+    boxes themselves (full precision, not rounded like the text) for the
+    frontend to draw."""
     bboxes = result.get("bboxes", [])
     labels = result.get("labels", [])
     if not bboxes:
-        return f'Florence-2 couldn\'t locate "{phrase}" in this image.'
-    lines = [f"- \"{label}\" at approximately ({x1:.0f}, {y1:.0f})-({x2:.0f}, {y2:.0f})" for label, (x1, y1, x2, y2) in zip(labels, bboxes)]
-    return f'Location(s) found for "{phrase}":\n' + "\n".join(lines)
+        return f'Florence-2 couldn\'t locate "{phrase}" in this image.', []
+
+    lines = []
+    boxes = []
+    for label, (x1, y1, x2, y2) in zip(labels, bboxes):
+        lines.append(f"- \"{label}\" at approximately ({x1:.0f}, {y1:.0f})-({x2:.0f}, {y2:.0f})")
+        boxes.append({"label": label, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+
+    text = f'Location(s) found for "{phrase}":\n' + "\n".join(lines)
+    return text, boxes

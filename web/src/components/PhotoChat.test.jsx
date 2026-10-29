@@ -14,7 +14,9 @@ describe("PhotoChat", () => {
   });
 
   it("sends the message to the openai backend by default and shows the reply", async () => {
-    const chatMock = vi.spyOn(client, "chatAboutPhoto").mockResolvedValue("It's a red square.");
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockResolvedValue({ reply: "It's a red square.", boxes: [] });
 
     render(<PhotoChat photoId="1" />);
 
@@ -33,7 +35,9 @@ describe("PhotoChat", () => {
   });
 
   it("sends to the florence backend when the checkbox is checked", async () => {
-    const chatMock = vi.spyOn(client, "chatAboutPhoto").mockResolvedValue("A detailed caption.");
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockResolvedValue({ reply: "A detailed caption.", boxes: [] });
 
     render(<PhotoChat photoId="1" />);
 
@@ -51,8 +55,8 @@ describe("PhotoChat", () => {
   it("sends prior turns as history on the next message", async () => {
     const chatMock = vi
       .spyOn(client, "chatAboutPhoto")
-      .mockResolvedValueOnce("first reply")
-      .mockResolvedValueOnce("second reply");
+      .mockResolvedValueOnce({ reply: "first reply", boxes: [] })
+      .mockResolvedValueOnce({ reply: "second reply", boxes: [] });
 
     render(<PhotoChat photoId="1" />);
 
@@ -105,7 +109,9 @@ describe("PhotoChat", () => {
   });
 
   it("sends an empty message to florence for a general description", async () => {
-    const chatMock = vi.spyOn(client, "chatAboutPhoto").mockResolvedValue("a detailed caption");
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockResolvedValue({ reply: "a detailed caption", boxes: [] });
 
     render(<PhotoChat photoId="1" />);
 
@@ -129,7 +135,7 @@ describe("PhotoChat", () => {
       expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
       onChunk("lo, ");
       onChunk("world");
-      return "Hello, world";
+      return { reply: "Hello, world", boxes: [] };
     });
 
     render(<PhotoChat photoId="1" />);
@@ -144,8 +150,39 @@ describe("PhotoChat", () => {
     expect(screen.getAllByText(/Hello, world/)).toHaveLength(1);
   });
 
+  it("reports boxes from a florence grounding reply via onBoxesChange", async () => {
+    const boxes = [{ label: "the dog", x1: 1, y1: 2, x2: 3, y2: 4 }];
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "found it", boxes });
+    const onBoxesChange = vi.fn();
+
+    render(<PhotoChat photoId="1" onBoxesChange={onBoxesChange} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /use local florence-2 model/i }));
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "the dog" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      expect(onBoxesChange).toHaveBeenCalledWith(boxes);
+    });
+  });
+
+  it("clears boxes from the previous turn as soon as a new message is sent", async () => {
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "a reply", boxes: [] });
+    const onBoxesChange = vi.fn();
+
+    render(<PhotoChat photoId="1" onBoxesChange={onBoxesChange} />);
+
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "hi" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    // Cleared synchronously on submit, before the response even resolves.
+    expect(onBoxesChange).toHaveBeenCalledWith([]);
+
+    await waitFor(() => expect(screen.getByText("a reply")).toBeInTheDocument());
+  });
+
   it("resets the conversation when the photo changes", async () => {
-    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue("a reply");
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "a reply", boxes: [] });
 
     const { rerender } = render(<PhotoChat photoId="1" />);
 

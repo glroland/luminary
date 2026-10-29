@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { chatAboutPhoto } from "../api/client.js";
 
-export default function PhotoChat({ photoId }) {
+export default function PhotoChat({ photoId, onBoxesChange }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [useFlorence, setUseFlorence] = useState(false);
@@ -18,6 +18,7 @@ export default function PhotoChat({ photoId }) {
     setError(null);
     setIsSending(false);
     streamingIndexRef.current = null;
+    onBoxesChange?.([]);
   }, [photoId]);
 
   async function handleSubmit(event) {
@@ -36,6 +37,9 @@ export default function PhotoChat({ photoId }) {
     setError(null);
     setIsSending(true);
     streamingIndexRef.current = null;
+    // Clear any box(es) drawn for the previous turn immediately -- they're
+    // specific to that reply, not the conversation as a whole.
+    onBoxesChange?.([]);
 
     function handleChunk(chunk) {
       setMessages((current) => {
@@ -51,12 +55,13 @@ export default function PhotoChat({ photoId }) {
     }
 
     try {
-      const reply = await chatAboutPhoto(photoId, backend, text, history, handleChunk);
+      const { reply, boxes } = await chatAboutPhoto(photoId, backend, text, history, handleChunk);
       if (streamingIndexRef.current === null) {
         // A plain (non-streaming) reply: no chunks arrived via handleChunk,
         // so the message was never started above -- append it now.
         setMessages((current) => [...current, { role: "assistant", text: reply }]);
       }
+      onBoxesChange?.(boxes);
     } catch (err) {
       setError(err.message);
     } finally {

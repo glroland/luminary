@@ -24,7 +24,7 @@ def test_chat_returns_reply_from_selected_backend(client, tmp_path, monkeypatch)
 
     def fake_ask(backend, photo_bytes, content_type, message, history):
         captured["args"] = (backend, content_type, message, history)
-        return "a red square"
+        return chat.ChatReply(text="a red square")
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
@@ -33,7 +33,7 @@ def test_chat_returns_reply_from_selected_backend(client, tmp_path, monkeypatch)
         json={"backend": "florence", "message": "what is this?", "history": [{"role": "user", "text": "hi"}]},
     )
     assert response.status_code == 200
-    assert response.json() == {"reply": "a red square"}
+    assert response.json() == {"reply": "a red square", "boxes": []}
     backend, content_type, message, history = captured["args"]
     assert backend == "florence"
     assert content_type == "image/jpeg"
@@ -152,7 +152,7 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
         [{"role": "assistant", "text": "earlier reply"}],
     )
 
-    assert reply == "a red square"
+    assert reply == chat.ChatReply(text="a red square")
     assert captured["api_key"] == "test-key"
     assert captured["base_url"] == "http://localhost:9999/v1"
     assert captured["model"] == "my-vision-model"
@@ -333,8 +333,11 @@ def test_florence_backend_runs_phrase_grounding_when_message_is_non_empty(monkey
 
     assert processor.calls["prompt"] == chat._FLORENCE_GROUNDING_TASK + "the dog"
     assert processor.calls["task"] == chat._FLORENCE_GROUNDING_TASK
-    assert '"the dog"' in reply
-    assert "(1, 3)-(6, 8)" in reply
+    assert '"the dog"' in reply.text
+    assert "(1, 3)-(6, 8)" in reply.text
+    # Full-precision coordinates (not the rounded text) travel separately
+    # for the frontend to draw an overlay with.
+    assert reply.boxes == [{"label": "the dog", "x1": 1.2, "y1": 3.4, "x2": 5.6, "y2": 7.8}]
 
 
 def test_florence_backend_reports_no_match_for_an_ungrounded_phrase(monkeypatch):
@@ -343,8 +346,9 @@ def test_florence_backend_reports_no_match_for_an_ungrounded_phrase(monkeypatch)
 
     reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "a unicorn", [])
 
-    assert "couldn't locate" in reply
-    assert "a unicorn" in reply
+    assert "couldn't locate" in reply.text
+    assert "a unicorn" in reply.text
+    assert reply.boxes == []
 
 
 def test_florence_backend_runs_plain_caption_when_message_is_empty(monkeypatch):
@@ -355,7 +359,8 @@ def test_florence_backend_runs_plain_caption_when_message_is_empty(monkeypatch):
 
     assert processor.calls["prompt"] == chat._FLORENCE_CAPTION_TASK
     assert processor.calls["task"] == chat._FLORENCE_CAPTION_TASK
-    assert reply == "a detailed caption of the photo"
+    assert reply.text == "a detailed caption of the photo"
+    assert reply.boxes == []
 
 
 def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
@@ -514,10 +519,10 @@ def test_chat_endpoint_does_not_stream_by_default(client, tmp_path, monkeypatch)
     photo_id = _get_synced_photo_id(client, tmp_path)
     monkeypatch.delenv("LUMINARY_OPENAI_STREAMING", raising=False)
 
-    monkeypatch.setattr(chat, "ask", lambda *args, **kwargs: "a plain reply")
+    monkeypatch.setattr(chat, "ask", lambda *args, **kwargs: chat.ChatReply(text="a plain reply"))
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json() == {"reply": "a plain reply"}
+    assert response.json() == {"reply": "a plain reply", "boxes": []}

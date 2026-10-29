@@ -25,6 +25,13 @@ LUMINARY_OPENAI_BASE_URL ?= https://maas.apps.ocp.home.glroland.com/sandbox/gemm
 # different endpoint, e.g. `make run-api LUMINARY_OPENAI_BASE_URL=... LUMINARY_OPENAI_MODEL=...`.
 LUMINARY_OPENAI_MODEL ?= gemma-4
 
+# Florence-2 checkpoint for the local vision-language chat backend -- loaded
+# once per process and cached (chat.py's _florence_model/_florence_processor),
+# so changing this requires a full restart of run-api, not just re-running a
+# chat request -- `--reload` only restarts on file changes, not env changes.
+# Override e.g. `make run-api LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-large`.
+LUMINARY_FLORENCE_MODEL ?= microsoft/Florence-2-base
+
 .PHONY: help install install-api install-web \
         test test-api test-web \
         lint lint-web \
@@ -80,6 +87,7 @@ lint-web:
 run-api:
 	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) LUMINARY_DATABASE_PATH=$(DATA_DIR)/photos.db \
 		LUMINARY_OPENAI_BASE_URL=$(LUMINARY_OPENAI_BASE_URL) LUMINARY_OPENAI_MODEL=$(LUMINARY_OPENAI_MODEL) \
+		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:

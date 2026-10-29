@@ -45,5 +45,20 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = []
 
 
+class BoundingBox(BaseModel):
+    # Pixel coordinates in the *original* photo's own coordinate space
+    # (matching Photo.width/height) -- never a resized/internal coordinate
+    # space some model happened to process at. See chat.ChatReply.
+    label: str
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+
 class ChatResponse(BaseModel):
     reply: str
+    # Only ever non-empty for a florence grounding result -- the openai
+    # backend has no concept of image regions. Always [] for a streamed
+    # reply too (streaming is openai-only, see chat.should_stream).
+    boxes: list[BoundingBox] = []
