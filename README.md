@@ -115,9 +115,40 @@ Configuration (environment variables):
 | Variable                  | Default            | Purpose                              |
 |----------------------------|---------------------|---------------------------------------|
 | `LUMINARY_PHOTOS_URI`      | `/data/photos`      | The photo library to index (read-only) |
+| `LUMINARY_PHOTOS_USERNAME` | *(none)*            | Backend auth — see below               |
+| `LUMINARY_PHOTOS_PASSWORD` | *(none)*            | Backend auth — see below               |
 | `LUMINARY_DATABASE_PATH`   | `/data/photos.db`   | SQLite database file                  |
 | `LUMINARY_CORS_ORIGINS`    | `*`                 | Comma-separated list of allowed origins |
+| `LUMINARY_LOG_LEVEL`       | `INFO`              | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `PORT`                     | `8080`              | Port uvicorn listens on                |
+
+### Authenticating to the photos backend
+
+Credentials are kept **out of `LUMINARY_PHOTOS_URI`** — don't write
+`smb://user:pass@host/...` — so the URI itself stays safe to log, default
+in a Makefile, or commit. Instead:
+
+- **SMB/CIFS**: set `LUMINARY_PHOTOS_USERNAME` / `LUMINARY_PHOTOS_PASSWORD`;
+  the API passes them to `smbprotocol` directly. If your share needs a
+  specific domain, qualify the username (e.g. `DOMAIN\alice`).
+- **S3**: nothing to configure here — `s3fs`/`boto3` already pick up the
+  standard `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`
+  env vars or an IAM role automatically.
+- **Local path / NFS**: no credentials — access is controlled by the mount
+  itself (see "Data safety" above for the `ro` export recommendation).
+
+In Kubernetes, source `LUMINARY_PHOTOS_USERNAME`/`_PASSWORD` from a `Secret`
+via `valueFrom.secretKeyRef` rather than a plain value in `values.yaml` —
+the Helm chart's `api.env.photosCredentialsSecret` (see
+`deploy/helm/luminary/values.yaml`) does this.
+
+The API logs to stdout via Python's standard `logging` module: sync
+start/completion (with counts), per-file failures during sync (a file that
+can't be read/thumbnailed is logged and skipped rather than failing the
+whole sync), rejected upload attempts, database errors, and any unhandled
+request error (via a global exception handler, so nothing fails silently
+with just a bare 500). `LUMINARY_PHOTOS_URI` is logged once at startup with
+any embedded credentials redacted.
 
 `LUMINARY_PHOTOS_URI` is resolved with [fsspec](https://filesystem-spec.readthedocs.io/),
 so it accepts any of the following:

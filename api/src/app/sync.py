@@ -11,6 +11,7 @@ time.
 
 import asyncio
 import io
+import logging
 import mimetypes
 import os.path
 import threading
@@ -23,6 +24,8 @@ from PIL import Image
 
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
+
+logger = logging.getLogger(__name__)
 
 MAX_CONCURRENCY = 8
 
@@ -135,8 +138,11 @@ def start_sync() -> dict:
     starting a second one."""
     global _thread
     if progress.try_start():
+        logger.info("Starting photo sync")
         _thread = threading.Thread(target=lambda: asyncio.run(_run_sync()), daemon=True)
         _thread.start()
+    else:
+        logger.info("Sync already in progress; ignoring duplicate start request")
     return progress.snapshot()
 
 
@@ -170,7 +176,9 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                 thumbnail.save(buffer, "JPEG")
                 thumbnail_bytes = buffer.getvalue()
     except Exception:
-        pass
+        logger.warning(
+            "Could not read/thumbnail %r; indexing metadata only", relative_path, exc_info=True
+        )
 
     content_type = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
     created_at_value = (created_at or datetime.now(timezone.utc)).isoformat()
@@ -241,6 +249,7 @@ async def _run_sync() -> None:
         paths = [p for p in all_paths if os.path.splitext(p)[1].lower() in IMAGE_EXTENSIONS]
         existing = await loop.run_in_executor(_executor, _load_existing)
 
+        logger.info("Sync found %d photo(s) under %s", len(paths), root)
         progress.set_total(len(paths))
 
         seen: set = set()
@@ -259,5 +268,14 @@ async def _run_sync() -> None:
 
         deleted = await loop.run_in_executor(_executor, _delete_missing, existing, seen)
         progress.finish(deleted=deleted)
+        summary = progress.snapshot()
+        logger.info(
+            "Sync completed: %d inserted, %d updated, %d deleted (of %d found)",
+            summary["inserted"],
+            summary["updated"],
+            summary["deleted"],
+            summary["total"],
+        )
     except Exception as exc:
+        logger.exception("Sync failed")
         progress.fail(str(exc))

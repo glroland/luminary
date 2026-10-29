@@ -26,6 +26,18 @@ spec:
           env:
             - name: LUMINARY_PHOTOS_URI
               value: {{ .Values.api.env.photosUri | quote }}
+            {{- if .Values.api.env.photosCredentialsSecret }}
+            - name: LUMINARY_PHOTOS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.env.photosCredentialsSecret }}
+                  key: username
+            - name: LUMINARY_PHOTOS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.env.photosCredentialsSecret }}
+                  key: password
+            {{- end }}
             - name: LUMINARY_DATABASE_PATH
               value: /data/photos.db
             - name: LUMINARY_CORS_ORIGINS

@@ -1,3 +1,5 @@
+import logging
+
 from conftest import sync_and_wait, write_image
 
 
@@ -51,9 +53,13 @@ def test_delete_removes_index_entry_but_not_the_source_file(client, tmp_path):
     assert len(client.get("/api/photos").json()["photos"]) == 1
 
 
-def test_upload_endpoint_is_disabled(client):
-    response = client.post("/api/photos", files={"file": ("sample.jpg", b"not-a-real-image", "image/jpeg")})
+def test_upload_endpoint_is_disabled(client, caplog):
+    with caplog.at_level(logging.WARNING, logger="app.routers.photos"):
+        response = client.post(
+            "/api/photos", files={"file": ("sample.jpg", b"not-a-real-image", "image/jpeg")}
+        )
     assert response.status_code == 403
+    assert any("disabled" in record.message.lower() for record in caplog.records)
 
 
 def test_get_missing_photo_returns_404(client):

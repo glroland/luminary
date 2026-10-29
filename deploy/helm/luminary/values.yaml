@@ -26,6 +26,11 @@ api:
     # below; s3://, smb://, https://, etc. point at an external backend
     # instead (set api.persistence.enabled=false in that case).
     photosUri: /data/photos
+    # Name of a Secret (same namespace, keys `username`/`password`) used to
+    # authenticate to photosUri -- e.g. an smb:// share. Leave empty if the
+    # backend needs no credentials (local/NFS, or S3 via IAM role). Never
+    # put credentials directly in photosUri or in this values file.
+    photosCredentialsSecret: ""
   route:
     enabled: true
     host: ""

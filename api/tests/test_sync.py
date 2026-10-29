@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from PIL import Image
 
@@ -83,6 +85,44 @@ def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path):
     assert photo["created_at"].startswith("2023-05-17T14:22:10")
     assert photo["latitude"] == pytest.approx(40.446194, abs=1e-5)
     assert photo["longitude"] == pytest.approx(-79.948611, abs=1e-5)
+
+
+def test_sync_logs_a_warning_for_an_unreadable_file_but_still_indexes_it(client, tmp_path, caplog):
+    photos_dir = tmp_path / "photos"
+    photos_dir.mkdir(parents=True, exist_ok=True)
+    (photos_dir / "corrupt.jpg").write_bytes(b"not a real jpeg")
+
+    with caplog.at_level(logging.WARNING, logger="app.sync"):
+        status = sync_and_wait(client)
+
+    assert status["status"] == "completed"
+    assert status["inserted"] == 1
+
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["filename"] == "corrupt.jpg"
+    assert photo["width"] is None
+    assert photo["height"] is None
+
+    assert any(
+        record.levelno == logging.WARNING and "corrupt.jpg" in record.message
+        for record in caplog.records
+    )
+
+
+def test_sync_logs_and_reports_an_error_on_failure(client, monkeypatch, caplog):
+    from app import sync
+
+    def boom():
+        raise RuntimeError("backend unreachable")
+
+    monkeypatch.setattr(sync, "_fs_and_root", boom)
+
+    with caplog.at_level(logging.ERROR, logger="app.sync"):
+        status = sync_and_wait(client)
+
+    assert status["status"] == "error"
+    assert "backend unreachable" in status["error"]
+    assert any(record.levelno == logging.ERROR and record.exc_info for record in caplog.records)
 
 
 def test_sync_status_defaults_to_idle(client):

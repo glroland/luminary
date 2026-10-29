@@ -5,7 +5,7 @@ import fsspec
 from PIL import Image
 from PIL.ExifTags import IFD
 
-from .config import get_photos_uri
+from .config import get_photos_password, get_photos_uri, get_photos_username
 from .database import get_connection
 
 THUMBNAIL_SIZE = (320, 320)
@@ -15,6 +15,12 @@ THUMBNAIL_SIZE = (320, 320)
 # photo's thumbnail bytes get read off disk just to list filenames.
 METADATA_COLUMNS = "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude"
 
+# Protocols whose fsspec filesystem accepts plain `username`/`password`
+# kwargs. Other backends authenticate differently (S3 via boto3's standard
+# credential chain -- env vars/IAM role -- needs no code here at all; HTTP
+# has no generic equivalent) so credentials are only forwarded for these.
+_USERNAME_PASSWORD_PROTOCOLS = {"smb"}
+
 
 def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
     """Resolve the configured photos URI to an fsspec filesystem and root
@@ -22,8 +28,24 @@ def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
     this backend -- it's treated as someone else's existing photo library
     (originals live directly under the root; there's no app-managed
     subdirectory). Photos only enter the SQLite index via sync.py scanning
-    what's already there."""
-    fs, root = fsspec.core.url_to_fs(get_photos_uri())
+    what's already there.
+
+    Credentials (LUMINARY_PHOTOS_USERNAME/_PASSWORD) are passed to fsspec
+    as storage_options, not embedded in the URI -- keeps the URI itself
+    safe to log/default in a Makefile/commit."""
+    uri = get_photos_uri()
+    protocol, _ = fsspec.core.split_protocol(uri)
+
+    credentials = {}
+    if protocol in _USERNAME_PASSWORD_PROTOCOLS:
+        username = get_photos_username()
+        password = get_photos_password()
+        if username is not None:
+            credentials["username"] = username
+        if password is not None:
+            credentials["password"] = password
+
+    fs, root = fsspec.core.url_to_fs(uri, **credentials)
     return fs, root.rstrip("/") or "/"
 
 

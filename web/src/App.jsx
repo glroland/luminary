@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
 import SyncStatus from "./components/SyncStatus.jsx";
-import { deletePhoto, fetchPhotos, fetchSyncStatus, startSync } from "./api/client.js";
+import { fetchPhotos, fetchSyncStatus, startSync } from "./api/client.js";
 import logo from "./assets/logo.svg";
 
 const POLL_INTERVAL_MS = 1000;
@@ -79,15 +79,6 @@ export default function App() {
     }
   }
 
-  async function handleDelete(photoId) {
-    try {
-      await deletePhoto(photoId);
-      setPhotos((current) => current.filter((photo) => photo.id !== photoId));
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
   return (
     <div className="app">
       <header className="app-header">
@@ -102,7 +93,7 @@ export default function App() {
       {isLoading ? (
         <p>Loading photos...</p>
       ) : (
-        <PhotoGrid photos={photos} onSelect={setSelectedPhoto} onDelete={handleDelete} />
+        <PhotoGrid photos={photos} onSelect={setSelectedPhoto} />
       )}
       <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
     </div>

@@ -1,6 +1,6 @@
 import { thumbnailUrl } from "../api/client.js";
 
-export default function PhotoCard({ photo, onSelect, onDelete }) {
+export default function PhotoCard({ photo, onSelect }) {
   return (
     <div className="photo-card">
       <img src={thumbnailUrl(photo.id)} alt={photo.filename} onClick={() => onSelect(photo)} />
@@ -8,9 +8,6 @@ export default function PhotoCard({ photo, onSelect, onDelete }) {
         <span className="filename" title={photo.filename}>
           {photo.filename}
         </span>
-        <button type="button" aria-label={`Delete ${photo.filename}`} onClick={() => onDelete(photo.id)}>
-          Delete
-        </button>
       </div>
     </div>
   );

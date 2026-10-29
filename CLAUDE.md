@@ -69,10 +69,23 @@ rename.
 
 ## API architecture (`api/src/app/`)
 
-Request flow: `main.py` wires CORS + the `health` and `photos` routers under
-`/api`, with lifespan calling `database.init_db()` on startup. `routers/photos.py`
-is thin — all actual work (file I/O, thumbnailing, SQLite) lives in
-`storage.py`:
+Request flow: `main.py` wires CORS + the `health`, `photos`, and `sync`
+routers under `/api`, with lifespan calling `database.init_db()` on startup.
+`routers/photos.py` is thin — all actual work (file I/O, thumbnailing,
+SQLite) lives in `storage.py`/`sync.py`:
+
+- Logging: standard-library `logging`, configured once in
+  `logging_config.configure_logging()` (called at the top of `main.py`,
+  before the app is constructed) via `logging.basicConfig()`, level from
+  `LUMINARY_LOG_LEVEL` (default `INFO`). Every module gets its own
+  `logger = logging.getLogger(__name__)`. `main.py` also registers a global
+  `@app.exception_handler(Exception)` so an unhandled error anywhere is
+  always logged with a traceback (`logger.exception`) before the generic
+  500 goes out — don't rely on a route handler's own try/except to be the
+  only thing standing between a bug and a silent failure. `config.redact_uri()`
+  strips embedded credentials (`smb://user:pass@...`) before any URI derived
+  from `LUMINARY_PHOTOS_URI` is logged — never log `get_photos_uri()`'s
+  return value directly.
 
 - `config.py` reads `LUMINARY_PHOTOS_URI`, `LUMINARY_DATABASE_PATH`,
   `LUMINARY_CORS_ORIGINS` from env **lazily per-call** (not cached at import
@@ -85,7 +98,19 @@ is thin — all actual work (file I/O, thumbnailing, SQLite) lives in
   `LUMINARY_PHOTOS_URI` through [fsspec](https://filesystem-spec.readthedocs.io/)
   (`fsspec.core.url_to_fs`) rather than touching `pathlib` directly — the URI
   can be a bare local path/NFS mount, `s3://`, `smb://`, or read-only
-  `https://` (see README's config table). Originals are read directly from
+  `https://` (see README's config table). Auth credentials
+  (`LUMINARY_PHOTOS_USERNAME`/`_PASSWORD`) are deliberately kept separate
+  from the URI and passed to fsspec as kwargs (`url_to_fs(uri, username=...,
+  password=...)`) rather than embedded as `smb://user:pass@host/...` — never
+  reintroduce the embedded form, it'd put secrets in something that gets
+  logged (even redacted, that's a weaker guarantee than never having them
+  there) and defaulted in the Makefile/Helm values. They're only forwarded
+  for protocols in `_USERNAME_PASSWORD_PROTOCOLS` (currently just `smb`,
+  since that's the fsspec backend whose constructor actually takes
+  `username`/`password` kwargs) — S3 needs nothing from us (boto3's
+  standard credential chain handles `AWS_ACCESS_KEY_ID`/env/IAM role on its
+  own); don't add a protocol here without checking its fsspec filesystem's
+  actual constructor kwargs first. Originals are read directly from
   wherever they already live under the photos root — there's no app-managed
   subdirectory (an earlier version wrote uploads under `{root}/originals/`;
   that convention is gone along with the upload path it existed for).
@@ -157,6 +182,17 @@ is thin — all actual work (file I/O, thumbnailing, SQLite) lives in
   `conftest.py`'s `client` fixture) since it isn't reset per-request; shared
   test helpers (`write_image`, `sync_and_wait`) also live in `conftest.py`
   and are imported with `from conftest import ...` in test files.
+
+  A per-file failure (corrupt/unreadable image) is caught in
+  `_sync_one_file` and logged at `WARNING` with the offending relative path
+  and a traceback (`exc_info=True`) — the file still gets indexed with
+  metadata only (no width/height/thumbnail), it just doesn't fail the whole
+  sync. A failure in `_run_sync` itself (backend unreachable, etc.) is
+  caught at the top level, logged at `ERROR` via `logger.exception` (full
+  traceback), and surfaces as `status: "error"` with the message in
+  `GET /api/sync/status`'s `error` field. Both of these were previously
+  silent (bare `except: pass` / `progress.fail()` with no log call) —
+  don't reintroduce a silent except around backend I/O in this module.
 
 SQLite + on-disk files means the API is single-replica only (see
 `api.replicaCount` note in Helm values) — don't add code that assumes
