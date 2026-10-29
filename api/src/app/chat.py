@@ -40,6 +40,13 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+# Cap the longest side of the image sent to the openai-compatible endpoint.
+# We index full-resolution camera originals (a modern phone photo is
+# commonly 10+ megapixels), but self-hosted multimodal servers (vLLM and
+# similar) often impose a much smaller max input resolution and fail --
+# frequently with an opaque 500, not a clear 400 -- on a photo this large.
+_MAX_CHAT_IMAGE_DIMENSION = 2048
+
 
 class ChatNotConfigured(Exception):
     """Raised when the selected backend is missing required configuration."""
@@ -77,6 +84,45 @@ def ask_stream(backend: str, photo_bytes: bytes, content_type: str, message: str
 # --- Path 1: OpenAI-compatible multimodal endpoint -------------------------
 
 
+def _downscale_for_chat(photo_bytes: bytes, content_type: str) -> tuple[bytes, str]:
+    """Downscale the image to _MAX_CHAT_IMAGE_DIMENSION before it's sent to
+    the openai-compatible endpoint -- see that constant's comment for why.
+    Capping the longest side keeps the payload well within what any vision
+    model actually uses internally anyway (most downsample on their own
+    end regardless). Best-effort: if the bytes can't be decoded as an image
+    for any reason, fall back to the original bytes unchanged rather than
+    failing the whole chat request over this."""
+    from PIL import Image, ImageOps
+
+    try:
+        image = Image.open(io.BytesIO(photo_bytes))
+        image = ImageOps.exif_transpose(image) or image
+        if max(image.size) <= _MAX_CHAT_IMAGE_DIMENSION:
+            return photo_bytes, content_type
+        image.thumbnail((_MAX_CHAT_IMAGE_DIMENSION, _MAX_CHAT_IMAGE_DIMENSION), Image.LANCZOS)
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=85)
+        return buffer.getvalue(), "image/jpeg"
+    except Exception:
+        logger.warning("Could not downscale image for chat; sending original bytes", exc_info=True)
+        return photo_bytes, content_type
+
+
+def _log_upstream_error_body(exc: Exception) -> None:
+    """The openai SDK's own exception message is sometimes just a bare
+    status code with no detail, when the upstream's error response body
+    doesn't match the shape the client expects to parse -- common with
+    self-hosted gateways. Log the raw response body too, since that's
+    usually where the actual diagnostic from the server ends up."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return
+    try:
+        logger.error("openai-compatible backend returned: %s", response.text)
+    except Exception:
+        pass
+
+
 def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
     """Shared setup for both the blocking and streaming openai calls: validate
     config, build the client and the messages payload. Raises
@@ -96,6 +142,7 @@ def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, hi
 
     client = OpenAI(api_key=api_key, base_url=get_openai_base_url())
 
+    photo_bytes, content_type = _downscale_for_chat(photo_bytes, content_type)
     image_data_url = f"data:{content_type};base64,{base64.b64encode(photo_bytes).decode('ascii')}"
 
     messages = [{"role": turn["role"], "content": turn["text"]} for turn in history]
@@ -118,7 +165,11 @@ def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, hi
 
 def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> str:
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
-    response = client.chat.completions.create(model=model, messages=messages, max_tokens=500)
+    try:
+        response = client.chat.completions.create(model=model, messages=messages, max_tokens=500)
+    except Exception as exc:
+        _log_upstream_error_body(exc)
+        raise
     return response.choices[0].message.content
 
 
@@ -132,11 +183,15 @@ def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, hist
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
 
     def generate():
-        stream = client.chat.completions.create(model=model, messages=messages, max_tokens=500, stream=True)
-        for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        try:
+            stream = client.chat.completions.create(model=model, messages=messages, max_tokens=500, stream=True)
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except Exception as exc:
+            _log_upstream_error_body(exc)
+            raise
 
     return generate()
 

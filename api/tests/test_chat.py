@@ -167,6 +167,125 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
     assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
+def test_openai_backend_downscales_a_large_image_before_sending(monkeypatch):
+    # A full-resolution camera photo (e.g. 3024x4032, ~12MP) sent as-is to a
+    # self-hosted multimodal gateway is a common cause of an opaque 500 --
+    # many such servers impose a much smaller max input resolution. The
+    # image attached to the outgoing message must be capped, not the raw
+    # original bytes.
+    import io
+
+    from PIL import Image
+
+    monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LUMINARY_OPENAI_MODEL", "my-vision-model")
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (3024, 4032), color="blue").save(buffer, format="JPEG")
+    large_photo_bytes = buffer.getvalue()
+
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+
+            class Choice:
+                class Message:
+                    content = "a blue rectangle"
+
+                message = Message()
+
+            class Response:
+                choices = [Choice()]
+
+            return Response()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key, base_url):
+            self.chat = FakeChat()
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+
+    chat.ask("openai", large_photo_bytes, "image/jpeg", "what is this?", [])
+
+    image_part = next(part for part in captured["messages"][-1]["content"] if part["type"] == "image_url")
+    data_url = image_part["image_url"]["url"]
+    assert data_url.startswith("data:image/jpeg;base64,")
+
+    import base64
+
+    sent_bytes = base64.b64decode(data_url.split(",", 1)[1])
+    sent_image = Image.open(io.BytesIO(sent_bytes))
+    assert max(sent_image.size) <= chat._MAX_CHAT_IMAGE_DIMENSION
+    assert len(sent_bytes) < len(large_photo_bytes)
+
+
+def test_openai_backend_leaves_a_small_image_unchanged(monkeypatch):
+    monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LUMINARY_OPENAI_MODEL", "my-vision-model")
+
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (100, 100), color="red").save(buffer, format="JPEG")
+    small_photo_bytes = buffer.getvalue()
+
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+
+            class Choice:
+                class Message:
+                    content = "a red square"
+
+                message = Message()
+
+            class Response:
+                choices = [Choice()]
+
+            return Response()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key, base_url):
+            self.chat = FakeChat()
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+
+    chat.ask("openai", small_photo_bytes, "image/jpeg", "what is this?", [])
+
+    image_part = next(part for part in captured["messages"][-1]["content"] if part["type"] == "image_url")
+    data_url = image_part["image_url"]["url"]
+    sent_bytes = base64.b64decode(data_url.split(",", 1)[1])
+    assert sent_bytes == small_photo_bytes
+
+
+def test_openai_backend_falls_back_to_original_bytes_if_not_decodable_as_an_image(monkeypatch):
+    # test_openai_backend_sends_image_and_history_to_the_client relies on
+    # this fallback too (it uses b"fake-bytes", which isn't a real image).
+    monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LUMINARY_OPENAI_MODEL", "my-vision-model")
+
+    photo_bytes, content_type = chat._downscale_for_chat(b"not-an-image", "image/jpeg")
+    assert photo_bytes == b"not-an-image"
+    assert content_type == "image/jpeg"
+
+
 def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
     # torch/transformers are an optional, multi-GB dependency -- this must
     # hold regardless of whether they happen to be installed in whatever

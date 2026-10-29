@@ -279,7 +279,21 @@ cached) is also per-pod, in-memory state — same caveat.
   base64 data-URL-encoded and attached to the *current* message on every
   call (not just the first turn), so it works the same regardless of
   whether a given OpenAI-compatible server retains image content referenced
-  from earlier turns in the conversation.
+  from earlier turns in the conversation. Before encoding,
+  `_downscale_for_chat` caps the image's longest side at
+  `_MAX_CHAT_IMAGE_DIMENSION` (2048px) — originals indexed from a modern
+  phone are commonly 10+ megapixels, and sending one at full resolution to
+  a self-hosted multimodal gateway (vLLM and similar) is a real way to get
+  an opaque `500` back, since many such servers have a much smaller max
+  input resolution than that. Best-effort: if the bytes don't decode as an
+  image for any reason, it falls back to the original bytes unchanged
+  rather than failing the chat request over this. `_ask_openai`/the
+  streaming `generate()` also wrap their `client.chat.completions.create`
+  call to log the raw upstream response body
+  (`_log_upstream_error_body`) on failure — the `openai` SDK's own
+  exception message is sometimes just a bare status code with no detail
+  when a self-hosted gateway's error body doesn't match the shape it
+  expects, and that body is usually where the actual diagnostic is.
 
   **Florence-2 path** (`_ask_florence` / `_load_florence`): loads
   `LUMINARY_FLORENCE_MODEL` (default `microsoft/Florence-2-base`) via
