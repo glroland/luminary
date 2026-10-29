@@ -18,6 +18,10 @@ arbitrary question about the image", so the Florence-2 path always returns a
 detailed caption (<MORE_DETAILED_CAPTION>) regardless of what the user typed
 -- see run_example() in the model card. The frontend should make this
 limitation visible rather than implying it's a general-purpose chat model.
+
+The openai backend can optionally stream its reply back token-by-token
+(LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
+ask_stream() vs. the always-available, full-reply-at-once ask().
 """
 
 import base64
@@ -31,6 +35,7 @@ from .config import (
     get_openai_api_key,
     get_openai_base_url,
     get_openai_model,
+    get_openai_streaming,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,8 +46,9 @@ class ChatNotConfigured(Exception):
 
 
 def ask(backend: str, photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> str:
-    """Ask a question about a photo. `history` is a list of
-    {"role": "user"|"assistant", "text": str} dicts, oldest first."""
+    """Ask a question about a photo, returning the full reply at once.
+    `history` is a list of {"role": "user"|"assistant", "text": str}
+    dicts, oldest first."""
     if backend == "openai":
         return _ask_openai(photo_bytes, content_type, message, history)
     if backend == "florence":
@@ -50,10 +56,33 @@ def ask(backend: str, photo_bytes: bytes, content_type: str, message: str, histo
     raise ValueError(f"Unknown chat backend: {backend!r}")
 
 
+def should_stream(backend: str) -> bool:
+    """Whether a chat request for this backend should use the streaming
+    response path (ask_stream) instead of ask(). Only "openai" supports
+    streaming -- Florence-2's API is a single blocking generate() call with
+    no token-by-token output -- and only when LUMINARY_OPENAI_STREAMING is
+    enabled (default off)."""
+    return backend == "openai" and get_openai_streaming()
+
+
+def ask_stream(backend: str, photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+    """Streaming counterpart to ask(), for when should_stream(backend) is
+    True. Returns an iterator of reply text chunks. Only implemented for
+    "openai" -- callers must check should_stream() first."""
+    if backend != "openai":
+        raise ValueError(f"Streaming isn't supported for backend {backend!r}")
+    return _ask_openai_stream(photo_bytes, content_type, message, history)
+
+
 # --- Path 1: OpenAI-compatible multimodal endpoint -------------------------
 
 
-def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> str:
+def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+    """Shared setup for both the blocking and streaming openai calls: validate
+    config, build the client and the messages payload. Raises
+    ChatNotConfigured synchronously (not deferred into a generator) so a
+    caller building a streaming HTTP response can still turn it into a
+    normal error response *before* the stream has actually started."""
     from openai import OpenAI  # lazy: keep this an optional dependency at import time
 
     api_key = get_openai_api_key()
@@ -84,8 +113,32 @@ def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: li
         }
     )
 
+    return client, model, messages
+
+
+def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> str:
+    client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
     response = client.chat.completions.create(model=model, messages=messages, max_tokens=500)
     return response.choices[0].message.content
+
+
+def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+    # _prepare_openai_call() runs here, eagerly -- not inside generate()
+    # below -- specifically so ChatNotConfigured still raises synchronously
+    # when this is called, rather than only once the returned generator is
+    # first iterated (which, for an HTTP caller, would be after the
+    # streaming response has already started and the status code can no
+    # longer be changed).
+    client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
+
+    def generate():
+        stream = client.chat.completions.create(model=model, messages=messages, max_tokens=500, stream=True)
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
+    return generate()
 
 
 # --- Path 2: local Florence-2 vision-language model -------------------------

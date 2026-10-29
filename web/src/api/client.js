@@ -39,13 +39,47 @@ export async function fetchSyncStatus() {
   return request("/sync/status");
 }
 
-export async function chatAboutPhoto(photoId, backend, message, history) {
-  const data = await request(`/photos/${photoId}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ backend, message, history }),
-  });
-  return data.reply;
+// The server may answer with a normal {reply} JSON body, or (when
+// LUMINARY_OPENAI_STREAMING is enabled server-side) a streamed
+// text/plain body delivering the reply incrementally -- which one it did
+// is read from the response's own content-type, not decided here. Either
+// way this resolves to the full reply text; pass onChunk to also be
+// notified of each piece as it arrives (never called for a JSON reply).
+export async function chatAboutPhoto(photoId, backend, message, history, onChunk) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE}/photos/${photoId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backend, message, history }),
+    });
+  } catch {
+    throw new Error("Could not connect to the API. Is it running?");
+  }
+
+  const isJson = (response.headers.get("content-type") || "").includes("application/json");
+
+  if (!response.ok) {
+    const data = isJson ? await response.json().catch(() => null) : null;
+    throw new Error(data?.detail || `Could not connect to the API (HTTP ${response.status}).`);
+  }
+
+  if (isJson) {
+    const data = await response.json();
+    return data.reply;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    full += chunk;
+    onChunk?.(chunk);
+  }
+  return full;
 }
 
 export function thumbnailUrl(photoId) {

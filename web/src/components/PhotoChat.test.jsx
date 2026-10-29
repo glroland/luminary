@@ -29,7 +29,7 @@ describe("PhotoChat", () => {
       expect(screen.getByText("It's a red square.")).toBeInTheDocument();
     });
 
-    expect(chatMock).toHaveBeenCalledWith("1", "openai", "Where was this taken?", []);
+    expect(chatMock).toHaveBeenCalledWith("1", "openai", "Where was this taken?", [], expect.any(Function));
   });
 
   it("sends to the florence backend when the checkbox is checked", async () => {
@@ -44,7 +44,7 @@ describe("PhotoChat", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => {
-      expect(chatMock).toHaveBeenCalledWith("1", "florence", "hi", []);
+      expect(chatMock).toHaveBeenCalledWith("1", "florence", "hi", [], expect.any(Function));
     });
   });
 
@@ -64,10 +64,16 @@ describe("PhotoChat", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(screen.getByText("second reply")).toBeInTheDocument());
 
-    expect(chatMock).toHaveBeenLastCalledWith("1", "openai", "second question", [
-      { role: "user", text: "first question" },
-      { role: "assistant", text: "first reply" },
-    ]);
+    expect(chatMock).toHaveBeenLastCalledWith(
+      "1",
+      "openai",
+      "second question",
+      [
+        { role: "user", text: "first question" },
+        { role: "assistant", text: "first reply" },
+      ],
+      expect.any(Function)
+    );
   });
 
   it("shows an error message when the chat request fails", async () => {

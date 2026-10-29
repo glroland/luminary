@@ -73,6 +73,13 @@ def get_openai_model() -> Optional[str]:
     return os.environ.get("LUMINARY_OPENAI_MODEL") or None
 
 
+def get_openai_streaming() -> bool:
+    """Whether the openai chat backend streams its reply back to the client
+    token-by-token instead of returning it all at once. Off by default --
+    opt in explicitly."""
+    return os.environ.get("LUMINARY_OPENAI_STREAMING", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 # --- Photo chat: path 2, local Florence-2 vision-language model -----------
 
 

@@ -78,7 +78,7 @@ def remove_photo(photo_id: str) -> None:
 
 
 @router.post("/photos/{photo_id}/chat", response_model=ChatResponse)
-def chat_about_photo(photo_id: str, body: ChatRequest) -> dict:
+def chat_about_photo(photo_id: str, body: ChatRequest):
     photo = storage.get_photo(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -94,14 +94,38 @@ def chat_about_photo(photo_id: str, body: ChatRequest) -> dict:
     if original_bytes is None:
         raise HTTPException(status_code=404, detail="Photo not found")
 
+    history = [turn.model_dump() for turn in body.history]
+
+    if chat.should_stream(body.backend):
+        # chat.ask_stream() validates config and builds the request
+        # *before* returning its generator (see _prepare_openai_call's
+        # docstring), so ChatNotConfigured/other setup failures still
+        # become a normal HTTPException here, before any streaming
+        # response has started -- only a failure *during* generation (after
+        # the 200 and some chunks may already be out) can't change the
+        # status code any more; that case is surfaced in-band in the
+        # stream itself, logged server-side either way.
+        try:
+            chunks = chat.ask_stream(body.backend, original_bytes, photo["content_type"], body.message, history)
+        except chat.ChatNotConfigured as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except Exception:
+            logger.exception("Chat backend %r failed to start streaming for photo %s", body.backend, photo_id)
+            raise HTTPException(status_code=502, detail="Chat backend failed")
+
+        def generate():
+            try:
+                yield from chunks
+            except Exception:
+                logger.exception(
+                    "Streaming chat backend %r failed mid-stream for photo %s", body.backend, photo_id
+                )
+                yield "\n[chat backend failed]"
+
+        return StreamingResponse(generate(), media_type="text/plain")
+
     try:
-        reply = chat.ask(
-            body.backend,
-            original_bytes,
-            photo["content_type"],
-            body.message,
-            [turn.model_dump() for turn in body.history],
-        )
+        reply = chat.ask(body.backend, original_bytes, photo["content_type"], body.message, history)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:

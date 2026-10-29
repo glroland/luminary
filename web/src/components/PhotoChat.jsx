@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { chatAboutPhoto } from "../api/client.js";
 
 export default function PhotoChat({ photoId }) {
@@ -7,12 +7,17 @@ export default function PhotoChat({ photoId }) {
   const [useFlorence, setUseFlorence] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
+  // Index of the assistant message currently being grown by streamed
+  // chunks, or null before the first chunk of this turn has arrived (or
+  // for a non-streaming reply, for the whole turn).
+  const streamingIndexRef = useRef(null);
 
   useEffect(() => {
     setMessages([]);
     setDraft("");
     setError(null);
     setIsSending(false);
+    streamingIndexRef.current = null;
   }, [photoId]);
 
   async function handleSubmit(event) {
@@ -27,16 +32,37 @@ export default function PhotoChat({ photoId }) {
     setDraft("");
     setError(null);
     setIsSending(true);
+    streamingIndexRef.current = null;
+
+    function handleChunk(chunk) {
+      setMessages((current) => {
+        if (streamingIndexRef.current === null) {
+          streamingIndexRef.current = current.length;
+          return [...current, { role: "assistant", text: chunk }];
+        }
+        const next = [...current];
+        const index = streamingIndexRef.current;
+        next[index] = { ...next[index], text: next[index].text + chunk };
+        return next;
+      });
+    }
 
     try {
-      const reply = await chatAboutPhoto(photoId, backend, text, history);
-      setMessages((current) => [...current, { role: "assistant", text: reply }]);
+      const reply = await chatAboutPhoto(photoId, backend, text, history, handleChunk);
+      if (streamingIndexRef.current === null) {
+        // A plain (non-streaming) reply: no chunks arrived via handleChunk,
+        // so the message was never started above -- append it now.
+        setMessages((current) => [...current, { role: "assistant", text: reply }]);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setIsSending(false);
     }
   }
+
+  const lastMessage = messages[messages.length - 1];
+  const isStreamingReply = isSending && lastMessage?.role === "assistant";
 
   return (
     <div className="photo-chat">
@@ -64,7 +90,7 @@ export default function PhotoChat({ photoId }) {
             </div>
           ))
         )}
-        {isSending && <p className="photo-chat-pending">Thinking…</p>}
+        {isSending && !isStreamingReply && <p className="photo-chat-pending">Thinking…</p>}
       </div>
 
       {error && (
