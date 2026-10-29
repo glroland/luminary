@@ -168,9 +168,24 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
 
 
 def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
-    # torch/transformers aren't installed in this environment (they're a
-    # multi-GB optional dependency) -- confirms the real ImportError path,
-    # not a mock of it.
+    # torch/transformers are an optional, multi-GB dependency -- this must
+    # hold regardless of whether they happen to be installed in whatever
+    # environment the suite runs in, so the "not installed" case is
+    # simulated at the import boundary rather than relied on as ambient
+    # environment state.
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in ("torch", "transformers"):
+            raise ImportError(f"simulated missing {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(chat, "_florence_model", None)
+    monkeypatch.setattr(chat, "_florence_processor", None)
+
     with pytest.raises(chat.ChatNotConfigured):
         chat.ask("florence", b"fake-bytes", "image/jpeg", "what is this?", [])
 

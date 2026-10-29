@@ -43,6 +43,10 @@ api:
     # Leave empty if the endpoint needs no key. Never put the key directly
     # in this values file.
     openaiApiKeySecret: ""
+    # Stream the reply back token-by-token instead of all at once. Off by
+    # default; only applies to the openai backend (Florence-2 has no
+    # streaming API to use regardless of this setting).
+    openaiStreaming: false
     # --- Photo chat: path 2, local Florence-2 vision-language model -------
     # https://huggingface.co/microsoft/Florence-2-base . Runs in-process in
     # the api pod via torch/transformers -- substantially increases memory

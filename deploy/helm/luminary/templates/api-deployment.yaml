@@ -57,6 +57,8 @@ spec:
                   name: {{ .Values.api.env.openaiApiKeySecret }}
                   key: apiKey
             {{- end }}
+            - name: LUMINARY_OPENAI_STREAMING
+              value: {{ .Values.api.env.openaiStreaming | quote }}
             - name: LUMINARY_FLORENCE_MODEL
               value: {{ .Values.api.env.florenceModel | quote }}
             - name: LUMINARY_FLORENCE_DEVICE

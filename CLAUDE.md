@@ -246,6 +246,30 @@ cached) is also per-pod, in-memory state — same caveat.
   naming what's missing — never let either reach the client as a bare
   `ImportError`/`500`.
 
+  **Streaming** (`LUMINARY_OPENAI_STREAMING`, off by default,
+  `config.get_openai_streaming()`): only the `openai` backend supports it —
+  `chat.should_stream(backend)` is `False` for `"florence"` regardless of
+  the flag, since Florence-2's API has no token-by-token output to stream.
+  When `should_stream()` is true, `chat_about_photo` calls
+  `chat.ask_stream(...)` instead of `chat.ask(...)` and wraps it in a
+  `StreamingResponse(..., media_type="text/plain")` instead of returning
+  `ChatResponse` JSON — the frontend tells which one it got from the
+  response's own `content-type` header, not from a client-side copy of the
+  setting. `ask_stream()` → `_ask_openai_stream()` is written so
+  `_prepare_openai_call()` (config validation + building the `openai`
+  client/messages) runs **eagerly, before the generator is returned** —
+  not deferred into the generator function itself — specifically so
+  `ChatNotConfigured` (and anything else from that setup step) still raises
+  synchronously when the router calls `chat.ask_stream(...)`, while the
+  `StreamingResponse` hasn't been constructed yet and the router can still
+  turn it into a normal `503`/`502` `HTTPException`. Don't collapse
+  `_ask_openai_stream` back into a single generator function — once the
+  HTTP response has actually started streaming, the status code can no
+  longer change, so a failure at that point (rare — a genuine network
+  failure mid-generation, not a config problem) is the one case handled by
+  yielding an inline `"\n[chat backend failed]"` marker into the stream
+  instead, logged server-side either way.
+
   **OpenAI-compatible path** (`_ask_openai`): `LUMINARY_OPENAI_BASE_URL` has
   no default of our own choosing — leaving it unset falls through to the
   `openai` SDK's own default (`api.openai.com`), which is only correct if
@@ -312,8 +336,8 @@ cached) is also per-pod, in-memory state — same caveat.
   assets are imported explicitly and wired via `L.Icon.Default.mergeOptions`
   at module load; don't drop that if touching this file.
 - `PhotoChat.jsx` talks to `POST /api/photos/{id}/chat` via
-  `client.js`'s `chatAboutPhoto(photoId, backend, message, history)`. A
-  checkbox picks `backend` ("florence" when checked, "openai" otherwise,
+  `client.js`'s `chatAboutPhoto(photoId, backend, message, history, onChunk)`.
+  A checkbox picks `backend` ("florence" when checked, "openai" otherwise,
   per the two chat paths in `chat.py`) — checking it also shows a static
   hint that Florence-2 always returns a description rather than answering
   the specific question (see `chat.py`'s module docstring for why). Message
@@ -324,6 +348,21 @@ cached) is also per-pod, in-memory state — same caveat.
   changes. A failed request (e.g. the `503` "not configured" case) surfaces
   `err.message` in a `role="alert"` element rather than silently dropping
   the user's message.
+
+  `chatAboutPhoto` itself (in `client.js`) decides streaming vs. JSON purely
+  from the *response's* `content-type` — never a client-side copy of
+  `LUMINARY_OPENAI_STREAMING` — so the frontend doesn't need its own
+  knowledge of that server setting at all. For a streamed reply it reads
+  `response.body` incrementally via `getReader()`/`TextDecoder`, invoking
+  `onChunk` per piece and still resolving to the full concatenated text at
+  the end, so callers that don't care about incremental display can ignore
+  `onChunk` entirely. In `PhotoChat.jsx`, `handleSubmit`'s `onChunk`
+  callback grows a single assistant message in place (tracked by index via
+  `streamingIndexRef`, a ref rather than state since it must be readable/
+  settable synchronously from inside the chunk callback without waiting on
+  a render) — if no chunk ever arrives (a plain JSON reply), the full reply
+  is appended once at the end instead, so both response shapes render
+  through the same message list with no special-casing in the JSX.
 
 ## Container builds and proxying
 

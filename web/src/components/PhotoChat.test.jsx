@@ -104,6 +104,29 @@ describe("PhotoChat", () => {
     expect(chatMock).not.toHaveBeenCalled();
   });
 
+  it("grows the assistant message in place as streamed chunks arrive", async () => {
+    vi.spyOn(client, "chatAboutPhoto").mockImplementation(async (photoId, backend, message, history, onChunk) => {
+      onChunk("Hel");
+      // "Thinking..." must disappear as soon as the first chunk starts the
+      // assistant message, not only once the whole reply has arrived.
+      expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
+      onChunk("lo, ");
+      onChunk("world");
+      return "Hello, world";
+    });
+
+    render(<PhotoChat photoId="1" />);
+
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "hi" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello, world")).toBeInTheDocument();
+    });
+    // Must be one single growing message, not three separate ones.
+    expect(screen.getAllByText(/Hello, world/)).toHaveLength(1);
+  });
+
   it("resets the conversation when the photo changes", async () => {
     vi.spyOn(client, "chatAboutPhoto").mockResolvedValue("a reply");
 

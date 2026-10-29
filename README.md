@@ -78,7 +78,7 @@ target/               (generated, gitignored) local venv, SQLite DB, photo
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
 | POST   | `/api/sync`                 | Start a background reconciliation of the SQLite index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, error}` |
-| POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{backend: "openai"\|"florence", message, history}` → `{reply}`; see "Photo chat" below |
+| POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{backend: "openai"\|"florence", message, history}` → `{reply}` (JSON), or a streamed `text/plain` body if `LUMINARY_OPENAI_STREAMING` is on; see "Photo chat" below |
 
 `POST /api/sync` is the only way photos enter the index — point
 `LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
@@ -175,7 +175,12 @@ this as a checkbox):
   `openai` Python SDK. `LUMINARY_OPENAI_BASE_URL` is never assumed to be
   `api.openai.com` — point it at a self-hosted server (vLLM, Ollama, LM
   Studio, etc.) if that's what you're running. The image is base64-encoded
-  and attached to the current message on every call.
+  and attached to the current message on every call. Can optionally stream
+  the reply back token-by-token (`LUMINARY_OPENAI_STREAMING`, **off by
+  default**) — when enabled, the endpoint responds with `text/plain` and the
+  reply arrives incrementally instead of all at once in the JSON body; the
+  web UI handles either response shape transparently (it checks the
+  response's content type, not a client-side setting).
 - **`"florence"`** — a local [Florence-2](https://huggingface.co/microsoft/Florence-2-base)
   vision-language model, run in-process via `torch`/`transformers`
   (`trust_remote_code=True`, per the model card). The model loads lazily on
@@ -190,6 +195,7 @@ this as a checkbox):
 | `LUMINARY_OPENAI_API_KEY`  | *(none)*                    | Required for the `openai` backend     |
 | `LUMINARY_OPENAI_BASE_URL` | *(none — SDK default)*      | OpenAI-compatible endpoint URL        |
 | `LUMINARY_OPENAI_MODEL`    | *(none)*                    | Required — the model name as your server calls it |
+| `LUMINARY_OPENAI_STREAMING`| `false`                     | Stream the reply token-by-token instead of all at once (`openai` backend only) |
 | `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint             |
 | `LUMINARY_FLORENCE_DEVICE` | `cpu`                       | `cpu` or `cuda`                       |
 
@@ -283,10 +289,10 @@ this repository and self-heal any drift.
   metadata/thumbnail/original/delete/chat flows against a temporary photos
   directory and SQLite database per test (`make test-api`). Chat tests mock
   the `openai` client and the `chat.ask`/`chat._ask_florence` boundary
-  rather than hitting a real endpoint or loading real model weights;
-  `torch`/`transformers` aren't installed in CI/dev by default, so the
-  Florence-2 "not configured" error path is exercised for real rather than
-  mocked.
+  rather than hitting a real endpoint or loading real model weights; the
+  Florence-2 "torch/transformers not installed" error path is simulated by
+  patching `__import__` rather than relying on them being absent from the
+  environment (`make install` does pull them in).
 - **web**: `vitest` + `@testing-library/react`, mocking the API client to
   test loading, empty, populated, and error states (`make test-web`).
 
@@ -300,12 +306,13 @@ this repository and self-heal any drift.
 - Photo metadata is stored in a single SQLite file; this is fine for a
   single-replica deployment but is not meant for `api.replicaCount > 1`
   without moving to a shared database.
-- The Florence-2 chat backend isn't installed or exercised in this repo's
-  own dev/test environment (`torch`/`transformers` are multi-GB) — it's
-  implemented and unit-tested against the documented boundary
-  (`chat._load_florence`/`chat._ask_florence`), but hasn't been run
-  end-to-end against real model weights here. Worth a manual smoke test
-  with `LUMINARY_FLORENCE_DEVICE` set appropriately before relying on it.
+- The Florence-2 chat backend hasn't been run end-to-end against real model
+  weights in this repo — it's implemented and unit-tested against the
+  documented boundary (`chat._load_florence`/`chat._ask_florence`), with the
+  "torch/transformers not installed" path simulated at the import boundary
+  (not relied on as ambient environment state, since `make install` does
+  pull them in from `requirements.txt`). Worth a manual smoke test with
+  `LUMINARY_FLORENCE_DEVICE` set appropriately before relying on it.
 
 ## CI
 
