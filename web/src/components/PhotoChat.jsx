@@ -80,18 +80,18 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
           checked={useFlorence}
           onChange={(event) => setUseFlorence(event.target.checked)}
         />
-        Use local Florence-2 model (unchecked = OpenAI)
+        Natural Language Object Detection
       </label>
       {useFlorence && (
         <p className="photo-chat-hint">
-          Florence-2 doesn't answer questions — type a phrase (e.g. "the dog") to locate it in the photo, or
-          leave the message blank for a general description.
+          Locates objects from a short phrase (e.g. "the dog") using the local Florence-2 model — it
+          doesn't answer questions. Leave the message blank for a general description instead.
         </p>
       )}
 
       <div className="photo-chat-messages">
         {messages.length === 0 ? (
-          <p className="photo-chat-empty">Ask something about this photo.</p>
+          !useFlorence && <p className="photo-chat-empty">Ask something about this photo.</p>
         ) : (
           messages.map((message, index) => (
             <div key={index} className={`photo-chat-message photo-chat-message-${message.role}`}>
@@ -113,7 +113,7 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
           type="text"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Ask about this photo..."
+          placeholder={useFlorence ? "What object are you looking for?" : "Ask about this photo..."}
           aria-label="Chat message"
           disabled={isSending}
         />

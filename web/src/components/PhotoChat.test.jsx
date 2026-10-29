@@ -41,8 +41,12 @@ describe("PhotoChat", () => {
 
     render(<PhotoChat photoId="1" />);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /use local florence-2 model/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /object detection/i }));
     expect(screen.getByText(/doesn't answer questions/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/chat message/i)).toHaveAttribute(
+      "placeholder",
+      "What object are you looking for?"
+    );
 
     fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "hi" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
@@ -115,7 +119,7 @@ describe("PhotoChat", () => {
 
     render(<PhotoChat photoId="1" />);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /use local florence-2 model/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /object detection/i }));
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     expect(screen.getByText("(describe this photo)")).toBeInTheDocument();
@@ -157,7 +161,7 @@ describe("PhotoChat", () => {
 
     render(<PhotoChat photoId="1" onBoxesChange={onBoxesChange} />);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /use local florence-2 model/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /object detection/i }));
     fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "the dog" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
