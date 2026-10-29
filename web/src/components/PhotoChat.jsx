@@ -23,12 +23,15 @@ export default function PhotoChat({ photoId }) {
   async function handleSubmit(event) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || isSending) return;
-
     const backend = useFlorence ? "florence" : "openai";
+    // Florence-2 treats an empty message as "just describe the photo"
+    // (see chat.py) rather than a question -- only the openai backend needs
+    // a non-empty message to be worth sending.
+    if (isSending || (!text && backend !== "florence")) return;
+
     const history = messages.map((message) => ({ role: message.role, text: message.text }));
 
-    setMessages((current) => [...current, { role: "user", text }]);
+    setMessages((current) => [...current, { role: "user", text: text || "(describe this photo)" }]);
     setDraft("");
     setError(null);
     setIsSending(true);
@@ -76,7 +79,8 @@ export default function PhotoChat({ photoId }) {
       </label>
       {useFlorence && (
         <p className="photo-chat-hint">
-          Florence-2 always returns a description of the photo — it doesn't answer specific questions.
+          Florence-2 doesn't answer questions — type a phrase (e.g. "the dog") to locate it in the photo, or
+          leave the message blank for a general description.
         </p>
       )}
 

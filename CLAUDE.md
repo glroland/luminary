@@ -304,17 +304,38 @@ cached) is also per-pod, in-memory state — same caveat.
   globals for the life of the process. **This is not a conversational VQA
   model**: its public API is a fixed set of task-prompt tokens (captioning,
   OCR, object detection, phrase grounding) with no token for open-ended
-  question answering, so `_ask_florence` ignores the user's message
-  entirely and always runs `<MORE_DETAILED_CAPTION>`
-  (`chat._FLORENCE_TASK`). Don't try to route the user's message into a
-  task token without re-reading the model card first — e.g.
-  `<CAPTION_TO_PHRASE_GROUNDING>` takes free text but means something
-  different (grounding a given phrase to image regions, returned as boxes,
-  not an answer). `_ask_florence` must not `import torch` at its own top
-  level before calling `_load_florence()` — that import has to happen after
-  `_load_florence()` has already succeeded (confirming torch is actually
-  importable), or a missing-dependency environment raises a raw
-  `ImportError` instead of the intended `ChatNotConfigured`.
+  question answering. Exactly one task takes free text alongside the task
+  token — `<CAPTION_TO_PHRASE_GROUNDING>` (`chat._FLORENCE_GROUNDING_TASK`)
+  — and it means "locate this phrase in the image", returning bounding
+  box(es), not an answer. `_ask_florence` uses that task with the user's
+  message as the phrase whenever the message is non-empty (formatted into
+  readable text by `_format_grounding_result`); an empty message instead
+  runs `<MORE_DETAILED_CAPTION>` (`chat._FLORENCE_CAPTION_TASK`) for a plain
+  description. Don't route the message into any *other* task token without
+  re-reading the model card first — none of the rest take a text input, and
+  the model wasn't trained to combine them with trailing free text the way
+  `run_example()` does for grounding specifically (task token and text
+  concatenated with no separator — match that exactly, it's part of the
+  trained format, not just a readability choice). `_ask_florence` must not
+  `import torch` at its own top level before calling `_load_florence()` —
+  that import has to happen after `_load_florence()` has already succeeded
+  (confirming torch is actually importable), or a missing-dependency
+  environment raises a raw `ImportError` instead of the intended
+  `ChatNotConfigured`.
+
+  **Pin `transformers==4.49.0` exactly** — don't bump it without testing
+  Florence-2 loads afterward. Its model repo ships its own modeling/config
+  code via `trust_remote_code=True`, written against an older transformers
+  API; newer releases (confirmed as of `5.21.0`) stopped unconditionally
+  setting generation defaults like `forced_bos_token_id` on
+  `PretrainedConfig`, which that custom code reads directly and crashes on
+  with `AttributeError: 'Florence2LanguageConfig' object has no attribute
+  'forced_bos_token_id'` — a load-time failure, not a chat-time one, so it
+  doesn't surface as `ChatNotConfigured`. `4.49.0` is confirmed working
+  (loaded and generated successfully end-to-end against real
+  `microsoft/Florence-2-base` weights on CPU) — see the
+  [Florence-2-large-ft discussion board](https://huggingface.co/microsoft/Florence-2-large-ft/discussions/40)
+  for multiple independent reports of the same fix.
 
 ## Web architecture (`web/src/`)
 

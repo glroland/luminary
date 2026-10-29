@@ -286,6 +286,78 @@ def test_openai_backend_falls_back_to_original_bytes_if_not_decodable_as_an_imag
     assert content_type == "image/jpeg"
 
 
+class _FakeFlorenceInputs(dict):
+    def to(self, device, dtype):
+        return self
+
+
+class _FakeFlorenceProcessor:
+    def __init__(self, result):
+        self._result = result
+        self.calls = {}
+
+    def __call__(self, text, images, return_tensors):
+        self.calls["prompt"] = text
+        return _FakeFlorenceInputs({"input_ids": "ids", "pixel_values": "pixels"})
+
+    def batch_decode(self, generated_ids, skip_special_tokens):
+        return ["<raw-generated-text>"]
+
+    def post_process_generation(self, generated_text, task, image_size):
+        self.calls["task"] = task
+        return {task: self._result}
+
+
+class _FakeFlorenceModel:
+    def generate(self, **kwargs):
+        return "generated-ids"
+
+
+def _make_jpeg_bytes():
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (100, 100), color="blue").save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def test_florence_backend_runs_phrase_grounding_when_message_is_non_empty(monkeypatch):
+    # The one Florence-2 task that takes free text: ground a phrase to
+    # image regions, returning bounding boxes -- not a sentence answer.
+    processor = _FakeFlorenceProcessor({"bboxes": [[1.2, 3.4, 5.6, 7.8]], "labels": ["the dog"]})
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "the dog", [])
+
+    assert processor.calls["prompt"] == chat._FLORENCE_GROUNDING_TASK + "the dog"
+    assert processor.calls["task"] == chat._FLORENCE_GROUNDING_TASK
+    assert '"the dog"' in reply
+    assert "(1, 3)-(6, 8)" in reply
+
+
+def test_florence_backend_reports_no_match_for_an_ungrounded_phrase(monkeypatch):
+    processor = _FakeFlorenceProcessor({"bboxes": [], "labels": []})
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "a unicorn", [])
+
+    assert "couldn't locate" in reply
+    assert "a unicorn" in reply
+
+
+def test_florence_backend_runs_plain_caption_when_message_is_empty(monkeypatch):
+    processor = _FakeFlorenceProcessor("a detailed caption of the photo")
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "   ", [])
+
+    assert processor.calls["prompt"] == chat._FLORENCE_CAPTION_TASK
+    assert processor.calls["task"] == chat._FLORENCE_CAPTION_TASK
+    assert reply == "a detailed caption of the photo"
+
+
 def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
     # torch/transformers are an optional, multi-GB dependency -- this must
     # hold regardless of whether they happen to be installed in whatever

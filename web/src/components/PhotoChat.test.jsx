@@ -38,7 +38,7 @@ describe("PhotoChat", () => {
     render(<PhotoChat photoId="1" />);
 
     fireEvent.click(screen.getByRole("checkbox", { name: /use local florence-2 model/i }));
-    expect(screen.getByText(/doesn't answer specific questions/i)).toBeInTheDocument();
+    expect(screen.getByText(/doesn't answer questions/i)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "hi" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
@@ -91,7 +91,7 @@ describe("PhotoChat", () => {
     });
   });
 
-  it("does not send an empty or whitespace-only message", () => {
+  it("does not send an empty or whitespace-only message to openai", () => {
     const chatMock = vi.spyOn(client, "chatAboutPhoto");
 
     render(<PhotoChat photoId="1" />);
@@ -102,6 +102,23 @@ describe("PhotoChat", () => {
 
     expect(screen.getByText(/ask something about this photo/i)).toBeInTheDocument();
     expect(chatMock).not.toHaveBeenCalled();
+  });
+
+  it("sends an empty message to florence for a general description", async () => {
+    const chatMock = vi.spyOn(client, "chatAboutPhoto").mockResolvedValue("a detailed caption");
+
+    render(<PhotoChat photoId="1" />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /use local florence-2 model/i }));
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(screen.getByText("(describe this photo)")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText("a detailed caption")).toBeInTheDocument();
+    });
+
+    expect(chatMock).toHaveBeenCalledWith("1", "florence", "", [], expect.any(Function));
   });
 
   it("grows the assistant message in place as streamed chunks arrive", async () => {

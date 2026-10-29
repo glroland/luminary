@@ -187,8 +187,11 @@ this as a checkbox):
   first use and is cached in memory afterward. **Florence-2 is not a
   conversational VQA model** — its public API is a fixed set of task tokens
   (captioning, OCR, object detection, phrase grounding), with no token for
-  "answer this arbitrary question". This backend always runs
-  `<MORE_DETAILED_CAPTION>` and returns that, regardless of the message text.
+  "answer this arbitrary question". A non-empty chat message is used as a
+  phrase to *locate* in the photo (`<CAPTION_TO_PHRASE_GROUNDING>`) — the
+  reply names the approximate bounding box(es) found, not a sentence
+  answering a question. An empty message instead runs
+  `<MORE_DETAILED_CAPTION>` for a general description.
 
 | Variable                   | Default                     | Purpose                              |
 |-----------------------------|------------------------------|---------------------------------------|
@@ -306,13 +309,16 @@ this repository and self-heal any drift.
 - Photo metadata is stored in a single SQLite file; this is fine for a
   single-replica deployment but is not meant for `api.replicaCount > 1`
   without moving to a shared database.
-- The Florence-2 chat backend hasn't been run end-to-end against real model
-  weights in this repo — it's implemented and unit-tested against the
-  documented boundary (`chat._load_florence`/`chat._ask_florence`), with the
+- The Florence-2 chat backend has been smoke-tested end-to-end against real
+  `microsoft/Florence-2-base` weights on CPU (both the grounding and plain
+  caption paths). Unit tests cover the documented boundary
+  (`chat._load_florence`/`chat._ask_florence`) with fakes, plus the
   "torch/transformers not installed" path simulated at the import boundary
   (not relied on as ambient environment state, since `make install` does
-  pull them in from `requirements.txt`). Worth a manual smoke test with
-  `LUMINARY_FLORENCE_DEVICE` set appropriately before relying on it.
+  pull them in from `requirements.txt`). Pin `transformers==4.49.0` exactly
+  as in `requirements.txt` — Florence-2's `trust_remote_code=True` model
+  code breaks against newer `transformers` releases (see `chat.py`'s
+  comment on that pin).
 
 ## CI
 

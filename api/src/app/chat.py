@@ -13,11 +13,17 @@ without requiring either to be installed or configured.
 
 Florence-2 is not a conversational VQA model: its API is a fixed set of task
 tokens (captioning, OCR, object detection, phrase grounding), not free-form
-question answering. There's no task token in its public API for "answer this
-arbitrary question about the image", so the Florence-2 path always returns a
-detailed caption (<MORE_DETAILED_CAPTION>) regardless of what the user typed
--- see run_example() in the model card. The frontend should make this
-limitation visible rather than implying it's a general-purpose chat model.
+question answering -- there's no task token for "answer this arbitrary
+question about the image". Exactly one task accepts free text alongside the
+task token: <CAPTION_TO_PHRASE_GROUNDING>, which takes a caption/phrase and
+returns the bounding box(es) where it appears in the image (see
+run_example() in the model card) -- not a natural-language answer. The
+Florence-2 path uses that task, with the user's message as the phrase to
+ground, whenever the message is non-empty; an empty message falls back to
+<MORE_DETAILED_CAPTION>. The frontend should make this limitation visible
+rather than implying it's a general-purpose chat model: a user's question
+("where was this taken?") won't be answered, but a phrase ("the dog") will
+be located.
 
 The openai backend can optionally stream its reply back token-by-token
 (LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
@@ -59,7 +65,7 @@ def ask(backend: str, photo_bytes: bytes, content_type: str, message: str, histo
     if backend == "openai":
         return _ask_openai(photo_bytes, content_type, message, history)
     if backend == "florence":
-        return _ask_florence(photo_bytes)
+        return _ask_florence(photo_bytes, message)
     raise ValueError(f"Unknown chat backend: {backend!r}")
 
 
@@ -198,7 +204,12 @@ def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, hist
 
 # --- Path 2: local Florence-2 vision-language model -------------------------
 
-_FLORENCE_TASK = "<MORE_DETAILED_CAPTION>"
+# Used when the chat message is empty -- a plain description, no text input.
+_FLORENCE_CAPTION_TASK = "<MORE_DETAILED_CAPTION>"
+# The one Florence-2 task that takes free text alongside the task token: a
+# caption/phrase to locate in the image, returned as bounding box(es) -- not
+# a natural-language answer. Used whenever the chat message is non-empty.
+_FLORENCE_GROUNDING_TASK = "<CAPTION_TO_PHRASE_GROUNDING>"
 
 _florence_lock = threading.Lock()
 _florence_model = None
@@ -236,7 +247,7 @@ def _load_florence():
         return _florence_model, _florence_processor
 
 
-def _ask_florence(photo_bytes: bytes) -> str:
+def _ask_florence(photo_bytes: bytes, message: str) -> str:
     from PIL import Image  # Pillow is a core dependency, always safe to import
 
     # _load_florence() raises ChatNotConfigured (not ImportError) if
@@ -251,7 +262,13 @@ def _ask_florence(photo_bytes: bytes) -> str:
 
     image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
 
-    inputs = processor(text=_FLORENCE_TASK, images=image, return_tensors="pt").to(device, dtype)
+    phrase = message.strip()
+    task = _FLORENCE_GROUNDING_TASK if phrase else _FLORENCE_CAPTION_TASK
+    # run_example() in the model card concatenates task token and text input
+    # with no separator -- the model was trained on exactly that format.
+    prompt = task + phrase if phrase else task
+
+    inputs = processor(text=prompt, images=image, return_tensors="pt").to(device, dtype)
     generated_ids = model.generate(
         input_ids=inputs["input_ids"],
         pixel_values=inputs["pixel_values"],
@@ -259,7 +276,21 @@ def _ask_florence(photo_bytes: bytes) -> str:
         num_beams=3,
     )
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
-    parsed = processor.post_process_generation(
-        generated_text, task=_FLORENCE_TASK, image_size=(image.width, image.height)
-    )
-    return parsed[_FLORENCE_TASK]
+    parsed = processor.post_process_generation(generated_text, task=task, image_size=(image.width, image.height))
+    result = parsed[task]
+
+    if task == _FLORENCE_GROUNDING_TASK:
+        return _format_grounding_result(result, phrase)
+    return result
+
+
+def _format_grounding_result(result: dict, phrase: str) -> str:
+    """<CAPTION_TO_PHRASE_GROUNDING> returns {"bboxes": [...], "labels":
+    [...]} -- box coordinates, not a sentence. Render that as readable text
+    for the chat UI, since this is still presented as a chat reply."""
+    bboxes = result.get("bboxes", [])
+    labels = result.get("labels", [])
+    if not bboxes:
+        return f'Florence-2 couldn\'t locate "{phrase}" in this image.'
+    lines = [f"- \"{label}\" at approximately ({x1:.0f}, {y1:.0f})-({x2:.0f}, {y2:.0f})" for label, (x1, y1, x2, y2) in zip(labels, bboxes)]
+    return f'Location(s) found for "{phrase}":\n' + "\n".join(lines)
