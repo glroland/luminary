@@ -1,14 +1,18 @@
 """Background reconciliation between the configured photos backend and the
 SQLite index: inserts rows for new files, updates rows whose file changed,
-and deletes rows for files no longer present. Runs as an asyncio task so it
-doesn't block the API, fanning individual files out across a thread pool
-(fsspec backends -- local, SMB, S3, etc. -- are synchronous) so slow,
-network-bound backends don't serialize one file at a time.
+and deletes rows for files no longer present. This only ever reads from the
+backend (fs.find/fs.info/fs.open in "rb" mode) -- "deleted" here means the
+SQLite row is removed because the file is gone, never the reverse. Runs as
+an asyncio task so it doesn't block the API, fanning individual files out
+across a thread pool (fsspec backends -- local, SMB, S3, etc. -- are
+synchronous) so slow, network-bound backends don't serialize one file at a
+time.
 """
 
 import asyncio
 import io
 import mimetypes
+import os.path
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +25,19 @@ from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
 MAX_CONCURRENCY = 8
+
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".heic",
+    ".heif",
+}
 
 _executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
 
@@ -42,17 +59,32 @@ class _SyncProgress:
         with self._lock:
             return dict(self._state)
 
-    def start(self, total: int) -> None:
+    def try_start(self) -> bool:
+        """Atomically transition to "running" if not already running, in a
+        single locked step. Returns True if this call won the transition
+        (the caller should start the background thread), False if a sync is
+        already in flight. This has to happen synchronously, on the calling
+        thread, before start_sync() returns -- otherwise a caller that polls
+        status immediately after POST /sync can still read the *previous*
+        run's terminal status and wrongly conclude the new sync is already
+        done, while it keeps running unobserved in the background."""
         with self._lock:
+            if self._state["status"] == "running":
+                return False
             self._state = {
                 "status": "running",
                 "processed": 0,
-                "total": total,
+                "total": 0,
                 "inserted": 0,
                 "updated": 0,
                 "deleted": 0,
                 "error": None,
             }
+            return True
+
+    def set_total(self, total: int) -> None:
+        with self._lock:
+            self._state["total"] = total
 
     def record(self, outcome: str) -> None:
         with self._lock:
@@ -69,10 +101,6 @@ class _SyncProgress:
         with self._lock:
             self._state["status"] = "error"
             self._state["error"] = error
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._state["status"] == "running"
 
     def reset(self) -> None:
         with self._lock:
@@ -99,11 +127,14 @@ def start_sync() -> dict:
     under a real ASGI server driving continuous traffic, but not guaranteed
     in general -- e.g. it stalls indefinitely under FastAPI's TestClient
     between requests). A dedicated thread keeps the job progressing
-    regardless. Returns the current status snapshot either way; calling
-    this while a sync is in flight just reports on it rather than starting
-    a second one."""
+    regardless. `progress.try_start()` flips status to "running" atomically
+    and synchronously, before this function returns, so a caller that polls
+    status right after this can't observe a stale terminal status left over
+    from a previous run. Returns the current status snapshot either way;
+    calling this while a sync is in flight just reports on it rather than
+    starting a second one."""
     global _thread
-    if not progress.is_running():
+    if progress.try_start():
         _thread = threading.Thread(target=lambda: asyncio.run(_run_sync()), daemon=True)
         _thread.start()
     return progress.snapshot()
@@ -206,11 +237,11 @@ async def _run_sync() -> None:
     loop = asyncio.get_running_loop()
     try:
         fs, root = await loop.run_in_executor(_executor, _fs_and_root)
-        originals_dir = f"{root}/originals"
-        paths = await loop.run_in_executor(_executor, fs.find, originals_dir)
+        all_paths = await loop.run_in_executor(_executor, fs.find, root)
+        paths = [p for p in all_paths if os.path.splitext(p)[1].lower() in IMAGE_EXTENSIONS]
         existing = await loop.run_in_executor(_executor, _load_existing)
 
-        progress.start(total=len(paths))
+        progress.set_total(len(paths))
 
         seen: set = set()
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)

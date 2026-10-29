@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
 from .. import storage
@@ -12,11 +12,19 @@ def get_photos() -> dict:
     return {"photos": storage.list_photos()}
 
 
-@router.post("/photos", response_model=Photo, status_code=201)
-def upload_photo(file: UploadFile = File(...)) -> dict:
-    if not (file.content_type or "").startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only image uploads are supported")
-    return storage.save_photo(file)
+@router.post("/photos")
+def upload_photo() -> None:
+    # The API never writes to the configured photos backend -- add files
+    # directly under LUMINARY_PHOTOS_URI and call POST /api/sync to index
+    # them instead.
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Uploads are disabled: this API never writes to the configured "
+            "photos storage. Add the file directly under LUMINARY_PHOTOS_URI "
+            "and call POST /api/sync to index it."
+        ),
+    )
 
 
 @router.get("/photos/{photo_id}", response_model=Photo)
@@ -46,5 +54,7 @@ def get_photo_thumbnail(photo_id: str) -> Response:
 
 @router.delete("/photos/{photo_id}", status_code=204)
 def remove_photo(photo_id: str) -> None:
+    # Removes the index entry only -- the source file on the photos backend
+    # is never touched. If it's still there, the next sync re-indexes it.
     if not storage.delete_photo(photo_id):
         raise HTTPException(status_code=404, detail="Photo not found")

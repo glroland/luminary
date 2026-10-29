@@ -4,20 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Luminary is a simple photo management app: browse a gallery, view full-size,
-delete. There's no upload button in the web UI currently (`POST /api/photos`
-still exists and works, it's just not wired up in `web/`) — the expected way
-photos show up is by placing files on the configured storage backend and
-triggering a sync (`POST /api/sync`) to index them. Two independently
-deployable components, each its own container image, deployed together via
-Helm/ArgoCD on OpenShift:
+Luminary is a simple photo browser: index an existing, externally-managed
+photo library, browse it in a gallery, view full-size.
+
+**Hard invariant: the API never writes to, creates in, or deletes from the
+configured photos backend (`LUMINARY_PHOTOS_URI`), under any circumstance.**
+There is no upload endpoint that writes a file there (`POST /api/photos`
+always returns `403`), and `DELETE /api/photos/{id}` only removes the SQLite
+row — it never touches the source file. This is intentional and was an
+explicit, direct requirement, not an incidental design choice — treat any
+change that would add a write/delete/mkdir call against that backend as a
+regression to flag, not a reasonable refactor. See storage.py's and sync.py's
+module docstrings and README's "Data safety" section. The only way photos
+enter the index is `POST /api/sync` scanning what's already there.
+
+Two independently deployable components, each its own container image,
+deployed together via Helm/ArgoCD on OpenShift:
 
 - **`web/`** — React SPA (Vite). In production, served as a static bundle by
   unprivileged nginx, which also reverse-proxies `/api/*` to the API service
   so the browser only ever talks to one origin.
-- **`api/`** — FastAPI service. Photo metadata in SQLite; original images and
-  generated thumbnails on disk under a configurable data directory (a PVC in
-  the cluster).
+- **`api/`** — FastAPI service. Photo metadata + generated thumbnails in
+  SQLite; originals are read from wherever `LUMINARY_PHOTOS_URI` points (a
+  PVC/NFS mount in the cluster, or S3/SMB/HTTP) and never written back to.
 
 The two components only know about each other through the `/api` HTTP
 contract — no shared code, no shared types.
@@ -70,58 +79,84 @@ is thin — all actual work (file I/O, thumbnailing, SQLite) lives in
   time) specifically so tests can override them per-case with
   `monkeypatch.setenv` — see `tests/conftest.py`'s `client` fixture, which
   points both at a fresh `tmp_path` per test.
-- `storage.py` owns the photo lifecycle, and resolves `LUMINARY_PHOTOS_URI`
-  through [fsspec](https://filesystem-spec.readthedocs.io/) (`fsspec.core.url_to_fs`)
-  rather than touching `pathlib` directly — the URI can be a bare local
-  path/NFS mount, `s3://`, `smb://`, or read-only `https://` (see README's
-  config table). Only the **original** file goes to that backend, at
-  `{root}/originals/{uuid}{ext}`; the **thumbnail** (320x320 JPEG, best-effort
-  via Pillow) is stored as a `BLOB` directly in SQLite instead, so thumbnails
-  stay fast to serve and work even on read-only (`https://`) backends where
-  writing a second file isn't possible. The `filename` column holds the
-  path *relative to the photos root* (`originals/{uuid}{ext}`), not the
-  client's original upload filename — `stream_original`/`delete_photo` build
-  the backend path directly from it rather than globbing. `created_at`
-  prefers the photo's EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime`
-  (falling back to upload time if absent or unparseable), and `latitude`/
-  `longitude` come from the EXIF GPS IFD when present (`_extract_exif` in
-  `storage.py`) — both are best-effort and null when EXIF is missing.
-  Because the originals backend may not be a real filesystem,
-  `routers/photos.py` serves originals via `StreamingResponse` over
-  `storage.stream_original` rather than FastAPI's `FileResponse` (which
-  requires a local path); thumbnails are served as a plain `Response` read
-  straight from the database. `list_photos`/`get_photo` select an explicit
-  column list (`storage.METADATA_COLUMNS`) that excludes the thumbnail blob,
-  so listing photos never pulls thumbnail bytes off disk — only
-  `get_thumbnail` does that, per photo, on demand. There are no DB
-  migrations (see `database.py` below), so an existing local `photos.db`
-  from before this schema needs to be deleted/recreated to pick up the new
-  columns.
+- `storage.py` is read-only against the photos backend by construction: grep
+  it (or the whole `api/` tree) for `"wb"`/`fs.rm`/`fs.makedirs`/`.write(` if
+  you're ever unsure — there should be nothing. It resolves
+  `LUMINARY_PHOTOS_URI` through [fsspec](https://filesystem-spec.readthedocs.io/)
+  (`fsspec.core.url_to_fs`) rather than touching `pathlib` directly — the URI
+  can be a bare local path/NFS mount, `s3://`, `smb://`, or read-only
+  `https://` (see README's config table). Originals are read directly from
+  wherever they already live under the photos root — there's no app-managed
+  subdirectory (an earlier version wrote uploads under `{root}/originals/`;
+  that convention is gone along with the upload path it existed for).
+  Thumbnails (320x320 JPEG, best-effort via Pillow) are generated at index
+  time and stored as a `BLOB` in SQLite, never written back to the backend —
+  this also means thumbnails work on read-only `https://` backends where
+  writing a second file wouldn't be possible anyway. The `filename` column
+  holds the path *relative to the photos root* exactly as discovered (e.g.
+  `vacation/2019/beach.jpg`) — `stream_original` builds the backend path
+  directly from it. `created_at` prefers the photo's EXIF
+  `DateTimeOriginal`/`DateTimeDigitized`/`DateTime` (falling back to index
+  time if absent or unparseable), and `latitude`/`longitude` come from the
+  EXIF GPS IFD when present (`_extract_exif`) — both are best-effort and
+  null when EXIF is missing. `delete_photo` only ever issues a `DELETE FROM
+  photos` — there is deliberately no filesystem call anywhere near it.
+  Because the backend may not be a real filesystem, `routers/photos.py`
+  serves originals via `StreamingResponse` over `storage.stream_original`
+  rather than FastAPI's `FileResponse` (which requires a local path);
+  thumbnails are served as a plain `Response` read straight from the
+  database. `list_photos`/`get_photo` select an explicit column list
+  (`storage.METADATA_COLUMNS`) that excludes the thumbnail blob, so listing
+  photos never pulls thumbnail bytes off disk — only `get_thumbnail` does
+  that, per photo, on demand. There are no DB migrations (see `database.py`
+  below), so an existing local `photos.db` from before a schema change needs
+  to be deleted/recreated.
 - `database.py` opens a fresh sqlite3 connection per operation (no pooling);
   `init_db()` just creates the `photos` table if missing — there are no
   migrations, so schema changes need a manual `ALTER TABLE` added here.
-- `sync.py` reconciles the SQLite index against whatever is actually present
-  on the configured photos backend (for files added, changed, or removed
-  directly on the backend rather than through the API) — see
+- `sync.py` is the *only* way photos enter the index — it reconciles SQLite
+  against whatever `fs.find()` discovers under the photos root, filtered to
+  a fixed set of image extensions (`sync.IMAGE_EXTENSIONS`) so non-photo
+  files in a real, messy library (sidecar files, `.DS_Store`, etc.) don't
+  get indexed as broken photos. Read-only like `storage.py` — see
   `routers/sync.py`'s `POST /api/sync` / `GET /api/sync/status` and the
-  README's API table. `filename` (the path relative to the photos root) is
-  the correlation key between a discovered file and its DB row; a file is
-  "unchanged" if its size matches the DB row, "updated" (re-extracts
-  width/height/EXIF/thumbnail, same `id`) if the size differs, "inserted"
-  (new `id`) if there's no row for that path yet, and any DB row whose path
-  wasn't seen in the scan gets deleted. The reconciliation is deliberately
-  run in its **own thread with its own `asyncio.run()` event loop**
-  (`sync.start_sync()`), not as a bare `asyncio.create_task()` on the API's
-  request-handling loop — the latter only makes progress while that loop
-  happens to be ticking, which isn't guaranteed in general (e.g. it stalls
-  indefinitely under FastAPI's `TestClient` between requests, which is how
-  this was caught). Within that thread, files are fanned out across a
-  `ThreadPoolExecutor` via `asyncio.gather`/`run_in_executor` so slow,
-  network-bound backends (S3/SMB/NFS) aren't processed one file at a time.
+  README's "Data safety" section. `filename` (the path relative to the
+  photos root) is the correlation key between a discovered file and its DB
+  row; a file is "unchanged" if its size matches the DB row, "updated"
+  (re-extracts width/height/EXIF/thumbnail, same `id`) if the size differs,
+  "inserted" (new `id`) if there's no row for that path yet, and any DB row
+  whose path wasn't seen in the scan gets its *row* deleted (never the
+  file — if it's still there, the next sync re-inserts it).
+
+  The reconciliation runs in its **own thread with its own `asyncio.run()`
+  event loop** (`sync.start_sync()`), not as a bare `asyncio.create_task()`
+  on the API's request-handling loop — the latter only makes progress while
+  that loop happens to be ticking, which isn't guaranteed in general (e.g.
+  it stalls indefinitely under FastAPI's `TestClient` between requests,
+  which is how this was caught). Within that thread, files are fanned out
+  across a `ThreadPoolExecutor` via `asyncio.gather`/`run_in_executor` so
+  slow, network-bound backends (S3/SMB/NFS) aren't processed one file at a
+  time.
+
   Progress (`processed`/`total`/`inserted`/`updated`/`deleted`/`status`) is
-  a thread-safe module-level singleton (`sync.progress`, lock-protected) —
-  tests must call `sync.progress.reset()` between cases (see
-  `conftest.py`'s `client` fixture) since it isn't reset per-request.
+  a thread-safe module-level singleton (`sync.progress`, lock-protected).
+  **`start_sync()` must flip status to `"running"` synchronously, inside
+  `progress.try_start()`, before returning** — this isn't just tidiness: an
+  earlier version only set `"running"` from inside the background thread,
+  so a caller (test or real frontend) that called `POST /api/sync` and
+  immediately polled `GET /api/sync/status` could read the *previous* run's
+  stale terminal status, believe the new sync was already done, and move on
+  while the real one kept running unobserved — corrupting whatever state it
+  touched next (a later test's "idle" assertion, or a second sync call
+  treating an existing photo as new again). `try_start()`'s single locked
+  check-and-transition fixes both that race and a second one it closes for
+  free: two near-simultaneous `start_sync()` calls could otherwise both see
+  "not running" and both spawn a thread, double-processing the same files.
+  Don't reintroduce a window between "decide to start" and "mark as
+  running". Tests must call `sync.progress.reset()` between cases (see
+  `conftest.py`'s `client` fixture) since it isn't reset per-request; shared
+  test helpers (`write_image`, `sync_and_wait`) also live in `conftest.py`
+  and are imported with `from conftest import ...` in test files.
 
 SQLite + on-disk files means the API is single-replica only (see
 `api.replicaCount` note in Helm values) — don't add code that assumes
@@ -140,11 +175,11 @@ isn't shared across replicas either.
 - The header's Refresh control is `SyncStatus.jsx`: it renders a plain button
   when idle, or (while a backend sync is running/just finished) a small
   progress bar polled from `GET /api/sync/status` every second. Clicking it
-  calls `POST /api/sync` and optimistically shows the progress UI right away
-  — the backend response can still read `status: "idle"` for an instant
-  before the background thread calls in with `"running"` (see `sync.py`), so
-  `App.jsx`'s `handleRefresh` doesn't trust that field literally. On
-  `"completed"` it refetches the photo list; either terminal state
+  calls `POST /api/sync` and sets local state to show the progress UI
+  immediately — redundant with the fact that the backend response already
+  reports `"running"` synchronously (see `sync.py`'s `try_start()`), but it
+  saves one round-trip before the UI updates. On `"completed"` it refetches
+  the photo list; either terminal state
   (`"completed"`/`"error"`) is shown briefly then cleared back to the
   button. `App.jsx` also checks sync status once on mount so a page reload
   mid-sync resumes polling instead of losing the progress UI.

@@ -1,49 +1,21 @@
-import io
-
-import pytest
-from PIL import Image
+from conftest import sync_and_wait, write_image
 
 
-def _sample_image_bytes(exif=None) -> bytes:
-    buffer = io.BytesIO()
-    image = Image.new("RGB", (10, 10), color="red")
-    if exif is not None:
-        image.save(buffer, format="JPEG", exif=exif)
-    else:
-        image.save(buffer, format="JPEG")
-    return buffer.getvalue()
-
-
-def _exif_with_gps_and_datetime():
-    exif = Image.Exif()
-    exif[306] = "2023:05:17 14:22:10"  # DateTime
-    exif[34853] = {  # GPSInfo
-        1: "N",
-        2: (40.0, 26.0, 46.3),
-        3: "W",
-        4: (79.0, 56.0, 55.0),
-    }
-    return exif
-
-
-def test_upload_list_and_delete_photo(client):
+def test_list_get_and_delete_photo(client, tmp_path):
     response = client.get("/api/photos")
     assert response.status_code == 200
     assert response.json() == {"photos": []}
 
-    files = {"file": ("sample.jpg", _sample_image_bytes(), "image/jpeg")}
-    upload_response = client.post("/api/photos", files=files)
-    assert upload_response.status_code == 201
-    photo = upload_response.json()
-    assert photo["filename"] == f"originals/{photo['id']}.jpg"
+    write_image(tmp_path / "photos" / "sample.jpg")
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["inserted"] == 1
+
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["filename"] == "sample.jpg"
     assert photo["width"] == 10
     assert photo["height"] == 10
     assert photo["created_at"]
-    assert photo["latitude"] is None
-    assert photo["longitude"] is None
-
-    list_response = client.get("/api/photos")
-    assert len(list_response.json()["photos"]) == 1
 
     get_response = client.get(f"/api/photos/{photo['id']}")
     assert get_response.status_code == 200
@@ -59,26 +31,29 @@ def test_upload_list_and_delete_photo(client):
     delete_response = client.delete(f"/api/photos/{photo['id']}")
     assert delete_response.status_code == 204
 
-    final_list = client.get("/api/photos")
-    assert final_list.json() == {"photos": []}
+    assert client.get("/api/photos").json() == {"photos": []}
 
 
-def test_upload_extracts_created_at_and_geotag_from_exif(client):
-    files = {
-        "file": ("geo.jpg", _sample_image_bytes(exif=_exif_with_gps_and_datetime()), "image/jpeg")
-    }
-    response = client.post("/api/photos", files=files)
-    assert response.status_code == 201
-    photo = response.json()
-    assert photo["created_at"].startswith("2023-05-17T14:22:10")
-    assert photo["latitude"] == pytest.approx(40.446194, abs=1e-5)
-    assert photo["longitude"] == pytest.approx(-79.948611, abs=1e-5)
+def test_delete_removes_index_entry_but_not_the_source_file(client, tmp_path):
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo = client.get("/api/photos").json()["photos"][0]
+
+    client.delete(f"/api/photos/{photo['id']}")
+
+    # The underlying file on the photos backend must be untouched.
+    assert image_path.exists()
+
+    # Since the file is still there, a re-sync indexes it again.
+    status = sync_and_wait(client)
+    assert status["inserted"] == 1
+    assert len(client.get("/api/photos").json()["photos"]) == 1
 
 
-def test_upload_rejects_non_image(client):
-    files = {"file": ("notes.txt", b"hello", "text/plain")}
-    response = client.post("/api/photos", files=files)
-    assert response.status_code == 400
+def test_upload_endpoint_is_disabled(client):
+    response = client.post("/api/photos", files={"file": ("sample.jpg", b"not-a-real-image", "image/jpeg")})
+    assert response.status_code == 403
 
 
 def test_get_missing_photo_returns_404(client):

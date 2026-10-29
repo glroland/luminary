@@ -1,9 +1,16 @@
 # Luminary
 
-A simple photo management application: upload photos, browse them in a gallery,
-view full-size, and delete them. Built as two independently deployable
-components — a React single-page app and a Python API — each shipped as its
-own container image and deployed together via Helm/ArgoCD on OpenShift.
+A simple photo browser: index an existing photo library, browse it in a
+gallery, view full-size. Built as two independently deployable components —
+a React single-page app and a Python API — each shipped as its own container
+image and deployed together via Helm/ArgoCD on OpenShift.
+
+**The API never writes to, modifies, or deletes anything on the configured
+photos backend, under any circumstance.** It only reads from it (to list,
+thumbnail, and serve originals) and to index what it finds into its own
+local SQLite database. There is no upload endpoint that writes a file there,
+and deleting a photo through the API only removes it from the local index —
+it never touches the source file. See "Data safety" below.
 
 ## Architecture
 
@@ -27,9 +34,10 @@ own container image and deployed together via Helm/ArgoCD on OpenShift.
   reverse-proxies `/api/*` to the API service so the browser only ever talks
   to one origin.
 - **api** — a FastAPI service exposing a small REST API for photo metadata
-  and files. Metadata lives in SQLite; original images and generated
-  thumbnails live on disk under a configurable data directory (backed by a
-  PersistentVolumeClaim in the cluster).
+  and files. It indexes an existing, externally-managed photo library (read
+  only — see "Data safety") into SQLite, which also holds generated
+  thumbnails; the library itself can be a local path, an NFS mount (backed
+  by a PersistentVolumeClaim in the cluster), S3, SMB, or read-only HTTP(S).
 - The two components know nothing about each other beyond the `/api` HTTP
   contract, and ship as separate container images so they can be built,
   versioned, and scaled independently.
@@ -62,29 +70,51 @@ target/               (generated, gitignored) local venv, SQLite DB, photo
 | Method | Path                       | Description                        |
 |--------|----------------------------|-------------------------------------|
 | GET    | `/api/health`              | Liveness/readiness check            |
-| GET    | `/api/photos`               | List photo metadata                 |
-| POST   | `/api/photos`               | Upload a photo (`multipart/form-data`, field `file`) |
+| GET    | `/api/photos`               | List indexed photo metadata         |
+| POST   | `/api/photos`               | Always `403` — uploads are disabled; see "Data safety" |
 | GET    | `/api/photos/{id}`          | Get metadata for one photo          |
-| GET    | `/api/photos/{id}/thumbnail`| Thumbnail JPEG                      |
-| GET    | `/api/photos/{id}/original` | Original uploaded file              |
-| DELETE | `/api/photos/{id}`          | Delete a photo and its files        |
-| POST   | `/api/sync`                 | Start a background reconciliation of the SQLite index against the configured photos backend (insert new files, update changed ones, delete rows for files no longer present) |
+| GET    | `/api/photos/{id}/thumbnail`| Thumbnail JPEG (served from SQLite) |
+| GET    | `/api/photos/{id}/original` | Original file, streamed from the photos backend |
+| DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
+| POST   | `/api/sync`                 | Start a background reconciliation of the SQLite index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, error}` |
 
-`POST /api/sync` is for when files were added, changed, or removed directly
-on the storage backend (outside the app) and the index needs to catch up —
-it's not needed for uploads/deletes made through the API, which already keep
-the index current. It returns immediately; the reconciliation runs in a
-background thread (concurrently across files, since backends like S3/SMB/NFS
-are network-bound) and `GET /api/sync/status` is polled for progress. Only
-one sync runs at a time — calling `POST /api/sync` while one is already in
-flight just returns its current status rather than starting another.
+`POST /api/sync` is the only way photos enter the index — point
+`LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
+common image extension: jpg/jpeg/png/gif/webp/bmp/tif/tiff/heic/heif) and
+call this to index what's there. It returns immediately; the reconciliation
+runs in a background thread (concurrently across files, since backends like
+S3/SMB/NFS are network-bound) and `GET /api/sync/status` is polled for
+progress. Only one sync runs at a time — calling `POST /api/sync` while one
+is already in flight just returns its current status rather than starting
+another.
+
+### Data safety
+
+**The API has no code path that writes to, creates in, or deletes from the
+configured photos backend — this holds regardless of what
+`LUMINARY_PHOTOS_URI` points at**, including a real, irreplaceable photo
+library on NFS/SMB/S3:
+
+- `POST /api/photos` (upload) always returns `403` without touching the
+  backend. There is no server-side code that opens a file there for
+  writing.
+- `DELETE /api/photos/{id}` only deletes the SQLite row for that photo. If
+  the source file is still there, the next sync re-indexes it.
+- `POST /api/sync` only reads from the backend (`fs.find`/`fs.info`/
+  `fs.open(..., "rb")`) to build the index; it never calls a write, delete,
+  or directory-creation method on it.
+
+For defense in depth beyond the application layer, also consider mounting
+or connecting to the share with read-only credentials at the infrastructure
+level (e.g. a read-only SMB account, a read-only S3 IAM policy, or an
+NFS export with the `ro` option).
 
 Configuration (environment variables):
 
 | Variable                  | Default            | Purpose                              |
 |----------------------------|---------------------|---------------------------------------|
-| `LUMINARY_PHOTOS_URI`      | `/data/photos`      | Where originals/thumbnails are stored |
+| `LUMINARY_PHOTOS_URI`      | `/data/photos`      | The photo library to index (read-only) |
 | `LUMINARY_DATABASE_PATH`   | `/data/photos.db`   | SQLite database file                  |
 | `LUMINARY_CORS_ORIGINS`    | `*`                 | Comma-separated list of allowed origins |
 | `PORT`                     | `8080`              | Port uvicorn listens on                |
@@ -98,7 +128,7 @@ so it accepts any of the following:
 | Explicit local    | `file:///data/photos`                   | Same as above, spelled out               |
 | Amazon S3         | `s3://my-bucket/photos`                 | Credentials via standard AWS env vars/IAM role |
 | SMB/CIFS          | `smb://user:pass@server/share/photos`   | Pure-Python client, no OS-level mount needed |
-| HTTP(S)           | `https://host/photos`                   | Read-only — uploads/deletes will fail    |
+| HTTP(S)           | `https://host/photos`                   | Read-only, and `POST /api/sync` needs directory-listing support, which plain HTTP(S) servers generally don't have |
 
 The database always stays on local disk regardless of `LUMINARY_PHOTOS_URI`
 (SQLite needs real filesystem locking).
@@ -175,8 +205,8 @@ this repository and self-heal any drift.
 
 ## Testing
 
-- **api**: `pytest` with FastAPI's `TestClient`, exercising upload/list/
-  metadata/thumbnail/original/delete flows against a temporary data
+- **api**: `pytest` with FastAPI's `TestClient`, exercising sync/list/
+  metadata/thumbnail/original/delete flows against a temporary photos
   directory and SQLite database per test (`make test-api`).
 - **web**: `vitest` + `@testing-library/react`, mocking the API client to
   test loading, empty, populated, and error states (`make test-web`).

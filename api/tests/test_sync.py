@@ -1,81 +1,88 @@
-import io
-import time
-
+import pytest
 from PIL import Image
 
-
-def _write_image(path, size=(10, 10), color="red"):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", size, color=color).save(path, "JPEG")
+from conftest import sync_and_wait, write_image
 
 
-def _run_sync_and_wait(client, timeout=5.0):
-    client.post("/api/sync")
-    deadline = time.monotonic() + timeout
-    status = {}
-    while time.monotonic() < deadline:
-        status = client.get("/api/sync/status").json()
-        # "idle" means the background thread hasn't started yet (or hasn't
-        # called progress.start() yet) -- keep polling past it rather than
-        # treating it as done, or a check that lands before the thread gets
-        # going would report a false completion.
-        if status["status"] in ("completed", "error"):
-            return status
-        time.sleep(0.05)
-    raise AssertionError(f"sync did not finish in time: {status}")
+def _exif_with_gps_and_datetime():
+    exif = Image.Exif()
+    exif[306] = "2023:05:17 14:22:10"  # DateTime
+    exif[34853] = {  # GPSInfo
+        1: "N",
+        2: (40.0, 26.0, 46.3),
+        3: "W",
+        4: (79.0, 56.0, 55.0),
+    }
+    return exif
 
 
 def test_sync_inserts_files_found_in_storage(client, tmp_path):
-    _write_image(tmp_path / "photos" / "originals" / "manual-1.jpg")
-    _write_image(tmp_path / "photos" / "originals" / "manual-2.jpg")
+    write_image(tmp_path / "photos" / "manual-1.jpg")
+    write_image(tmp_path / "photos" / "nested" / "manual-2.jpg")
 
-    status = _run_sync_and_wait(client)
+    status = sync_and_wait(client)
     assert status["status"] == "completed"
     assert status["inserted"] == 2
     assert status["updated"] == 0
     assert status["deleted"] == 0
 
     photos = client.get("/api/photos").json()["photos"]
-    assert {p["filename"] for p in photos} == {
-        "originals/manual-1.jpg",
-        "originals/manual-2.jpg",
-    }
+    assert {p["filename"] for p in photos} == {"manual-1.jpg", "nested/manual-2.jpg"}
+
+
+def test_sync_ignores_non_image_files(client, tmp_path):
+    write_image(tmp_path / "photos" / "manual.jpg")
+    (tmp_path / "photos").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "photos" / "notes.txt").write_text("not a photo")
+
+    status = sync_and_wait(client)
+    assert status["total"] == 1
+    assert status["inserted"] == 1
 
 
 def test_sync_deletes_rows_for_files_removed_from_storage(client, tmp_path):
-    buffer = io.BytesIO()
-    Image.new("RGB", (10, 10), color="blue").save(buffer, format="JPEG")
-    upload = client.post(
-        "/api/photos", files={"file": ("sample.jpg", buffer.getvalue(), "image/jpeg")}
-    ).json()
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
 
-    (tmp_path / "photos" / upload["filename"]).unlink()
+    image_path.unlink()
 
-    status = _run_sync_and_wait(client)
+    status = sync_and_wait(client)
     assert status["status"] == "completed"
     assert status["deleted"] == 1
 
-    assert client.get(f"/api/photos/{upload['id']}").status_code == 404
+    assert client.get(f"/api/photos/{photo_id}").status_code == 404
 
 
 def test_sync_updates_rows_for_files_changed_in_place(client, tmp_path):
-    buffer = io.BytesIO()
-    Image.new("RGB", (10, 10), color="green").save(buffer, format="JPEG")
-    upload = client.post(
-        "/api/photos", files={"file": ("sample.jpg", buffer.getvalue(), "image/jpeg")}
-    ).json()
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
 
-    _write_image(tmp_path / "photos" / upload["filename"], size=(40, 40))
+    write_image(image_path, size=(40, 40))
 
-    status = _run_sync_and_wait(client)
+    status = sync_and_wait(client)
     assert status["status"] == "completed"
     assert status["updated"] == 1
     assert status["inserted"] == 0
 
-    photo = client.get(f"/api/photos/{upload['id']}").json()
-    assert photo["id"] == upload["id"]
+    photo = client.get(f"/api/photos/{photo_id}").json()
+    assert photo["id"] == photo_id
     assert photo["width"] == 40
     assert photo["height"] == 40
+
+
+def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path):
+    write_image(tmp_path / "photos" / "geo.jpg", exif=_exif_with_gps_and_datetime())
+
+    sync_and_wait(client)
+    photo = client.get("/api/photos").json()["photos"][0]
+
+    assert photo["created_at"].startswith("2023-05-17T14:22:10")
+    assert photo["latitude"] == pytest.approx(40.446194, abs=1e-5)
+    assert photo["longitude"] == pytest.approx(-79.948611, abs=1e-5)
 
 
 def test_sync_status_defaults_to_idle(client):

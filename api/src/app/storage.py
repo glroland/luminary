@@ -1,11 +1,7 @@
-import io
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 import fsspec
-from fastapi import UploadFile
 from PIL import Image
 from PIL.ExifTags import IFD
 
@@ -22,15 +18,13 @@ METADATA_COLUMNS = "id, filename, content_type, size_bytes, width, height, creat
 
 def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
     """Resolve the configured photos URI to an fsspec filesystem and root
-    path, creating the `originals` directory if the backend supports it
-    (read-only backends like http/https don't, and don't need to)."""
+    path. Read-only: the app never writes to, creates in, or deletes from
+    this backend -- it's treated as someone else's existing photo library
+    (originals live directly under the root; there's no app-managed
+    subdirectory). Photos only enter the SQLite index via sync.py scanning
+    what's already there."""
     fs, root = fsspec.core.url_to_fs(get_photos_uri())
-    root = root.rstrip("/") or "/"
-    try:
-        fs.makedirs(f"{root}/originals", exist_ok=True)
-    except NotImplementedError:
-        pass
-    return fs, root
+    return fs, root.rstrip("/") or "/"
 
 
 def _iter_file(fs: fsspec.AbstractFileSystem, path: str, chunk_size: int = 1024 * 1024):
@@ -82,75 +76,6 @@ def _extract_exif(image: Image.Image) -> tuple[Optional[datetime], Optional[floa
     return created_at, latitude, longitude
 
 
-def save_photo(upload: UploadFile) -> dict:
-    photo_id = str(uuid.uuid4())
-    suffix = Path(upload.filename or "").suffix or ".jpg"
-    relative_path = f"originals/{photo_id}{suffix}"
-
-    fs, root = _fs_and_root()
-    original_path = f"{root}/{relative_path}"
-
-    contents = upload.file.read()
-    with fs.open(original_path, "wb") as f:
-        f.write(contents)
-
-    width = height = None
-    created_at = latitude = longitude = None
-    thumbnail_bytes = None
-    try:
-        with fs.open(original_path, "rb") as f:
-            with Image.open(f) as image:
-                width, height = image.size
-                created_at, latitude, longitude = _extract_exif(image)
-
-                thumbnail = image.convert("RGB")
-                thumbnail.thumbnail(THUMBNAIL_SIZE)
-                buffer = io.BytesIO()
-                thumbnail.save(buffer, "JPEG")
-                thumbnail_bytes = buffer.getvalue()
-    except Exception:
-        # Not a readable image format (e.g. no thumbnail support) -- the
-        # original is still stored and metadata is still recorded.
-        pass
-
-    metadata = {
-        "id": photo_id,
-        "filename": relative_path,
-        "content_type": upload.content_type or "application/octet-stream",
-        "size_bytes": len(contents),
-        "width": width,
-        "height": height,
-        "created_at": (created_at or datetime.now(timezone.utc)).isoformat(),
-        "latitude": latitude,
-        "longitude": longitude,
-    }
-
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO photos
-                (id, filename, content_type, size_bytes, width, height, created_at,
-                 latitude, longitude, thumbnail)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                metadata["id"],
-                metadata["filename"],
-                metadata["content_type"],
-                metadata["size_bytes"],
-                metadata["width"],
-                metadata["height"],
-                metadata["created_at"],
-                metadata["latitude"],
-                metadata["longitude"],
-                thumbnail_bytes,
-            ),
-        )
-        conn.commit()
-
-    return metadata
-
-
 def list_photos() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -182,17 +107,10 @@ def stream_original(metadata: dict):
 
 
 def delete_photo(photo_id: str) -> bool:
+    """Remove a photo from the SQLite index only. Never touches the file on
+    the photos backend -- that's someone else's data, not ours to delete.
+    If the file is still there, the next sync will re-index it."""
     with get_connection() as conn:
-        row = conn.execute("SELECT filename FROM photos WHERE id = ?", (photo_id,)).fetchone()
-        if not row:
-            return False
-        conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+        cursor = conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
         conn.commit()
-
-    fs, root = _fs_and_root()
-    try:
-        fs.rm(f"{root}/{row['filename']}")
-    except FileNotFoundError:
-        pass
-
-    return True
+        return cursor.rowcount > 0

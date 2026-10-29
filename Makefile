@@ -1,5 +1,5 @@
 CONTAINER_ENGINE ?= podman
-IMAGE_REGISTRY   ?= quay.io/yourorg
+IMAGE_REGISTRY   ?= registry.home.glroland.com/luminary
 API_IMAGE        ?= $(IMAGE_REGISTRY)/luminary-api
 WEB_IMAGE        ?= $(IMAGE_REGISTRY)/luminary-web
 TAG              ?= latest
@@ -9,6 +9,10 @@ TAG              ?= latest
 TARGET_DIR  ?= target
 VENV_DIR    := $(TARGET_DIR)/venv
 DATA_DIR    := $(TARGET_DIR)/data
+
+# Where run-api looks for/stores photos -- override to point at NFS/S3/SMB/
+# HTTP instead, e.g. `make run-api LUMINARY_PHOTOS_URI=s3://my-bucket/photos`.
+LUMINARY_PHOTOS_URI ?= "smb://data.home.glroland.com/photo/2019 Spring Break in Boone"
 
 .PHONY: help install install-api install-web \
         test test-api test-web \
@@ -63,7 +67,7 @@ lint-web:
 ## --- Local run -----------------------------------------------------------
 
 run-api:
-	LUMINARY_PHOTOS_URI=$(DATA_DIR)/photos LUMINARY_DATABASE_PATH=$(DATA_DIR)/photos.db \
+	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) LUMINARY_DATABASE_PATH=$(DATA_DIR)/photos.db \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:

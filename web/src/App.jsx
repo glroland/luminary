@@ -68,9 +68,9 @@ export default function App() {
 
   async function handleRefresh() {
     try {
-      // The sync starts in a background thread, so the response can still
-      // read "idle" for an instant before it reports "running" -- show the
-      // progress UI right away regardless, and let the first poll correct it.
+      // POST /api/sync flips status to "running" before it responds, so we
+      // could just use its response directly -- setting this locally too
+      // just means the progress UI appears one round-trip sooner.
       await startSync();
       setSyncStatus({ status: "running", processed: 0, total: 0 });
       pollSyncStatus();
