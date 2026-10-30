@@ -30,6 +30,15 @@ docstring -- for the frontend to draw as an overlay on the full-size image.
 The openai backend can optionally stream its reply back token-by-token
 (LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
 ask_stream() vs. the always-available, full-reply-at-once ask().
+
+caption_image() and detect_faces() are the two Florence-2 entry points
+sync.py uses directly (outside the chat.ask()/ChatReply flow above) to
+auto-describe and face-detect a photo at index time: caption_image() is
+<MORE_DETAILED_CAPTION>, and detect_faces() is the same grounding task
+_ask_florence uses for a user's chat message, but grounding the fixed
+phrase "face" instead. Both raise ChatNotConfigured exactly like ask()
+does, which is how sync.py knows to leave that work for a later sync
+rather than fail it.
 """
 
 import base64
@@ -302,6 +311,27 @@ def caption_image(image) -> str:
     ChatNotConfigured if torch/transformers aren't installed, same as
     ask()."""
     return _run_florence_task(image, _FLORENCE_CAPTION_TASK)
+
+
+# Fixed phrase sync.py grounds for face detection -- not user-provided text,
+# so there's no "empty message" case to handle the way _ask_florence does.
+_FLORENCE_FACE_PHRASE = "face"
+
+
+def detect_faces(image) -> list[dict]:
+    """Run Florence-2's phrase-grounding task (_FLORENCE_GROUNDING_TASK)
+    with "face" as the phrase, on an already-opened, already RGB, already
+    EXIF-transposed image (same precondition as caption_image). Returns
+    every detected face as a {"x1","y1","x2","y2"} box in the image's own
+    pixel coordinate space -- same convention as ChatReply.boxes, i.e. the
+    full-resolution photo's space, not whatever resolution Florence-2
+    processed internally. An empty list means no faces were found, which
+    is a valid, successful result -- not a failure. Raises
+    ChatNotConfigured if torch/transformers aren't installed, same as
+    ask()/caption_image()."""
+    result = _run_florence_task(image, _FLORENCE_GROUNDING_TASK, _FLORENCE_FACE_PHRASE)
+    bboxes = result.get("bboxes", [])
+    return [{"x1": x1, "y1": y1, "x2": x2, "y2": y2} for x1, y1, x2, y2 in bboxes]
 
 
 def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:

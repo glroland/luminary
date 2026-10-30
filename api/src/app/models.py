@@ -66,3 +66,17 @@ class ChatResponse(BaseModel):
     # backend has no concept of image regions. Always [] for a streamed
     # reply too (streaming is openai-only, see chat.should_stream).
     boxes: list[BoundingBox] = []
+
+
+class FaceBox(BaseModel):
+    # Same pixel-coordinate convention as BoundingBox, but no `label` --
+    # the `faces` table doesn't store one; every row is a face by
+    # construction (see sync.py's Florence-2 face-detection pipeline).
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+
+class FaceList(BaseModel):
+    faces: list[FaceBox]

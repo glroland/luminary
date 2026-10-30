@@ -18,9 +18,15 @@ there's no separate "full" vs. "incremental" sync, just this single
 reconciliation, which degrades gracefully to doing only as much work as a
 given file actually needs.
 
-Each inserted/updated file also gets a `description` generated via
-Florence-2 (chat.caption_image), best-effort like EXIF/thumbnail
-extraction -- see _generate_description.
+Each inserted/updated file also gets a `description` (chat.caption_image)
+and its faces detected (chat.detect_faces, phrase-grounding on "face",
+stored one-to-many in the `faces` table via storage.replace_faces) via
+Florence-2. `description` doubles as the signal for "has Florence-2 already
+run on this photo at all", covering face detection too, not just the
+caption -- see _run_florence_pipeline for the ordering that makes that a
+reliable signal (faces are always written *before* `description`, never
+after), and _sync_one_file's docstring for how that combines with the
+backfill behavior above.
 """
 
 import asyncio
@@ -36,7 +42,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat
+from . import chat, storage
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
@@ -183,31 +189,37 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     """Reconcile a single discovered file against its DB row (if any).
     Returns "unchanged", "inserted", or "updated".
 
-    "Unchanged" -- skip entirely, no file open, no thumbnail/caption work
-    -- is the fast path a repeat sync of a large, mostly-static library
-    should hit for nearly every file: it requires both that size matches
-    the DB row (the file's content presumably hasn't changed) *and* that
-    its thumbnail/description are already populated. A full reprocess
-    (clearing and recomputing everything) only happens for a genuinely new
-    or changed file. A file whose content is unchanged but is missing a
-    derived field -- e.g. indexed before `description` existed, or before
-    Florence-2 chat was configured, or the thumbnail failed on a transient
-    read error -- gets a narrower "backfill": the image is opened once,
-    but each piece of work (thumbnailing, captioning) only runs for the
-    field that's actually missing, so e.g. adding descriptions to an
-    already-thumbnailed library doesn't redundantly re-thumbnail every
-    photo, and a library sync without Florence-2 configured doesn't
-    re-open every file every time just to confirm there's still no
-    description.
+    "Unchanged" -- skip entirely, no file open, no thumbnail/caption/face
+    work -- is the fast path a repeat sync of a large, mostly-static
+    library should hit for nearly every file: it requires both that size
+    matches the DB row (the file's content presumably hasn't changed)
+    *and* that its thumbnail/description are already populated. A full
+    reprocess (clearing and recomputing everything) only happens for a
+    genuinely new or changed file. A file whose content is unchanged but
+    is missing a derived field -- e.g. indexed before `description`
+    existed, or before Florence-2 chat was configured, or the thumbnail
+    failed on a transient read error -- gets a narrower "backfill": the
+    image is opened once, but each piece of work (thumbnailing,
+    captioning+face-detection) only runs for the field that's actually
+    missing, so e.g. adding descriptions to an already-thumbnailed library
+    doesn't redundantly re-thumbnail every photo, and a library sync
+    without Florence-2 configured doesn't re-open every file every time
+    just to confirm there's still no description.
+
+    `description` is also the signal for "has face detection already run"
+    (there's no separate column for it) -- see _run_florence_pipeline,
+    which is what this function defers to for the caption+faces work, for
+    why that's safe: faces are always stored before `description` is set,
+    never after.
     """
     info = fs.info(path)
     size = info.get("size") or 0
 
     content_changed = not existing_row or existing_row["size_bytes"] != size
     needs_thumbnail = content_changed or not existing_row["has_thumbnail"]
-    needs_description = content_changed or not existing_row["has_description"]
+    needs_florence = content_changed or not existing_row["has_description"]
 
-    if existing_row and not content_changed and not needs_thumbnail and not needs_description:
+    if existing_row and not content_changed and not needs_thumbnail and not needs_florence:
         return "unchanged"
 
     fields: dict = {}
@@ -216,6 +228,12 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
         # was computed from the *old* content (or doesn't exist yet), so it
         # must be cleared up front and only kept if recomputing it below
         # actually succeeds, rather than left pointing at stale content.
+        # `description` cleared here is what makes `needs_florence` above
+        # correctly re-trigger on the *next* sync if the pipeline below
+        # doesn't get to run or doesn't finish (its own faces-before-
+        # description ordering is what keeps that promise even when it
+        # does run) -- old faces for this photo get cleared by that
+        # pipeline itself, not here.
         fields.update(
             width=None,
             height=None,
@@ -226,6 +244,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             description=None,
         )
 
+    rgb_image = None
     try:
         with fs.open(path, "rb") as f:
             with Image.open(f) as raw_image:
@@ -243,7 +262,12 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                         fields["latitude"] = latitude
                         fields["longitude"] = longitude
 
-                    rgb_image = image.convert("RGB") if (needs_thumbnail or needs_description) else None
+                    if needs_thumbnail or needs_florence:
+                        # .convert("RGB") fully decodes the pixel data into a
+                        # new, independent in-memory image, so it stays usable
+                        # below after the `with fs.open(...)`/`Image.open(...)`
+                        # blocks (and the file handle they own) have closed.
+                        rgb_image = image.convert("RGB")
 
                     if needs_thumbnail:
                         thumbnail = rgb_image.copy()
@@ -251,48 +275,87 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                         buffer = io.BytesIO()
                         thumbnail.save(buffer, "JPEG")
                         fields["thumbnail"] = buffer.getvalue()
-
-                    if needs_description:
-                        fields["description"] = _generate_description(rgb_image, relative_path)
     except Exception:
         logger.warning(
             "Could not read/thumbnail %r; indexing metadata only", relative_path, exc_info=True
         )
+        rgb_image = None  # don't run florence below against a half-decoded image
 
     fields["content_type"] = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
     fields["size_bytes"] = size
+
+    photo_id = existing_row["id"] if existing_row else str(uuid.uuid4())
 
     with get_connection() as conn:
         if existing_row:
             set_clause = ", ".join(f"{column} = ?" for column in fields)
             conn.execute(
                 f"UPDATE photos SET {set_clause} WHERE id = ?",
-                (*fields.values(), existing_row["id"]),
+                (*fields.values(), photo_id),
             )
-            conn.commit()
-            return "updated"
-
-        fields["id"] = str(uuid.uuid4())
-        fields["filename"] = relative_path
-        columns = ", ".join(fields)
-        placeholders = ", ".join("?" for _ in fields)
-        conn.execute(
-            f"INSERT INTO photos ({columns}) VALUES ({placeholders})",
-            tuple(fields.values()),
-        )
+        else:
+            fields["id"] = photo_id
+            fields["filename"] = relative_path
+            columns = ", ".join(fields)
+            placeholders = ", ".join("?" for _ in fields)
+            conn.execute(f"INSERT INTO photos ({columns}) VALUES ({placeholders})", tuple(fields.values()))
         conn.commit()
-        return "inserted"
+
+    # Only now, with the photo row safely in place (description still
+    # NULL/stale-cleared) and a usable decoded image in hand, attempt the
+    # caption+face-detection pipeline -- see its docstring for why it
+    # writes `description` last.
+    if rgb_image is not None and needs_florence:
+        _run_florence_pipeline(photo_id, rgb_image, relative_path)
+
+    return "updated" if existing_row else "inserted"
+
+
+def _run_florence_pipeline(photo_id: str, image, relative_path: str) -> None:
+    """The "quasi-transactional" Florence-2 step for one photo: caption,
+    then detect faces, then store the faces, then -- only once faces are
+    safely stored -- store the caption as `description`. That order, with
+    `description` written last, is deliberate: it's what lets
+    `description IS NOT NULL` double as "face detection has already run
+    (and succeeded) for this photo" (see _sync_one_file), without a
+    separate "faces done" column. If this gets interrupted or fails at any
+    point, `description` is simply never written, so the next sync retries
+    captioning *and* face detection from scratch -- there's no state where
+    a stale caption or half-updated face set is mistaken for "done".
+
+    Faces for this photo are always cleared before (re)detecting, win or
+    lose: either this is a genuine content change superseding old faces
+    that no longer apply, or it's a retry of a previous attempt that didn't
+    reach this point last time, which might have left faces stored without
+    ever setting `description` -- either way, old boxes must not survive
+    alongside (or instead of) this attempt's result.
+
+    `image` must already be RGB and EXIF-transposed, same precondition as
+    chat.caption_image/detect_faces."""
+    storage.replace_faces(photo_id, [])
+
+    description = _generate_description(image, relative_path)
+    if description is None:
+        return  # captioning failed/unconfigured -- retry everything next sync
+
+    boxes = _detect_faces(image, relative_path)
+    if boxes is None:
+        return  # face detection failed/unconfigured -- retry everything next sync
+
+    storage.replace_faces(photo_id, boxes)
+
+    with get_connection() as conn:
+        conn.execute("UPDATE photos SET description = ? WHERE id = ?", (description, photo_id))
+        conn.commit()
 
 
 def _generate_description(image, relative_path: str) -> Optional[str]:
-    """Best-effort Florence-2 caption for a newly inserted/changed photo,
-    stored as its `description`. `image` must already be RGB and
-    EXIF-transposed (same space as the thumbnail/width/height derived
-    alongside it). Mirrors the EXIF/thumbnail handling above: missing
-    torch/transformers (an optional, multi-GB dependency -- see chat.py's
-    module docstring) just leaves the description unset rather than
-    failing the sync, and any other model failure is caught per-file for
-    the same reason a corrupt image doesn't fail the whole sync."""
+    """Best-effort Florence-2 caption step of _run_florence_pipeline.
+    `image` must already be RGB and EXIF-transposed. Mirrors the
+    EXIF/thumbnail handling in _sync_one_file: missing torch/transformers
+    (an optional, multi-GB dependency -- see chat.py's module docstring)
+    or any other model failure is caught here rather than failing the
+    sync, same reason a corrupt image doesn't fail the whole sync."""
     try:
         return chat.caption_image(image)
     except chat.ChatNotConfigured:
@@ -306,11 +369,29 @@ def _generate_description(image, relative_path: str) -> Optional[str]:
         return None
 
 
+def _detect_faces(image, relative_path: str) -> Optional[list[dict]]:
+    """Best-effort Florence-2 face-detection step of _run_florence_pipeline.
+    `image` must already be RGB and EXIF-transposed. Returns the detected
+    boxes (possibly an empty list -- "no faces found" is a valid,
+    successful result, not a failure), or None if detection itself
+    couldn't run/complete. Error handling mirrors _generate_description."""
+    try:
+        return chat.detect_faces(image)
+    except chat.ChatNotConfigured:
+        logger.debug("Florence-2 not configured; skipping face detection for %r", relative_path)
+        return None
+    except Exception:
+        logger.warning("Could not detect faces for %r", relative_path, exc_info=True)
+        return None
+
+
 def _delete_missing(existing: dict, seen: set) -> int:
     missing_ids = [row["id"] for filename, row in existing.items() if filename not in seen]
     if not missing_ids:
         return 0
     with get_connection() as conn:
+        # No FK cascade (see database.py) -- clean up faces explicitly.
+        conn.executemany("DELETE FROM faces WHERE photo_id = ?", [(photo_id,) for photo_id in missing_ids])
         conn.executemany("DELETE FROM photos WHERE id = ?", [(photo_id,) for photo_id in missing_ids])
         conn.commit()
     return len(missing_ids)

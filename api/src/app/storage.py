@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -146,6 +147,35 @@ def delete_photo(photo_id: str) -> bool:
     the photos backend -- that's someone else's data, not ours to delete.
     If the file is still there, the next sync will re-index it."""
     with get_connection() as conn:
+        # No FK cascade (see database.py) -- clean up the photo's faces
+        # explicitly so they don't outlive their photo row.
+        conn.execute("DELETE FROM faces WHERE photo_id = ?", (photo_id,))
         cursor = conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+def get_faces(photo_id: str) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT x1, y1, x2, y2 FROM faces WHERE photo_id = ?", (photo_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def replace_faces(photo_id: str, boxes: list[dict]) -> None:
+    """Replace every face row for `photo_id` with `boxes` (each an
+    {"x1","y1","x2","y2"} dict in the photo's own pixel coordinate space --
+    same convention as chat.ChatReply.boxes). Always deletes first, even
+    when `boxes` is empty: this is sync.py's Florence-2 face-detection step,
+    which is re-run from scratch (never incrementally) any time it runs at
+    all, so stale boxes from a previous photo version -- or from an earlier
+    attempt that didn't finish successfully -- must not survive alongside
+    (or instead of) a fresh result. See sync.py's module docstring for the
+    full before/after-`description` ordering this is part of."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM faces WHERE photo_id = ?", (photo_id,))
+        if boxes:
+            conn.executemany(
+                "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (?, ?, ?, ?, ?, ?)",
+                [(str(uuid.uuid4()), photo_id, box["x1"], box["y1"], box["x2"], box["y2"]) for box in boxes],
+            )
+        conn.commit()

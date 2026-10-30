@@ -54,5 +54,24 @@ def init_db() -> None:
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc).lower():
                 raise
+
+        # One photo -> many detected faces (sync.py's Florence-2 face
+        # detection). No FK constraint -- SQLite doesn't enforce them
+        # without a per-connection PRAGMA, and this app already deletes
+        # rows explicitly (storage.delete_photo, sync._delete_missing)
+        # rather than relying on cascades.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS faces (
+                id TEXT PRIMARY KEY,
+                photo_id TEXT NOT NULL,
+                x1 REAL NOT NULL,
+                y1 REAL NOT NULL,
+                x2 REAL NOT NULL,
+                y2 REAL NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.commit()
     logger.info("Database ready at %s", get_database_path())

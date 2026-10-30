@@ -84,6 +84,11 @@ export async function chatAboutPhoto(photoId, backend, message, history, onChunk
   return { reply: full, boxes: [] };
 }
 
+export async function fetchFaces(photoId) {
+  const data = await request(`/photos/${photoId}/faces`);
+  return data.faces;
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

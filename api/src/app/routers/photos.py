@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
 from .. import chat, storage
-from ..models import ChatRequest, ChatResponse, Photo, PhotoList
+from ..models import ChatRequest, ChatResponse, FaceList, Photo, PhotoList
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,13 @@ def get_photo_thumbnail(photo_id: str) -> Response:
     if not thumbnail:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return Response(content=thumbnail, media_type="image/jpeg")
+
+
+@router.get("/photos/{photo_id}/faces", response_model=FaceList)
+def get_photo_faces(photo_id: str) -> dict:
+    if not storage.get_photo(photo_id):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return {"faces": storage.get_faces(photo_id)}
 
 
 @router.delete("/photos/{photo_id}", status_code=204)

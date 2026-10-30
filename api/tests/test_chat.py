@@ -363,6 +363,60 @@ def test_florence_backend_runs_plain_caption_when_message_is_empty(monkeypatch):
     assert reply.boxes == []
 
 
+def _make_image():
+    # detect_faces/caption_image take an already-decoded, already-RGB PIL
+    # Image (the same precondition sync.py's rgb_image satisfies) -- unlike
+    # chat.ask(), which takes raw bytes and decodes them itself.
+    import io
+
+    from PIL import Image
+
+    return Image.open(io.BytesIO(_make_jpeg_bytes())).convert("RGB")
+
+
+def test_detect_faces_grounds_the_fixed_phrase_face(monkeypatch):
+    processor = _FakeFlorenceProcessor(
+        {"bboxes": [[1.2, 3.4, 5.6, 7.8], [10.0, 20.0, 30.0, 40.0]], "labels": ["face", "face"]}
+    )
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    boxes = chat.detect_faces(_make_image())
+
+    assert processor.calls["prompt"] == chat._FLORENCE_GROUNDING_TASK + "face"
+    assert processor.calls["task"] == chat._FLORENCE_GROUNDING_TASK
+    # Plain {x1,y1,x2,y2} dicts, no "label" -- sync.py stores these
+    # straight into the faces table, which has no label column.
+    assert boxes == [
+        {"x1": 1.2, "y1": 3.4, "x2": 5.6, "y2": 7.8},
+        {"x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0},
+    ]
+
+
+def test_detect_faces_returns_an_empty_list_when_no_faces_are_found(monkeypatch):
+    processor = _FakeFlorenceProcessor({"bboxes": [], "labels": []})
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    assert chat.detect_faces(_make_image()) == []
+
+
+def test_detect_faces_raises_chat_not_configured_without_torch(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in ("torch", "transformers"):
+            raise ImportError(f"simulated missing {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(chat, "_florence_model", None)
+    monkeypatch.setattr(chat, "_florence_processor", None)
+
+    with pytest.raises(chat.ChatNotConfigured):
+        chat.detect_faces(_make_image())
+
+
 def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
     # torch/transformers are an optional, multi-GB dependency -- this must
     # hold regardless of whether they happen to be installed in whatever

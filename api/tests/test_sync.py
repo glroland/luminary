@@ -154,6 +154,7 @@ def test_sync_generates_description_via_florence_for_new_photos(client, tmp_path
     from app import chat
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a red square on a plain background")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
 
     write_image(tmp_path / "photos" / "sample.jpg")
     sync_and_wait(client)
@@ -210,6 +211,7 @@ def test_sync_backfills_missing_description_without_touching_an_existing_thumbna
     from app import chat
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a backfilled description")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
 
     status = sync_and_wait(client)
     assert status["status"] == "completed"
@@ -225,21 +227,25 @@ def test_sync_backfills_missing_description_without_touching_an_existing_thumbna
 def test_sync_skips_reprocessing_a_fully_populated_unchanged_file(client, tmp_path, monkeypatch):
     from app import chat
 
-    calls = []
-    monkeypatch.setattr(chat, "caption_image", lambda image: calls.append(1) or "a description")
+    caption_calls = []
+    face_calls = []
+    monkeypatch.setattr(chat, "caption_image", lambda image: caption_calls.append(1) or "a description")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: face_calls.append(1) or [])
 
     write_image(tmp_path / "photos" / "sample.jpg")
     sync_and_wait(client)
-    assert len(calls) == 1
+    assert len(caption_calls) == 1
+    assert len(face_calls) == 1
 
     # Nothing changed and every field is already populated -- the second
     # sync should be a pure no-op for this file: "unchanged", no second
-    # call into Florence-2.
+    # call into Florence-2 for either the caption or face detection.
     status = sync_and_wait(client)
     assert status["status"] == "completed"
     assert status["inserted"] == 0
     assert status["updated"] == 0
-    assert len(calls) == 1
+    assert len(caption_calls) == 1
+    assert len(face_calls) == 1
 
 
 def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_description(client, tmp_path, monkeypatch):
@@ -285,6 +291,7 @@ def test_sync_regenerates_description_when_a_file_changes_in_place(client, tmp_p
 
     captions = iter(["first caption", "second caption"])
     monkeypatch.setattr(chat, "caption_image", lambda image: next(captions))
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
 
     image_path = tmp_path / "photos" / "sample.jpg"
     write_image(image_path)
@@ -295,6 +302,137 @@ def test_sync_regenerates_description_when_a_file_changes_in_place(client, tmp_p
     write_image(image_path, size=(40, 40))
     sync_and_wait(client)
     assert client.get(f"/api/photos/{photo_id}").json()["description"] == "second caption"
+
+
+def test_sync_stores_detected_faces_for_new_photos(client, tmp_path, monkeypatch):
+    from app import chat
+    from app.storage import get_faces
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "two people on a beach")
+    monkeypatch.setattr(
+        chat,
+        "detect_faces",
+        lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}, {"x1": 5.0, "y1": 6.0, "x2": 7.0, "y2": 8.0}],
+    )
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)
+
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    faces = get_faces(photo_id)
+    assert {tuple(face.values()) for face in faces} == {(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)}
+
+
+def test_sync_treats_zero_detected_faces_as_a_successful_result(client, tmp_path, monkeypatch):
+    from app import chat
+    from app.storage import get_faces
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "an empty room")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    status = sync_and_wait(client)
+
+    assert status["status"] == "completed"
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["description"] == "an empty room"  # not left null just because there were no faces
+    assert get_faces(photo["id"]) == []
+
+
+def test_sync_does_not_store_description_or_faces_when_face_detection_fails(client, tmp_path, monkeypatch, caplog):
+    from app import chat
+    from app.storage import get_faces
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a description that should not be saved")
+
+    def boom(image):
+        raise RuntimeError("face model inference failed")
+
+    monkeypatch.setattr(chat, "detect_faces", boom)
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+
+    with caplog.at_level(logging.WARNING, logger="app.sync"):
+        status = sync_and_wait(client)
+
+    # The "quasi-transactional" ordering: captioning succeeded, but since
+    # face detection (the next step) failed, description must NOT be
+    # persisted either -- otherwise a later sync would see description
+    # IS NOT NULL and wrongly skip retrying face detection.
+    assert status["status"] == "completed"
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["description"] is None
+    assert get_faces(photo["id"]) == []
+    assert any(
+        record.levelno == logging.WARNING and "sample.jpg" in record.message
+        for record in caplog.records
+    )
+
+
+def test_sync_replaces_faces_rather_than_accumulating_when_a_file_changes_in_place(client, tmp_path, monkeypatch):
+    from app import chat
+    from app.storage import get_faces
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a photo")
+    face_results = iter(
+        [
+            [{"x1": 1.0, "y1": 1.0, "x2": 2.0, "y2": 2.0}],
+            [{"x1": 9.0, "y1": 9.0, "x2": 10.0, "y2": 10.0}, {"x1": 11.0, "y1": 11.0, "x2": 12.0, "y2": 12.0}],
+        ]
+    )
+    monkeypatch.setattr(chat, "detect_faces", lambda image: next(face_results))
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    assert len(get_faces(photo_id)) == 1
+
+    write_image(image_path, size=(40, 40))
+    sync_and_wait(client)
+
+    faces = get_faces(photo_id)
+    assert len(faces) == 2
+    assert {tuple(face.values()) for face in faces} == {(9.0, 9.0, 10.0, 10.0), (11.0, 11.0, 12.0, 12.0)}
+
+
+def test_sync_backfills_faces_alongside_a_missing_description(client, tmp_path, monkeypatch):
+    # Same scenario as the description-only backfill test, but checking
+    # that faces -- which never got a chance to run at all the first time,
+    # since florence was unconfigured -- get populated by the backfill too.
+    from app import chat
+    from app.storage import get_faces
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)  # florence unconfigured by default
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    assert get_faces(photo_id) == []
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a backfilled description")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
+
+    sync_and_wait(client)
+
+    assert get_faces(photo_id) == [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}]
+
+
+def test_sync_deletes_faces_for_photos_removed_from_storage(client, tmp_path, monkeypatch):
+    from app import chat
+    from app.storage import get_faces
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a photo")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    assert get_faces(photo_id) != []
+
+    image_path.unlink()
+    sync_and_wait(client)
+
+    assert get_faces(photo_id) == []
 
 
 def test_sync_status_defaults_to_idle(client):
