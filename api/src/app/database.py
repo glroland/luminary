@@ -40,9 +40,19 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 latitude REAL,
                 longitude REAL,
-                thumbnail BLOB
+                thumbnail BLOB,
+                description TEXT
             )
             """
         )
+        # No migrations framework (see module docs) -- CREATE TABLE IF NOT
+        # EXISTS only covers a brand-new database. A `photos.db` from
+        # before `description` existed needs this ALTER TABLE instead;
+        # "duplicate column" means a previous run already added it.
+        try:
+            conn.execute("ALTER TABLE photos ADD COLUMN description TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
         conn.commit()
     logger.info("Database ready at %s", get_database_path())

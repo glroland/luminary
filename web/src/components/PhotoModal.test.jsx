@@ -40,6 +40,16 @@ describe("PhotoModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("renders the florence-generated description when present", () => {
+    render(<PhotoModal photo={{ ...PHOTO, description: "A sandy beach at sunset." }} onClose={() => {}} />);
+    expect(screen.getByText("A sandy beach at sunset.")).toBeInTheDocument();
+  });
+
+  it("renders no description paragraph when absent", () => {
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    expect(document.querySelector(".photo-modal-description")).not.toBeInTheDocument();
+  });
+
   it("positions a box overlay in pixels from the image's measured visible rect, accounting for object-fit: contain letterboxing", () => {
     render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
 

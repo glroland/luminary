@@ -265,29 +265,18 @@ def _load_florence():
         return _florence_model, _florence_processor
 
 
-def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:
-    from PIL import Image, ImageOps  # Pillow is a core dependency, always safe to import
-
-    # _load_florence() raises ChatNotConfigured (not ImportError) if
-    # torch/transformers aren't installed -- only import torch here, after
-    # that's already succeeded, so this function never raises a raw
-    # ImportError itself.
+def _run_florence_task(image, task: str, phrase: str = "") -> dict:
+    """Shared Florence-2 inference step: load the model, run `task` (with
+    `phrase` appended for the one task that takes free text -- see module
+    docstring), and return the parsed result for that task key. `image`
+    must already be RGB and EXIF-transposed (see caption_image/_ask_florence
+    for why that matters)."""
     model, processor = _load_florence()
     import torch
 
     device = get_florence_device()
     dtype = torch.float16 if device.startswith("cuda") else torch.float32
 
-    image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
-    # Match sync.py's indexing: the raw sensor pixel grid ignores EXIF
-    # Orientation, but the browser (and Photo.width/height, recorded from
-    # sync.py post-transpose) both honor it. Grounding box coordinates must
-    # be computed in that same post-transpose space, or they'll be rotated
-    # relative to what the frontend overlays them on.
-    image = ImageOps.exif_transpose(image) or image
-
-    phrase = message.strip()
-    task = _FLORENCE_GROUNDING_TASK if phrase else _FLORENCE_CAPTION_TASK
     # run_example() in the model card concatenates task token and text input
     # with no separator -- the model was trained on exactly that format.
     prompt = task + phrase if phrase else task
@@ -301,12 +290,43 @@ def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:
     )
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
     parsed = processor.post_process_generation(generated_text, task=task, image_size=(image.width, image.height))
-    result = parsed[task]
+    return parsed[task]
 
-    if task == _FLORENCE_GROUNDING_TASK:
-        text, boxes = _format_grounding_result(result, phrase)
-        return ChatReply(text=text, boxes=boxes)
-    return ChatReply(text=result)
+
+def caption_image(image) -> str:
+    """Run Florence-2's <MORE_DETAILED_CAPTION> task on an already-opened,
+    already RGB, already EXIF-transposed image (e.g. the one sync.py opens
+    per-file) and return the plain-text description. Shared between
+    _ask_florence's empty-message case and sync.py's auto-description-on-
+    index path, so both describe the image the same way. Raises
+    ChatNotConfigured if torch/transformers aren't installed, same as
+    ask()."""
+    return _run_florence_task(image, _FLORENCE_CAPTION_TASK)
+
+
+def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:
+    from PIL import Image, ImageOps  # Pillow is a core dependency, always safe to import
+
+    # Raise ChatNotConfigured (missing torch/transformers) before doing
+    # anything else, including decoding photo_bytes as an image -- a
+    # genuinely malformed image shouldn't mask a "not configured" error.
+    _load_florence()
+
+    image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+    # Match sync.py's indexing: the raw sensor pixel grid ignores EXIF
+    # Orientation, but the browser (and Photo.width/height, recorded from
+    # sync.py post-transpose) both honor it. Grounding box coordinates must
+    # be computed in that same post-transpose space, or they'll be rotated
+    # relative to what the frontend overlays them on.
+    image = ImageOps.exif_transpose(image) or image
+
+    phrase = message.strip()
+    if not phrase:
+        return ChatReply(text=caption_image(image))
+
+    result = _run_florence_task(image, _FLORENCE_GROUNDING_TASK, phrase)
+    text, boxes = _format_grounding_result(result, phrase)
+    return ChatReply(text=text, boxes=boxes)
 
 
 def _format_grounding_result(result: dict, phrase: str) -> tuple[str, list[dict]]:

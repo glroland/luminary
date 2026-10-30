@@ -13,6 +13,10 @@ class Photo(BaseModel):
     created_at: str
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # Florence-2's <MORE_DETAILED_CAPTION> description, generated during
+    # sync (see sync.py) -- null until a sync has run with Florence-2
+    # available, or if it couldn't be generated for this photo.
+    description: Optional[str] = None
 
 
 class PhotoList(BaseModel):

@@ -13,7 +13,9 @@ THUMBNAIL_SIZE = (320, 320)
 # Columns returned for listing/metadata lookups. Excludes `thumbnail`, which
 # is only fetched by get_thumbnail() -- pulling it in here would mean every
 # photo's thumbnail bytes get read off disk just to list filenames.
-METADATA_COLUMNS = "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude"
+METADATA_COLUMNS = (
+    "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude, description"
+)
 
 # Protocols whose fsspec filesystem accepts plain `username`/`password`
 # kwargs. Other backends authenticate differently (S3 via boto3's standard

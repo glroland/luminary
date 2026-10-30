@@ -150,6 +150,153 @@ def test_sync_applies_exif_orientation_so_portrait_photos_arent_indexed_as_lands
     assert thumbnail.width < thumbnail.height
 
 
+def test_sync_generates_description_via_florence_for_new_photos(client, tmp_path, monkeypatch):
+    from app import chat
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a red square on a plain background")
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)
+
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["description"] == "a red square on a plain background"
+
+
+def test_sync_leaves_description_null_when_florence_isnt_configured(client, tmp_path):
+    # Default fixture behavior (see conftest.py's `client` fixture): sync
+    # must still complete normally, just without a description.
+    write_image(tmp_path / "photos" / "sample.jpg")
+
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["description"] is None
+
+
+def test_sync_logs_but_does_not_fail_when_florence_raises_unexpectedly(client, tmp_path, monkeypatch, caplog):
+    from app import chat
+
+    def boom(image):
+        raise RuntimeError("model inference failed")
+
+    monkeypatch.setattr(chat, "caption_image", boom)
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+
+    with caplog.at_level(logging.WARNING, logger="app.sync"):
+        status = sync_and_wait(client)
+
+    assert status["status"] == "completed"
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["description"] is None
+    assert any(
+        record.levelno == logging.WARNING and "sample.jpg" in record.message
+        for record in caplog.records
+    )
+
+
+def test_sync_backfills_missing_description_without_touching_an_existing_thumbnail(client, tmp_path, monkeypatch):
+    # Simulates a library indexed before Florence-2 chat was configured:
+    # the thumbnail is already there, only the description is missing.
+    # The repeat sync below must add the description without burning the
+    # cost of re-thumbnailing every photo.
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)  # florence unconfigured by default -- no description yet
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    thumbnail_before = client.get(f"/api/photos/{photo_id}/thumbnail").content
+    assert client.get(f"/api/photos/{photo_id}").json()["description"] is None
+
+    from app import chat
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a backfilled description")
+
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["updated"] == 1
+    assert status["inserted"] == 0
+
+    photo = client.get(f"/api/photos/{photo_id}").json()
+    assert photo["description"] == "a backfilled description"
+    assert photo["id"] == photo_id  # same row, not a new insert
+    assert client.get(f"/api/photos/{photo_id}/thumbnail").content == thumbnail_before
+
+
+def test_sync_skips_reprocessing_a_fully_populated_unchanged_file(client, tmp_path, monkeypatch):
+    from app import chat
+
+    calls = []
+    monkeypatch.setattr(chat, "caption_image", lambda image: calls.append(1) or "a description")
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)
+    assert len(calls) == 1
+
+    # Nothing changed and every field is already populated -- the second
+    # sync should be a pure no-op for this file: "unchanged", no second
+    # call into Florence-2.
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["inserted"] == 0
+    assert status["updated"] == 0
+    assert len(calls) == 1
+
+
+def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_description(client, tmp_path, monkeypatch):
+    # Simulates a thumbnail that failed to generate on a previous sync (a
+    # transient read error) while a description somehow already exists --
+    # the backfill must regenerate just the thumbnail and leave the
+    # existing description alone (in particular: not invoke Florence-2
+    # again for it).
+    from app import chat
+    from app.database import get_connection
+
+    # If this gets called, it means the backfill wrongly re-ran captioning
+    # even though a description already existed -- the final assertion
+    # below would then see this sentinel instead of the original text.
+    monkeypatch.setattr(chat, "caption_image", lambda image: "SHOULD NOT BE CALLED")
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE photos SET thumbnail = NULL, description = 'a pre-existing description' WHERE id = ?",
+            (photo_id,),
+        )
+        conn.commit()
+    assert client.get(f"/api/photos/{photo_id}/thumbnail").status_code == 404
+    assert client.get(f"/api/photos/{photo_id}").json()["description"] == "a pre-existing description"
+
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["updated"] == 1
+
+    photo = client.get(f"/api/photos/{photo_id}").json()
+    assert photo["description"] == "a pre-existing description"
+    thumbnail_response = client.get(f"/api/photos/{photo_id}/thumbnail")
+    assert len(thumbnail_response.content) > 0
+
+
+def test_sync_regenerates_description_when_a_file_changes_in_place(client, tmp_path, monkeypatch):
+    from app import chat
+
+    captions = iter(["first caption", "second caption"])
+    monkeypatch.setattr(chat, "caption_image", lambda image: next(captions))
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    assert client.get(f"/api/photos/{photo_id}").json()["description"] == "first caption"
+
+    write_image(image_path, size=(40, 40))
+    sync_and_wait(client)
+    assert client.get(f"/api/photos/{photo_id}").json()["description"] == "second caption"
+
+
 def test_sync_status_defaults_to_idle(client):
     status = client.get("/api/sync/status").json()
     assert status == {

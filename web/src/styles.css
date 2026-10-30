@@ -211,6 +211,12 @@ body {
   color: #4a6fa1;
 }
 
+.photo-modal-meta p.photo-modal-description {
+  margin-top: 0.5rem;
+  color: #1f2d3d;
+  line-height: 1.4;
+}
+
 .photo-map,
 .photo-map-empty {
   height: 220px;

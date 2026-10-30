@@ -15,10 +15,25 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LUMINARY_PHOTOS_URI", str(tmp_path / "photos"))
     monkeypatch.setenv("LUMINARY_DATABASE_PATH", str(tmp_path / "photos.db"))
 
+    from app import chat
     from fastapi.testclient import TestClient
 
     from app.main import app
     from app.sync import progress as sync_progress
+
+    # Sync (triggered by most tests that use this fixture) generates a
+    # description per inserted/updated photo via chat.caption_image, which
+    # calls chat._load_florence() -- left un-mocked, that downloads
+    # Florence-2's real weights from HuggingFace on first use. Default it
+    # to "not configured" here; tests that specifically exercise
+    # description generation override this themselves via monkeypatch,
+    # which layers on top and unwinds correctly at teardown either way.
+    # (Tests that don't request this fixture, e.g. chat.py's own
+    # _load_florence unit tests, are unaffected.)
+    def _unconfigured():
+        raise chat.ChatNotConfigured("Florence-2 not configured in tests")
+
+    monkeypatch.setattr(chat, "_load_florence", _unconfigured)
 
     sync_progress.reset()
 

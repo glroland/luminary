@@ -110,6 +110,7 @@ export default function PhotoModal({ photo, onClose }) {
               {photo.width} &times; {photo.height}
             </p>
             <p>{new Date(photo.created_at).toLocaleString()}</p>
+            {photo.description && <p className="photo-modal-description">{photo.description}</p>}
           </div>
 
           <PhotoMap latitude={photo.latitude} longitude={photo.longitude} />
