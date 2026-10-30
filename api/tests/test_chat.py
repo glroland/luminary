@@ -374,26 +374,51 @@ def _make_image():
     return Image.open(io.BytesIO(_make_jpeg_bytes())).convert("RGB")
 
 
-def test_detect_faces_grounds_the_fixed_phrase_face(monkeypatch):
+def test_detect_faces_runs_object_detection_and_keeps_only_face_labels(monkeypatch):
+    # Regression coverage: phrase-grounding on "face" (an earlier
+    # implementation) only ever located a single region per image against
+    # real Florence-2 output, no matter how many faces were actually in
+    # frame -- see chat.py's module docstring. <OD> is what correctly
+    # returns one "human face" detection per visible face, mixed in with
+    # whatever else it detects, which must be filtered out.
     processor = _FakeFlorenceProcessor(
-        {"bboxes": [[1.2, 3.4, 5.6, 7.8], [10.0, 20.0, 30.0, 40.0]], "labels": ["face", "face"]}
+        {
+            "bboxes": [[1.2, 3.4, 5.6, 7.8], [10.0, 20.0, 30.0, 40.0], [50.0, 60.0, 70.0, 80.0]],
+            "labels": ["human face", "jacket", "human face"],
+        }
     )
     monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
 
     boxes = chat.detect_faces(_make_image())
 
-    assert processor.calls["prompt"] == chat._FLORENCE_GROUNDING_TASK + "face"
-    assert processor.calls["task"] == chat._FLORENCE_GROUNDING_TASK
+    assert processor.calls["prompt"] == chat._FLORENCE_OD_TASK
+    assert processor.calls["task"] == chat._FLORENCE_OD_TASK
     # Plain {x1,y1,x2,y2} dicts, no "label" -- sync.py stores these
-    # straight into the faces table, which has no label column.
+    # straight into the faces table, which has no label column. The
+    # "jacket" detection in between is filtered out.
     assert boxes == [
         {"x1": 1.2, "y1": 3.4, "x2": 5.6, "y2": 7.8},
-        {"x1": 10.0, "y1": 20.0, "x2": 30.0, "y2": 40.0},
+        {"x1": 50.0, "y1": 60.0, "x2": 70.0, "y2": 80.0},
     ]
+
+
+def test_detect_faces_matches_face_labels_case_insensitively(monkeypatch):
+    processor = _FakeFlorenceProcessor({"bboxes": [[1.0, 2.0, 3.0, 4.0]], "labels": ["Human Face"]})
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    assert chat.detect_faces(_make_image()) == [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}]
 
 
 def test_detect_faces_returns_an_empty_list_when_no_faces_are_found(monkeypatch):
     processor = _FakeFlorenceProcessor({"bboxes": [], "labels": []})
+    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
+
+    assert chat.detect_faces(_make_image()) == []
+
+
+def test_detect_faces_returns_an_empty_list_when_od_finds_no_faces(monkeypatch):
+    # <OD> ran and found objects, just none labeled as a face.
+    processor = _FakeFlorenceProcessor({"bboxes": [[1.0, 2.0, 3.0, 4.0]], "labels": ["van"]})
     monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
 
     assert chat.detect_faces(_make_image()) == []

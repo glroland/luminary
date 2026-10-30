@@ -34,11 +34,19 @@ ask_stream() vs. the always-available, full-reply-at-once ask().
 caption_image() and detect_faces() are the two Florence-2 entry points
 sync.py uses directly (outside the chat.ask()/ChatReply flow above) to
 auto-describe and face-detect a photo at index time: caption_image() is
-<MORE_DETAILED_CAPTION>, and detect_faces() is the same grounding task
-_ask_florence uses for a user's chat message, but grounding the fixed
-phrase "face" instead. Both raise ChatNotConfigured exactly like ask()
-does, which is how sync.py knows to leave that work for a later sync
-rather than fail it.
+<MORE_DETAILED_CAPTION>. detect_faces() is deliberately *not* built on
+<CAPTION_TO_PHRASE_GROUNDING> (the task _ask_florence uses for a user's
+chat message) despite "face" seeming like an obvious phrase to ground --
+confirmed empirically against real Florence-2-base output, grounding is
+built to locate the single region a referring phrase names, not enumerate
+every instance of a category: grounding "face"/"faces"/"a face" on a
+multi-person photo all returned exactly one box, no matter how many faces
+were actually in frame. detect_faces() instead uses <OD> (general object
+detection) and keeps only the detections whose label mentions "face" --
+confirmed to correctly return one "human face" detection per visible face
+on the same photos. Both caption_image()/detect_faces() raise
+ChatNotConfigured exactly like ask() does, which is how sync.py knows to
+leave that work for a later sync rather than fail it.
 """
 
 import base64
@@ -313,25 +321,41 @@ def caption_image(image) -> str:
     return _run_florence_task(image, _FLORENCE_CAPTION_TASK)
 
 
-# Fixed phrase sync.py grounds for face detection -- not user-provided text,
-# so there's no "empty message" case to handle the way _ask_florence does.
-_FLORENCE_FACE_PHRASE = "face"
+# General object detection, *not* phrase grounding -- see module
+# docstring for why: grounding a category phrase like "face" only ever
+# located a single region per image in testing against real Florence-2
+# output, regardless of how many faces were actually present, while <OD>
+# correctly emits one "human face" detection per visible face.
+_FLORENCE_OD_TASK = "<OD>"
+
+# Substring match (case-insensitive) against <OD>'s free-text labels, not
+# an exact-equality check -- confirmed as "human face" against real
+# Florence-2-base output, but it's model-generated text, not a fixed
+# vocabulary token, so matching loosely guards against minor wording
+# differences (e.g. a different Florence-2 model/version phrasing it as
+# just "face").
+_FACE_LABEL_SUBSTRING = "face"
 
 
 def detect_faces(image) -> list[dict]:
-    """Run Florence-2's phrase-grounding task (_FLORENCE_GROUNDING_TASK)
-    with "face" as the phrase, on an already-opened, already RGB, already
-    EXIF-transposed image (same precondition as caption_image). Returns
-    every detected face as a {"x1","y1","x2","y2"} box in the image's own
+    """Run Florence-2's general object-detection task (<OD>) on an
+    already-opened, already RGB, already EXIF-transposed image (same
+    precondition as caption_image), and return every detection whose label
+    mentions "face" as a {"x1","y1","x2","y2"} box in the image's own
     pixel coordinate space -- same convention as ChatReply.boxes, i.e. the
     full-resolution photo's space, not whatever resolution Florence-2
     processed internally. An empty list means no faces were found, which
     is a valid, successful result -- not a failure. Raises
     ChatNotConfigured if torch/transformers aren't installed, same as
     ask()/caption_image()."""
-    result = _run_florence_task(image, _FLORENCE_GROUNDING_TASK, _FLORENCE_FACE_PHRASE)
+    result = _run_florence_task(image, _FLORENCE_OD_TASK)
     bboxes = result.get("bboxes", [])
-    return [{"x1": x1, "y1": y1, "x2": x2, "y2": y2} for x1, y1, x2, y2 in bboxes]
+    labels = result.get("labels", [])
+    return [
+        {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+        for (x1, y1, x2, y2), label in zip(bboxes, labels)
+        if _FACE_LABEL_SUBSTRING in label.lower()
+    ]
 
 
 def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:

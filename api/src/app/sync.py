@@ -19,7 +19,9 @@ reconciliation, which degrades gracefully to doing only as much work as a
 given file actually needs.
 
 Each inserted/updated file also gets a `description` (chat.caption_image)
-and its faces detected (chat.detect_faces, phrase-grounding on "face",
+and its faces detected (chat.detect_faces, general object detection
+filtered to "face" labels -- see chat.py's module docstring for why that,
+not phrase grounding, is what finds *every* face rather than just one --
 stored one-to-many in the `faces` table via storage.replace_faces) via
 Florence-2. `description` doubles as the signal for "has Florence-2 already
 run on this photo at all", covering face detection too, not just the
