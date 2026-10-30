@@ -187,6 +187,29 @@ body {
   white-space: nowrap;
 }
 
+/* Stored-faces overlay (toggled by pressing "f") -- a distinct color from
+   the yellow chat-grounding boxes above, and no label badge: a face box
+   speaks for itself once the toggle's been pressed. */
+.photo-modal-bbox-face {
+  border-color: #00e5a0;
+  background: rgba(0, 229, 160, 0.12);
+}
+
+.photo-modal-faces-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  margin: 0;
+  background: rgba(11, 31, 58, 0.85);
+  color: #fff;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .photo-modal-sidebar {
   flex: 1;
   min-width: 280px;

@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as client from "../api/client.js";
 import PhotoModal from "./PhotoModal.jsx";
 
 vi.mock("./PhotoMap.jsx", () => ({ default: () => <div data-testid="photo-map" /> }));
@@ -12,6 +13,14 @@ vi.mock("./PhotoChat.jsx", () => ({
     </button>
   ),
 }));
+vi.mock("../api/client.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetchFaces: vi.fn(),
+}));
+
+function pressF() {
+  fireEvent.keyDown(window, { key: "f" });
+}
 
 const PHOTO = {
   id: "1",
@@ -24,6 +33,10 @@ const PHOTO = {
 };
 
 describe("PhotoModal", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders nothing when there's no photo", () => {
     const { container } = render(<PhotoModal photo={null} onClose={() => {}} />);
     expect(container).toBeEmptyDOMElement();
@@ -85,5 +98,83 @@ describe("PhotoModal", () => {
     fireEvent.click(screen.getByText("trigger-boxes"));
 
     expect(document.querySelector(".photo-modal-bbox")).not.toBeInTheDocument();
+  });
+
+  function measureImage() {
+    const img = document.querySelector(".photo-modal-image-pane img");
+    const wrap = document.querySelector(".photo-modal-image-wrap");
+    vi.spyOn(wrap, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 800 });
+    vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 800 });
+    Object.defineProperty(img, "naturalWidth", { value: 1000, configurable: true });
+    Object.defineProperty(img, "naturalHeight", { value: 800, configurable: true });
+    fireEvent.load(img);
+  }
+
+  it("fetches and shows stored face boxes when 'f' is pressed", async () => {
+    client.fetchFaces.mockResolvedValue([{ x1: 100, y1: 100, x2: 300, y2: 300 }]);
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+
+    pressF();
+
+    expect(screen.getByText("Loading faces…")).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument());
+    expect(client.fetchFaces).toHaveBeenCalledWith("1");
+    expect(screen.getByText("1 face detected (press F to hide)")).toBeInTheDocument();
+    // Face boxes are unlabeled, unlike the chat-grounding boxes.
+    expect(document.querySelector(".photo-modal-bbox-face .photo-modal-bbox-label")).not.toBeInTheDocument();
+  });
+
+  it("hides faces on a second press without re-fetching", async () => {
+    client.fetchFaces.mockResolvedValue([{ x1: 100, y1: 100, x2: 300, y2: 300 }]);
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+
+    pressF();
+    await waitFor(() => expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument());
+
+    pressF();
+    expect(document.querySelector(".photo-modal-bbox-face")).not.toBeInTheDocument();
+    expect(document.querySelector(".photo-modal-faces-hint")).not.toBeInTheDocument();
+
+    pressF();
+    expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument();
+    expect(client.fetchFaces).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a message when no faces were detected", async () => {
+    client.fetchFaces.mockResolvedValue([]);
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+
+    pressF();
+
+    await waitFor(() => expect(screen.getByText("No faces detected for this photo.")).toBeInTheDocument());
+  });
+
+  it("ignores 'f' while typing in an editable field", () => {
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: "f" });
+    document.body.removeChild(input);
+
+    expect(client.fetchFaces).not.toHaveBeenCalled();
+    expect(document.querySelector(".photo-modal-faces-hint")).not.toBeInTheDocument();
+  });
+
+  it("resets the faces overlay when the photo changes", async () => {
+    client.fetchFaces.mockResolvedValue([{ x1: 100, y1: 100, x2: 300, y2: 300 }]);
+    const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+
+    pressF();
+    await waitFor(() => expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument());
+
+    rerender(<PhotoModal photo={{ ...PHOTO, id: "2" }} onClose={() => {}} />);
+
+    expect(document.querySelector(".photo-modal-bbox-face")).not.toBeInTheDocument();
+    expect(document.querySelector(".photo-modal-faces-hint")).not.toBeInTheDocument();
   });
 });

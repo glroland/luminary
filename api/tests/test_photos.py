@@ -70,3 +70,33 @@ def test_get_missing_photo_returns_404(client):
 def test_delete_missing_photo_returns_404(client):
     response = client.delete("/api/photos/does-not-exist")
     assert response.status_code == 404
+
+
+def test_get_faces_returns_stored_boxes(client, tmp_path, monkeypatch):
+    from app import chat
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "two people")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+
+    response = client.get(f"/api/photos/{photo_id}/faces")
+    assert response.status_code == 200
+    assert response.json() == {"faces": [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}]}
+
+
+def test_get_faces_returns_empty_list_when_no_faces_were_detected(client, tmp_path):
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)  # florence unconfigured by default -- no faces ever ran
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+
+    response = client.get(f"/api/photos/{photo_id}/faces")
+    assert response.status_code == 200
+    assert response.json() == {"faces": []}
+
+
+def test_get_faces_for_missing_photo_returns_404(client):
+    response = client.get("/api/photos/does-not-exist/faces")
+    assert response.status_code == 404
