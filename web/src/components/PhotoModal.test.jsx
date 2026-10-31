@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as client from "../api/client.js";
 import PhotoModal from "./PhotoModal.jsx";
@@ -34,6 +34,15 @@ async function waitForElement(selector) {
   return document.querySelector(selector);
 }
 
+// PhotoModal now fetches faces/individuals eagerly as soon as a photo
+// opens (see its "People in this photo" panel), not just when "f" is
+// pressed -- tests that don't otherwise await anything need to flush that
+// resolution before finishing, or React logs an "update not wrapped in
+// act" warning for a state update landing after the test's assertions.
+async function flush() {
+  await act(async () => {});
+}
+
 const PHOTO = {
   id: "1",
   filename: "beach.jpg",
@@ -46,8 +55,11 @@ const PHOTO = {
 
 describe("PhotoModal", () => {
   beforeEach(() => {
-    // Default for tests that press "f" but don't care about the people
-    // catalog -- individual tagging tests override this themselves.
+    // Both are now fetched eagerly as soon as a photo opens (see
+    // PhotoModal.jsx's "People in this photo" panel), not just when "f"
+    // is pressed -- default them for tests that don't care about faces/
+    // individuals; tests that do override these themselves.
+    client.fetchFaces.mockResolvedValue([]);
     client.fetchIndividuals.mockResolvedValue([]);
   });
 
@@ -60,9 +72,10 @@ describe("PhotoModal", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders photo metadata and calls onClose", () => {
+  it("renders photo metadata and calls onClose", async () => {
     const onClose = vi.fn();
     render(<PhotoModal photo={PHOTO} onClose={onClose} />);
+    await flush();
 
     expect(screen.getByText("beach.jpg")).toBeInTheDocument();
     expect(screen.getByText("1000 × 800")).toBeInTheDocument();
@@ -71,18 +84,21 @@ describe("PhotoModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("renders the florence-generated description when present", () => {
+  it("renders the florence-generated description when present", async () => {
     render(<PhotoModal photo={{ ...PHOTO, description: "A sandy beach at sunset." }} onClose={() => {}} />);
+    await flush();
     expect(screen.getByText("A sandy beach at sunset.")).toBeInTheDocument();
   });
 
-  it("renders no description paragraph when absent", () => {
+  it("renders no description paragraph when absent", async () => {
     render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    await flush();
     expect(document.querySelector(".photo-modal-description")).not.toBeInTheDocument();
   });
 
-  it("positions a box overlay in pixels from the image's measured visible rect, accounting for object-fit: contain letterboxing", () => {
+  it("positions a box overlay in pixels from the image's measured visible rect, accounting for object-fit: contain letterboxing", async () => {
     render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    await flush();
 
     const img = document.querySelector(".photo-modal-image-pane img");
     const wrap = document.querySelector(".photo-modal-image-wrap");
@@ -110,8 +126,9 @@ describe("PhotoModal", () => {
     expect(screen.getByText("eye")).toBeInTheDocument();
   });
 
-  it("does not render a box overlay before the image has been measured", () => {
+  it("does not render a box overlay before the image has been measured", async () => {
     render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    await flush();
 
     fireEvent.click(screen.getByText("trigger-boxes"));
 
@@ -170,15 +187,15 @@ describe("PhotoModal", () => {
     await waitFor(() => expect(screen.getByText("No faces detected for this photo.")).toBeInTheDocument());
   });
 
-  it("ignores 'f' while typing in an editable field", () => {
+  it("ignores 'f' while typing in an editable field", async () => {
     render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    await flush();
 
     const input = document.createElement("input");
     document.body.appendChild(input);
     fireEvent.keyDown(input, { key: "f" });
     document.body.removeChild(input);
 
-    expect(client.fetchFaces).not.toHaveBeenCalled();
     expect(document.querySelector(".photo-modal-faces-hint")).not.toBeInTheDocument();
   });
 
@@ -191,6 +208,7 @@ describe("PhotoModal", () => {
     await waitFor(() => expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument());
 
     rerender(<PhotoModal photo={{ ...PHOTO, id: "2" }} onClose={() => {}} />);
+    await flush();
 
     expect(document.querySelector(".photo-modal-bbox-face")).not.toBeInTheDocument();
     expect(document.querySelector(".photo-modal-faces-hint")).not.toBeInTheDocument();
@@ -293,5 +311,52 @@ describe("PhotoModal", () => {
     await waitFor(() => expect(client.createIndividual).toHaveBeenCalledWith("Bob"));
     await waitFor(() => expect(screen.getByText("Bob")).toBeInTheDocument());
     expect(screen.getByPlaceholderText("Add a person…").value).toBe("");
+  });
+
+  it("shows an empty state in 'People in this photo' before any face is tagged", async () => {
+    client.fetchFaces.mockResolvedValue([{ id: "face-1", x1: 100, y1: 100, x2: 300, y2: 300, person_id: null }]);
+
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("No one identified in this photo yet.")).toBeInTheDocument());
+  });
+
+  it("lists manually and automatically tagged individuals in 'People in this photo', without pressing 'f'", async () => {
+    client.fetchFaces.mockResolvedValue([
+      { id: "face-1", x1: 100, y1: 100, x2: 300, y2: 300, person_id: "person-1", tag_source: "manual" },
+      { id: "face-2", x1: 10, y1: 10, x2: 30, y2: 30, person_id: "person-2", tag_source: "auto" },
+    ]);
+    client.fetchIndividuals.mockResolvedValue([
+      { id: "person-1", name: "Alice", has_representative_thumbnail: false, created_at: "2024-01-01T00:00:00Z" },
+      { id: "person-2", name: "Bob", has_representative_thumbnail: false, created_at: "2024-01-01T00:00:00Z" },
+    ]);
+
+    // Deliberately never presses "f" -- this panel is always visible.
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+
+    const peopleList = await waitForElement(".photo-modal-people-in-photo-list");
+    expect(within(peopleList).getByText("Alice")).toBeInTheDocument();
+    expect(within(peopleList).getByText("Bob")).toBeInTheDocument();
+    expect(within(peopleList).getByText("auto-detected")).toBeInTheDocument();
+    // Manual tags get no badge.
+    expect(within(peopleList).getAllByText("auto-detected")).toHaveLength(1);
+  });
+
+  it("resets 'People in this photo' when the photo changes", async () => {
+    client.fetchFaces.mockResolvedValue([
+      { id: "face-1", x1: 100, y1: 100, x2: 300, y2: 300, person_id: "person-1", tag_source: "manual" },
+    ]);
+    client.fetchIndividuals.mockResolvedValue([
+      { id: "person-1", name: "Alice", has_representative_thumbnail: false, created_at: "2024-01-01T00:00:00Z" },
+    ]);
+
+    const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    client.fetchFaces.mockResolvedValue([]);
+    rerender(<PhotoModal photo={{ ...PHOTO, id: "2" }} onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("No one identified in this photo yet.")).toBeInTheDocument());
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
   });
 });

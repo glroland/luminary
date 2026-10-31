@@ -1,14 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createIndividual,
   deleteIndividual,
   faceThumbnailUrl,
+  fetchFaceRefreshStatus,
   fetchIndividualFaces,
   fetchIndividuals,
   individualThumbnailUrl,
+  refreshFaces,
   untagFace,
   updateIndividual,
 } from "../api/client.js";
+
+const REFRESH_POLL_INTERVAL_MS = 1000;
+const REFRESH_DONE_DISPLAY_MS = 2000;
 
 export default function ManagementPage({ onBack, onNavigateToPhoto }) {
   const [individuals, setIndividuals] = useState(null);
@@ -23,11 +28,18 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
   const [facesByIndividual, setFacesByIndividual] = useState({});
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
+  // "Refresh Faces" (recognition.py's auto-matching job) -- null means
+  // idle/no job ever started this page visit. Polling mirrors App.jsx's
+  // pollSyncStatus/SyncStatus pattern, scoped locally to this page instead
+  // of global app state, since it's specific to the individuals catalog.
+  const [refreshStatus, setRefreshStatus] = useState(null);
+  const refreshPollRef = useRef(null);
 
   useEffect(() => {
     fetchIndividuals()
       .then(setIndividuals)
       .catch((err) => setPageError(err.message));
+    return () => clearInterval(refreshPollRef.current);
   }, []);
 
   function sortByName(list) {
@@ -49,6 +61,50 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
       }
       return next;
     });
+  }
+
+  // Re-fetches anything "Refresh Faces" may have changed: the catalog
+  // (new representative thumbnails) and every accordion that's ever been
+  // expanded (new auto-matched faces for it). Collapsed-and-never-opened
+  // accordions need nothing -- they'll fetch fresh on first expand anyway.
+  function reloadAfterRefresh() {
+    fetchIndividuals()
+      .then(setIndividuals)
+      .catch((err) => setPageError(err.message));
+    Object.keys(facesByIndividual).forEach((personId) => {
+      fetchIndividualFaces(personId)
+        .then((faces) => setFacesByIndividual((prev) => ({ ...prev, [personId]: faces })))
+        .catch((err) => setPageError(err.message));
+    });
+  }
+
+  function pollRefreshStatus() {
+    clearInterval(refreshPollRef.current);
+    refreshPollRef.current = setInterval(async () => {
+      try {
+        const status = await fetchFaceRefreshStatus();
+        if (status.status === "running") {
+          setRefreshStatus(status);
+          return;
+        }
+        clearInterval(refreshPollRef.current);
+        setRefreshStatus(status);
+        if (status.status === "completed") reloadAfterRefresh();
+        setTimeout(() => setRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
+      } catch {
+        clearInterval(refreshPollRef.current);
+        setRefreshStatus(null);
+      }
+    }, REFRESH_POLL_INTERVAL_MS);
+  }
+
+  function handleRefreshFaces() {
+    refreshFaces()
+      .then((status) => {
+        setRefreshStatus(status);
+        pollRefreshStatus();
+      })
+      .catch((err) => setPageError(err.message));
   }
 
   function handleAdd(event) {
@@ -123,6 +179,38 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
         &larr; Back to gallery
       </button>
       <h2>Manage individuals</h2>
+
+      <div className="management-refresh-faces">
+        {!refreshStatus || refreshStatus.status === "idle" ? (
+          <button type="button" className="refresh-button" onClick={handleRefreshFaces}>
+            Refresh Faces
+          </button>
+        ) : refreshStatus.status === "error" ? (
+          <div className="sync-status sync-status-error" role="status">
+            Refresh failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
+          </div>
+        ) : (
+          <div className="sync-status" role="status" aria-live="polite">
+            <span className="sync-status-label">
+              {refreshStatus.status === "completed"
+                ? `Done -- ${refreshStatus.matched} matched`
+                : `Matching faces… ${
+                    refreshStatus.total > 0 ? Math.round((refreshStatus.processed / refreshStatus.total) * 100) : 0
+                  }%`}
+            </span>
+            <div className="sync-progress-track">
+              <div
+                className="sync-progress-fill"
+                style={{
+                  width: `${
+                    refreshStatus.total > 0 ? Math.round((refreshStatus.processed / refreshStatus.total) * 100) : 0
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       {pageError && (
         <p role="alert" className="error">
@@ -230,6 +318,9 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
                           >
                             <img src={faceThumbnailUrl(face.id)} alt="" />
                           </button>
+                          {face.tag_source === "auto" && (
+                            <span className="management-face-auto-badge">auto</span>
+                          )}
                           <button
                             type="button"
                             className="management-face-remove"

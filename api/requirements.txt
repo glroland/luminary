@@ -33,3 +33,16 @@ transformers==4.49.0
 accelerate==1.15.0
 timm==1.0.30
 einops==0.8.2
+
+# Automatic face recognition ("Refresh Faces", recognition.py) -- matches
+# an already-detected face (Florence-2 above already supplies the box) to
+# a catalogued individual by embedding similarity. Deliberately not
+# DeepFace: its strong recognition models need TensorFlow, a *second*
+# multi-GB ML framework alongside the torch/transformers stack Florence-2
+# already requires above. facenet-pytorch's InceptionResnetV1 is
+# torch-native -- same install story as torch already has above -- and we
+# only use its embedding model, never its own MTCNN face detector.
+facenet-pytorch==2.5.3
+# Matches torch==2.15.0 above (the index this environment resolves against
+# only has 0.29.2 for it -- older 0.x releases are yanked upstream).
+torchvision==0.29.2

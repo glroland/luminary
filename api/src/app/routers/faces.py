@@ -2,12 +2,22 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import people
-from ..models import FaceBox, TagFaceRequest
+from .. import people, recognition
+from ..models import FaceBox, FaceRefreshStatus, TagFaceRequest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.post("/faces/refresh", response_model=FaceRefreshStatus)
+def refresh_faces() -> dict:
+    return recognition.start_refresh()
+
+
+@router.get("/faces/refresh/status", response_model=FaceRefreshStatus)
+def get_refresh_status() -> dict:
+    return recognition.progress.snapshot()
 
 
 @router.post("/faces/{face_id}/tag", response_model=FaceBox)

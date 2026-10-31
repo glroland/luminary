@@ -3,6 +3,11 @@ catalog (`faces.person_id`) -- see routers/individuals.py and
 routers/faces.py. Distinct from sync.py's Florence-2 face *detection*: this
 module never detects anything, it only records a user's manual assignment
 of an already-detected face (storage.get_faces/replace_faces) to a person.
+See recognition.py for the *automatic* counterpart -- "Refresh Faces"
+auto-assigns `person_id` to other faces by embedding similarity against the
+faces this module tags manually, writing the same columns tag_face does
+(plus `tag_source`/`match_confidence` -- see faces.tag_source's comment in
+db/create_tables.sql) so both kinds of tag render the same way everywhere.
 
 Tagging a face also crops that face's rectangle out of the photo's original
 bytes, storing that crop both on the face itself (`faces.thumbnail`, so the
@@ -81,12 +86,16 @@ def update_individual(person_id: str, name: str) -> Optional[dict]:
 
 
 def delete_individual(person_id: str) -> bool:
-    """Delete an individual and untag every face tagged to them (no FK
-    cascade -- see db/create_tables.sql -- so that's done explicitly here,
-    same pattern as storage.delete_photo clearing a photo's faces). Returns
-    whether the individual existed."""
+    """Delete an individual and untag every face tagged to them, manual or
+    auto (no FK cascade -- see db/create_tables.sql -- so that's done
+    explicitly here, same pattern as storage.delete_photo clearing a
+    photo's faces). Returns whether the individual existed."""
     with get_connection() as conn:
-        conn.execute("UPDATE faces SET person_id = NULL, thumbnail = NULL WHERE person_id = %s", (person_id,))
+        conn.execute(
+            "UPDATE faces SET person_id = NULL, thumbnail = NULL, tag_source = NULL, match_confidence = NULL "
+            "WHERE person_id = %s",
+            (person_id,),
+        )
         cursor = conn.execute("DELETE FROM individuals WHERE id = %s", (person_id,))
         conn.commit()
         return cursor.rowcount > 0
@@ -107,7 +116,7 @@ def list_faces_for_individual(person_id: str) -> list[dict]:
     order by "most recently tagged" (see this module's docstring)."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, photo_id FROM faces WHERE person_id = %s ORDER BY id", (person_id,)
+            "SELECT id, photo_id, tag_source FROM faces WHERE person_id = %s ORDER BY id", (person_id,)
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -119,23 +128,29 @@ def get_face_thumbnail(face_id: str) -> Optional[bytes]:
 
 
 def untag_face(face_id: str) -> bool:
-    """Clear a face's tag (person_id and its thumbnail together -- see this
-    module's docstring) without deleting the face/detection itself. Returns
-    whether the face existed."""
+    """Clear a face's tag (person_id, thumbnail, tag_source, and
+    match_confidence together -- see this module's docstring) without
+    deleting the face/detection itself -- works the same whether the tag
+    was manual or recognition.py's auto-match. Returns whether the face
+    existed."""
     with get_connection() as conn:
         cursor = conn.execute(
-            "UPDATE faces SET person_id = NULL, thumbnail = NULL WHERE id = %s", (face_id,)
+            "UPDATE faces SET person_id = NULL, thumbnail = NULL, tag_source = NULL, match_confidence = NULL "
+            "WHERE id = %s",
+            (face_id,),
         )
         conn.commit()
         return cursor.rowcount > 0
 
 
-def _crop_face(original_bytes: bytes, box: dict) -> Optional[bytes]:
+def crop_face_thumbnail(original_bytes: bytes, box: dict) -> Optional[bytes]:
     """Crop `box` (x1/y1/x2/y2, in the same EXIF-transposed pixel space
     sync.py's face detection used -- see storage.replace_faces) out of a
     photo's original bytes, downscaled to a small representative
     thumbnail. Best-effort: returns None if the image can't be decoded,
-    same as sync.py's own thumbnailing."""
+    same as sync.py's own thumbnailing. Public (not `_`-prefixed) because
+    recognition.py reuses it for the same crop, both for embedding a
+    candidate face and for storing its thumbnail once auto-tagged."""
     try:
         with Image.open(io.BytesIO(original_bytes)) as raw_image:
             with ImageOps.exif_transpose(raw_image) as image:
@@ -169,7 +184,11 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
     previous (possibly different) tagging of this same face must not
     survive. `individuals.representative_thumbnail` is gentler: only
     overwritten when this call's crop actually succeeds, so a transient
-    failure here doesn't blank out that person's avatar elsewhere."""
+    failure here doesn't blank out that person's avatar elsewhere.
+
+    Always sets `tag_source = 'manual'` (and clears `match_confidence`),
+    even if the face was previously auto-tagged by recognition.py -- a
+    manual tag always wins over, and replaces, an auto one."""
     with get_connection() as conn:
         face = conn.execute(
             "SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE id = %s", (face_id,)
@@ -189,11 +208,13 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
             logger.warning("Could not read original for face %s from the photos backend", face_id, exc_info=True)
             original_bytes = None
         if original_bytes:
-            thumbnail = _crop_face(original_bytes, dict(face))
+            thumbnail = crop_face_thumbnail(original_bytes, dict(face))
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE faces SET person_id = %s, thumbnail = %s WHERE id = %s", (person_id, thumbnail, face_id)
+            "UPDATE faces SET person_id = %s, thumbnail = %s, tag_source = 'manual', match_confidence = NULL "
+            "WHERE id = %s",
+            (person_id, thumbnail, face_id),
         )
         if thumbnail:
             conn.execute(
@@ -209,4 +230,5 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
         "x2": face["x2"],
         "y2": face["y2"],
         "person_id": person_id,
+        "tag_source": "manual",
     }

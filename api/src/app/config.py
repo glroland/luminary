@@ -113,3 +113,17 @@ def get_florence_model() -> str:
 
 def get_florence_device() -> str:
     return os.environ.get("LUMINARY_FLORENCE_DEVICE", "cpu")
+
+
+# --- Automatic face recognition ("Refresh Faces", recognition.py) --------
+
+
+def get_face_match_threshold() -> float:
+    """Minimum cosine similarity between a candidate face's embedding and
+    an individual's reference embedding (recognition.py's
+    _reference_embeddings(), built from their manually tagged faces only)
+    for recognition.py to auto-tag a match. FaceNet-style cosine
+    thresholds for "same person" are commonly cited in the 0.5-0.7 range
+    depending on the exact pretrained weights -- 0.6 is a reasonable
+    starting point, tune empirically against your own library."""
+    return float(os.environ.get("LUMINARY_FACE_MATCH_THRESHOLD", "0.6"))

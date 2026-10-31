@@ -380,25 +380,124 @@ cached) is also per-pod, in-memory state — same caveat.
   changes loses its face tags along with its stale boxes — tagging doesn't
   try to survive that.
 
+  (As of `recognition.py` below, `people.tag_face` also always sets
+  `faces.tag_source = 'manual'`, and the old "there's no untag endpoint"
+  note above is stale — see `DELETE /api/faces/{id}/tag`/`untag_face` and
+  `DELETE /api/individuals/{id}`/`delete_individual`, both of which clear
+  `person_id`/`thumbnail`/`tag_source`/`match_confidence` together.)
+
+- `recognition.py` (`routers/faces.py`'s `POST /api/faces/refresh`,
+  `GET /api/faces/refresh/status`) is *automatic* face tagging — "Refresh
+  Faces" matches every still-untagged detected face against individuals a
+  user has already manually tagged at least one face for, auto-assigning
+  `faces.person_id` wherever the match is confident enough. It never
+  detects faces itself (that's still `sync.py`/Florence-2); it only decides
+  *whose* face an already-detected box is. See `docs/database-schema.md`'s
+  "Automatic face recognition" section for the full schema/design writeup
+  (the `faces.tag_source`/`match_confidence` columns, the match threshold,
+  etc.) — the two invariants worth repeating here since they're easy to
+  accidentally break when touching this code: auto-tagging only ever
+  writes to faces where `person_id IS NULL` (never overwrites an existing
+  tag, manual or auto), and reference embeddings
+  (`_reference_embeddings()`) are built *only* from `tag_source = 'manual'`
+  faces, never from previously auto-matched ones — an incorrect auto-match
+  must never become a future reference that reinforces itself.
+
+  Uses facenet-pytorch's `InceptionResnetV1(pretrained="vggface2")` for
+  embeddings, deliberately not DeepFace (which would need TensorFlow, a
+  *second* multi-GB ML framework, alongside the torch/transformers stack
+  Florence-2 above already requires) — see `requirements.txt`'s comment.
+  We don't use facenet-pytorch's own MTCNN face detector at all, only its
+  embedding half, since Florence-2 already supplies every box. `_embed()`
+  calls `_load_embedder()` first (raises `FaceRecognitionNotConfigured`,
+  mirroring `chat.ChatNotConfigured`, if torch/facenet-pytorch aren't
+  installed) before its own bare `import torch`/`torchvision`/
+  `facenet_pytorch` imports — same ordering as `chat.py`'s
+  `_run_florence_task` relative to `_load_florence()`. The background job
+  itself (`_RefreshProgress`/`progress`/`start_refresh()`) mirrors
+  `sync.py`'s `_SyncProgress`/`progress`/`start_sync()` almost verbatim
+  (same atomic `try_start()` locking, same "runs in its own thread with its
+  own event loop" reasoning, same "errors surface via polling status, the
+  POST itself never fails synchronously" shape) — don't reinvent that
+  pattern if you add a third background job, copy this one (or sync.py's).
+  One deliberate difference: `_RefreshProgress.record(count)` takes a
+  count, not always 1 — a whole photo's candidate faces are processed (and
+  its original read) together as one executor unit, not one face at a
+  time, so progress advances in per-photo batches.
+
 ## Web architecture (`web/src/`)
 
 - `api/client.js` is the only place that talks to the backend — all
   components call through it, never `fetch` directly. `API_BASE` defaults to
   `/api` (same-origin via the nginx proxy in prod, or Vite's dev proxy
   locally) and can be overridden with `VITE_API_BASE_URL`.
-- `App.jsx` holds top-level state (photo list, loading/error, sync status) and
-  composes `components/{PhotoGrid,PhotoCard,PhotoModal,SyncStatus}.jsx`.
-- The header's Refresh control is `SyncStatus.jsx`: it renders a plain button
-  when idle, or (while a backend sync is running/just finished) a small
-  progress bar polled from `GET /api/sync/status` every second. Clicking it
-  calls `POST /api/sync` and sets local state to show the progress UI
-  immediately — redundant with the fact that the backend response already
-  reports `"running"` synchronously (see `sync.py`'s `try_start()`), but it
-  saves one round-trip before the UI updates. On `"completed"` it refetches
-  the photo list; either terminal state
+- `App.jsx` holds top-level state: the photo list, loading/error, sync
+  status, which top-level `view` is showing (`"gallery"` | `"manage"`),
+  whether the sidebar is open, and the currently-selected directory filter
+  (`null` = no filter). Composes `Sidebar.jsx`, `PhotoGrid.jsx`,
+  `ManagementPage.jsx` (only one of the latter two renders at a time,
+  based on `view`), and `PhotoModal.jsx`. `visiblePhotos` filters `photos`
+  by `selectedDirectory` (a photo's directory is everything in its
+  `filename` before the last `/`; the filter matches that directory *and*
+  its subdirectories via a `startsWith` check) before handing them to
+  `PhotoGrid.jsx` — the unfiltered `photos` list is still what's passed to
+  `Sidebar.jsx` to build its directory tree from, so the tree itself never
+  shrinks when filtered.
+  `handleNavigateToPhoto(photoId)` (passed down to `ManagementPage.jsx`)
+  looks the photo up in the already-loaded `photos` list, switches `view`
+  back to `"gallery"`, and opens it in `PhotoModal.jsx` — it does nothing
+  if the photo isn't found (e.g. deleted since the list was loaded) rather
+  than fetching it separately.
+- `Sidebar.jsx` is the collapsible left sidebar: a hamburger toggle button
+  (always rendered, `aria-expanded`) plus a `position: fixed` panel+
+  backdrop that only exist when open (`sidebar-open` class slides it in via
+  `transform`; clicking the backdrop closes it). Contains, top to bottom:
+  the Refresh control (`SyncStatus.jsx` — moved here from the header, see
+  below), a directory tree built from `photos` by `buildTree()` (a nested
+  `{children: {name: node}}` structure derived purely from each photo's
+  `filename` — there's no dedicated directory concept in the API) rendered
+  via `DirectoryTree.jsx`, and a "Manage" link at the bottom that calls
+  `onManage` (→ `App.jsx` sets `view = "manage"`). `DirectoryTree.jsx` is
+  recursive and self-contained: each node tracks its own expand/collapsed
+  state locally (`useState`, uncontrolled) — only the *selected* directory
+  (which filters the grid) is state lifted up to `App.jsx`. Clicking a
+  directory's label selects it; clicking its separate chevron toggle
+  expands/collapses without selecting, so browsing the tree and filtering
+  the grid are independent actions.
+- `SyncStatus.jsx` itself is unchanged by the above move: it renders a
+  plain button when idle, or (while a backend sync is running/just
+  finished) a small progress bar polled from `GET /api/sync/status` every
+  second. Clicking it calls `POST /api/sync` and sets local state to show
+  the progress UI immediately — redundant with the fact that the backend
+  response already reports `"running"` synchronously (see `sync.py`'s
+  `try_start()`), but it saves one round-trip before the UI updates. On
+  `"completed"` it refetches the photo list; either terminal state
   (`"completed"`/`"error"`) is shown briefly then cleared back to the
   button. `App.jsx` also checks sync status once on mount so a page reload
   mid-sync resumes polling instead of losing the progress UI.
+- `ManagementPage.jsx` (reached via the sidebar's "Manage" link,
+  `view === "manage"` in `App.jsx`) is the individuals catalog's full
+  CRUD surface, plus "Refresh Faces" (`recognition.py`'s backend — see its
+  CLAUDE.md entry above). An add-person form, then one `<li>` per
+  individual: a chevron toggles its accordion open (lazily fetching
+  `GET /api/individuals/{id}/faces` the first time, cached afterward in
+  `facesByIndividual` keyed by id — a key's *absence* means "not fetched
+  yet", distinct from an empty array), Rename swaps the name for an inline
+  input (Save/Cancel), Delete removes the individual entirely. Each
+  accordion lists every face tagged to that person — manual or auto,
+  `TaggedFace.tag_source` drives a small "auto" badge — as a clickable
+  thumbnail (`onNavigateToPhoto(face.photo_id)`, bubbling up to `App.jsx`)
+  plus a small "×" remove button that untags (`DELETE /api/faces/{id}/tag`)
+  without deleting the underlying detection. "Refresh Faces" polls
+  `GET /api/faces/refresh/status` every second exactly like `SyncStatus.jsx`
+  polls sync status (same shape, reusing its `.sync-status`/
+  `.sync-progress-track`/`.sync-progress-fill` CSS classes rather than the
+  component itself, since the button needs different text); on
+  `"completed"` it calls `reloadAfterRefresh()`, which re-fetches the
+  individuals list and every accordion that's *ever* been expanded this
+  page visit (not just currently-expanded ones — simpler than tracking
+  that precisely, and collapsed-and-never-opened accordions fetch fresh on
+  next expand regardless).
 - Tests mock the API client module rather than hitting a real server (see
   `App.test.jsx`) to cover loading, empty, populated, error, and sync-progress
   states; the sync-progress test uses fake timers (`vi.useFakeTimers()` +
@@ -436,11 +535,25 @@ cached) is also per-pod, in-memory state — same caveat.
   `tagFace(faceId, personId)`; releasing over nothing (or outside any
   item) just closes the menu with no API call. A tagged face gets a
   distinct border color (`.photo-modal-bbox-face-tagged`) and the
-  individual's name as a label. The sidebar's "People" section (also
-  gated on `showFaces`) is the only way to add a new individual to the
-  catalog — a plain name input/button calling `client.js`'s
-  `createIndividual`; there's no catalog management UI beyond that yet
-  (no rename/delete).
+  individual's name as a label. The modal's own "People" section (gated
+  on `showFaces`, same as the box overlay) only supports adding a new
+  individual (a plain name input/button calling `client.js`'s
+  `createIndividual`) — renaming/deleting an individual, and browsing/
+  untagging every face tagged to them, is `ManagementPage.jsx`'s job (see
+  its CLAUDE.md entry above), not this modal's.
+
+  Separately, a "People in this photo" panel (always visible once a photo
+  is open — *not* gated on `showFaces`, unlike the catalog-wide "People"
+  section above and the box overlay itself) lists every distinct
+  individual present in the open photo, manual or auto-tagged alike
+  (dedup'd from `faceBoxes` by `person_id`), with a small "auto-detected"
+  badge when `tag_source === "auto"`. Because this panel needs
+  `faceBoxes`/`individuals` regardless of whether the user ever presses
+  "f", those two fetch effects trigger as soon as `photo?.id` is set, not
+  only when `showFaces` becomes true (an earlier version gated them both
+  behind `showFaces`) — `showFaces` now only controls whether the
+  bounding-box overlay (and the catalog-wide "People" section above)
+  render, not whether the underlying data is fetched.
 - `PhotoMap.jsx` renders an interactive map (Leaflet + OpenStreetMap tiles,
   no API key) centered on `photo.latitude`/`photo.longitude`, or a "No
   location data" placeholder when either is null. Leaflet's default marker

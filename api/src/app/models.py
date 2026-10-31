@@ -77,9 +77,12 @@ class FaceBox(BaseModel):
     y1: float
     x2: float
     y2: float
-    # Set by POST /api/faces/{id}/tag once a user has manually tagged this
-    # face as a known individual; null otherwise.
+    # Set by POST /api/faces/{id}/tag (manual) or recognition.py's
+    # "Refresh Faces" (auto); null until either tags this face.
     person_id: Optional[str] = None
+    # "manual" | "auto" | null (null exactly when person_id is). See
+    # faces.tag_source's comment in db/create_tables.sql.
+    tag_source: Optional[str] = None
 
 
 class FaceList(BaseModel):
@@ -116,7 +119,21 @@ class TaggedFace(BaseModel):
     # source photo (`photo_id`).
     id: str
     photo_id: str
+    # "manual" | "auto" -- drives the per-face "auto" badge in the
+    # management page's accordion. Every row here has person_id set (by
+    # construction -- see people.list_faces_for_individual), so this is
+    # never null in practice, unlike FaceBox.tag_source.
+    tag_source: Optional[str] = None
 
 
 class TaggedFaceList(BaseModel):
     faces: list[TaggedFace]
+
+
+class FaceRefreshStatus(BaseModel):
+    # Mirrors SyncStatus's shape -- see recognition.py's _RefreshProgress.
+    status: str  # "idle" | "running" | "completed" | "error"
+    processed: int = 0  # candidate (untagged) faces considered so far
+    total: int = 0  # candidate faces found at the start of this run
+    matched: int = 0  # of those, how many got auto-tagged
+    error: Optional[str] = None

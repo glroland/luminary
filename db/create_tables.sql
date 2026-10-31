@@ -50,16 +50,28 @@ CREATE TABLE IF NOT EXISTS faces (
     y1 DOUBLE PRECISION NOT NULL,
     x2 DOUBLE PRECISION NOT NULL,
     y2 DOUBLE PRECISION NOT NULL,
-    -- Manually assigned via people.tag_face (POST /api/faces/{id}/tag) --
-    -- NULL until a user tags this face. Logically references
-    -- individuals.id, same "no FK" rationale as faces.photo_id below.
+    -- Manually assigned via people.tag_face (POST /api/faces/{id}/tag), or
+    -- auto-assigned via recognition.py's "Refresh Faces" job (see
+    -- tag_source below) -- NULL until tagged either way. Logically
+    -- references individuals.id, same "no FK" rationale as faces.photo_id
+    -- below.
     person_id TEXT,
     -- Small JPEG crop of this specific face, set alongside person_id --
     -- the management page's per-individual face list reads this (unlike
     -- individuals.representative_thumbnail above, which only ever holds
     -- the *latest* tag). Always NULL when person_id is (people.tag_face/
-    -- untag_face/delete_individual keep the two in lockstep).
-    thumbnail BYTEA
+    -- untag_face/delete_individual/recognition's auto-tagging keep the
+    -- two in lockstep).
+    thumbnail BYTEA,
+    -- 'manual' (people.tag_face) or 'auto' (recognition.py, matched by
+    -- face-embedding similarity against that person's manually tagged
+    -- faces only -- see recognition.py's module docstring for why auto
+    -- matches are never themselves used as future reference faces). NULL
+    -- exactly when person_id is.
+    tag_source TEXT,
+    -- Cosine similarity score from recognition.py's match, NULL for
+    -- manual tags (and for untagged faces).
+    match_confidence DOUBLE PRECISION
 );
 
 -- Added after faces already existed in deployed databases -- IF NOT
@@ -67,6 +79,18 @@ CREATE TABLE IF NOT EXISTS faces (
 -- was already part of the CREATE TABLE above.
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA;
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT;
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION;
+
+-- Backfill: any face tagged before tag_source existed was necessarily
+-- tagged via the manual tag_face endpoint (recognition.py's auto-tagging
+-- didn't exist yet). Without this, such a row has person_id set but
+-- tag_source still NULL, so recognition._reference_embeddings() (which
+-- filters on tag_source = 'manual') finds no reference faces at all and
+-- "Refresh Faces" silently reports "nothing to match against" even with
+-- plenty of manually tagged faces. A no-op once backfilled -- safe to
+-- re-run.
+UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id);

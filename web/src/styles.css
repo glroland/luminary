@@ -313,6 +313,47 @@ body {
   padding: 0 1rem;
 }
 
+/* Always visible once a photo is open (unlike .photo-modal-people below,
+   which stays gated behind the "f" showFaces toggle) -- distinct
+   individuals present in this photo, manual or auto-tagged alike. */
+.photo-modal-people-in-photo {
+  border-top: 1px solid #dce6f2;
+  padding-top: 1rem;
+  flex-shrink: 0;
+}
+
+.photo-modal-people-in-photo h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: #163a6b;
+}
+
+.photo-modal-people-in-photo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #1f2d3d;
+}
+
+.photo-modal-people-in-photo-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.photo-modal-auto-badge {
+  background: #f4f7fb;
+  border: 1px solid #dce6f2;
+  color: #4a6fa1;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+
 .photo-modal-people {
   border-top: 1px solid #dce6f2;
   padding-top: 1rem;
@@ -850,4 +891,19 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.management-face-auto-badge {
+  position: absolute;
+  bottom: -6px;
+  left: -6px;
+  background: #1d4e8c;
+  color: #ffffff;
+  font-size: 0.65rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+}
+
+.management-refresh-faces {
+  margin-bottom: 1rem;
 }

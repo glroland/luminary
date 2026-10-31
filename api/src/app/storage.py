@@ -158,7 +158,7 @@ def delete_photo(photo_id: str) -> bool:
 def get_faces(photo_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, x1, y1, x2, y2, person_id FROM faces WHERE photo_id = %s", (photo_id,)
+            "SELECT id, x1, y1, x2, y2, person_id, tag_source FROM faces WHERE photo_id = %s", (photo_id,)
         ).fetchall()
         return [dict(row) for row in rows]
 

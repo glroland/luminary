@@ -66,10 +66,12 @@ def test_tag_face_assigns_person_and_stores_representative_thumbnail(client, tmp
     body = response.json()
     assert body["id"] == face["id"]
     assert body["person_id"] == person_id
+    assert body["tag_source"] == "manual"
 
     # The face row itself now carries the tag.
     faces = client.get(f"/api/photos/{photo_id}/faces").json()["faces"]
     assert faces[0]["person_id"] == person_id
+    assert faces[0]["tag_source"] == "manual"
 
     # Tagging crops the face rectangle out of the original and stores it as
     # the individual's representative thumbnail.
@@ -92,6 +94,7 @@ def test_retagging_a_face_to_a_different_person_updates_both(client, tmp_path, m
     response = client.post(f"/api/faces/{face['id']}/tag", json={"person_id": second_person})
     assert response.status_code == 200
     assert response.json()["person_id"] == second_person
+    assert response.json()["tag_source"] == "manual"
 
 
 def test_tag_face_also_stores_a_per_face_thumbnail(client, tmp_path, monkeypatch):
@@ -118,7 +121,7 @@ def test_list_faces_for_individual(client, tmp_path, monkeypatch):
 
     response = client.get(f"/api/individuals/{person_id}/faces")
     assert response.status_code == 200
-    assert response.json() == {"faces": [{"id": face["id"], "photo_id": photo_id}]}
+    assert response.json() == {"faces": [{"id": face["id"], "photo_id": photo_id, "tag_source": "manual"}]}
 
 
 def test_list_faces_for_unknown_individual_returns_404(client):
@@ -136,6 +139,7 @@ def test_untag_face_clears_person_id_and_thumbnail(client, tmp_path, monkeypatch
 
     faces = client.get(f"/api/photos/{photo_id}/faces").json()["faces"]
     assert faces[0]["person_id"] is None
+    assert faces[0]["tag_source"] is None
     assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
     assert client.get(f"/api/individuals/{person_id}/faces").json() == {"faces": []}
 
@@ -186,6 +190,7 @@ def test_delete_individual_untags_their_faces(client, tmp_path, monkeypatch):
     assert client.get("/api/individuals").json()["individuals"] == []
     faces = client.get(f"/api/photos/{photo_id}/faces").json()["faces"]
     assert faces[0]["person_id"] is None
+    assert faces[0]["tag_source"] is None
     assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
 
 

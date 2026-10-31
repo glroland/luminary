@@ -139,6 +139,14 @@ export function faceThumbnailUrl(faceId) {
   return `${API_BASE}/faces/${faceId}/thumbnail`;
 }
 
+export async function refreshFaces() {
+  return request("/faces/refresh", { method: "POST" });
+}
+
+export async function fetchFaceRefreshStatus() {
+  return request("/faces/refresh/status");
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

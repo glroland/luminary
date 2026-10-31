@@ -10,10 +10,16 @@
 --
 --   psql "postgresql://luminary:<password>@<host>:<port>/luminary" -v ON_ERROR_STOP=1 -f db/update.sql
 --
--- Current contents: adds a per-face thumbnail (people.py's management-page
--- face list) to a database that only has faces.person_id from manual face
--- tagging -- see faces.thumbnail's own comment in create_tables.sql. A
--- no-op against a database already created via a create_tables.sql that
--- includes this column.
+-- Current contents: backfills faces.tag_source = 'manual' for any face
+-- that already had person_id set before tag_source existed (necessarily
+-- tagged via the manual tag_face endpoint -- recognition.py's "Refresh
+-- Faces" auto-tagging didn't exist yet to have done it). Without this,
+-- recognition._reference_embeddings() (which only considers tag_source =
+-- 'manual' faces) finds nothing to build reference embeddings from, so
+-- "Refresh Faces" silently reports "no individuals have a manually
+-- tagged face yet -- nothing to match against" even on a database with
+-- plenty of manually tagged faces. A no-op once backfilled -- safe to
+-- re-run, and already a no-op against a database created via a
+-- create_tables.sql that already includes this statement.
 
-ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA;
+UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;

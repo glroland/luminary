@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ManagementPage from "./ManagementPage.jsx";
 import * as client from "../api/client.js";
@@ -9,6 +9,7 @@ const BOB = { id: "p2", name: "Bob", has_representative_thumbnail: false, create
 describe("ManagementPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("lists catalogued individuals", async () => {
@@ -131,5 +132,85 @@ describe("ManagementPage", () => {
 
     expect(untagMock).toHaveBeenCalledWith("f1");
     await waitFor(() => expect(document.querySelector(".management-face")).not.toBeInTheDocument());
+  });
+
+  it("shows an 'auto' badge on auto-matched faces but not manually tagged ones", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "fetchIndividualFaces").mockResolvedValue([
+      { id: "f1", photo_id: "photo-1", tag_source: "manual" },
+      { id: "f2", photo_id: "photo-2", tag_source: "auto" },
+    ]);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => expect(document.querySelectorAll(".management-face")).toHaveLength(2));
+    expect(document.querySelectorAll(".management-face-auto-badge")).toHaveLength(1);
+  });
+
+  it("runs 'Refresh Faces' and reflects progress through to completion, then reloads the catalog", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const refreshMock = vi
+      .spyOn(client, "refreshFaces")
+      .mockResolvedValue({ status: "running", processed: 0, total: 10, matched: 0, error: null });
+
+    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
+    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, error: null });
+    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 3, error: null });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    // Optimistic progress UI appears immediately, before the first poll.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh faces/i }));
+      await Promise.resolve();
+    });
+    expect(refreshMock).toHaveBeenCalled();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/done -- 3 matched/i)).toBeInTheDocument();
+    // Initial mount's fetch, plus one more once the job completed.
+    expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.getByRole("button", { name: /refresh faces/i })).toBeInTheDocument();
+  });
+
+  it("shows a failure message if 'Refresh Faces' errors", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "refreshFaces").mockResolvedValue({
+      status: "running",
+      processed: 0,
+      total: 0,
+      matched: 0,
+      error: null,
+    });
+    vi.spyOn(client, "fetchFaceRefreshStatus").mockResolvedValue({
+      status: "error",
+      processed: 0,
+      total: 0,
+      matched: 0,
+      error: "face recognition requires torch/facenet-pytorch to be installed",
+    });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh faces/i }));
+      await Promise.resolve();
+    });
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
   });
 });

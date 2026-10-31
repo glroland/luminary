@@ -59,8 +59,24 @@ Written exclusively by `storage.replace_faces`, called from
 | `y1`        | `DOUBLE PRECISION` | no       | Top edge, same coordinate space. |
 | `x2`        | `DOUBLE PRECISION` | no       | Right edge. |
 | `y2`        | `DOUBLE PRECISION` | no       | Bottom edge. |
-| `person_id` | `TEXT`             | yes      | Manually assigned via `people.tag_face` (`POST /api/faces/{id}/tag`) — logically references `individuals.id` (see "No foreign key" below). `NULL` until a user right-click-drag-tags this face in the UI (`PhotoModal.jsx`'s tag menu); Florence-2's detection pass never sets this itself. |
-| `thumbnail` | `BYTEA`            | yes      | A small (160×160 max) JPEG crop of *this* face, set by `people.tag_face` alongside `person_id` — the management page's per-individual face list (`GET /api/individuals/{id}/faces`, `GET /api/faces/{id}/thumbnail`) reads this, one row per tagged face, unlike `individuals.representative_thumbnail` below which only ever holds the latest. Always `NULL` exactly when `person_id` is — `people.tag_face`/`untag_face`/`delete_individual` keep the two in lockstep, clearing both together. |
+| `person_id` | `TEXT`             | yes      | Assigned via `people.tag_face` (`POST /api/faces/{id}/tag`, manual) or `recognition.py`'s "Refresh Faces" (`POST /api/faces/refresh`, automatic) — logically references `individuals.id` (see "No foreign key" below). `NULL` until either tags this face; Florence-2's detection pass never sets this itself. See `tag_source` for which of the two set it. |
+| `thumbnail` | `BYTEA`            | yes      | A small (160×160 max) JPEG crop of *this* face, set alongside `person_id` whether the tag is manual or automatic — the management page's per-individual face list (`GET /api/individuals/{id}/faces`, `GET /api/faces/{id}/thumbnail`) reads this, one row per tagged face, unlike `individuals.representative_thumbnail` below which only ever holds the latest. Always `NULL` exactly when `person_id` is — `people.tag_face`/`untag_face`/`delete_individual`/`recognition.py`'s auto-tagging all keep the two in lockstep, clearing/setting both together. |
+| `tag_source` | `TEXT`            | yes      | `'manual'` (`people.tag_face`) or `'auto'` (`recognition.py`'s "Refresh Faces", matched by face-embedding similarity against that person's *manually* tagged faces only — see `recognition.py`'s module docstring for why auto matches never themselves become future reference faces). `NULL` exactly when `person_id` is. Drives the "auto-detected"/"auto" badges in `PhotoModal.jsx`'s "People in this photo" panel and `ManagementPage.jsx`'s per-face thumbnails. |
+| `match_confidence` | `DOUBLE PRECISION` | yes | Cosine similarity score from `recognition.py`'s match (0–1-ish, higher is more confident). `NULL` for manual tags and untagged faces. Stored for troubleshooting/future use; not currently surfaced in any API response or UI. |
+
+**Backfill for faces tagged before `tag_source` existed**: a face tagged
+via `people.tag_face` *before* this column was added has `person_id` set
+but `tag_source` left `NULL` by the bare `ALTER TABLE ... ADD COLUMN`
+(adding a column never backfills existing rows). Since
+`recognition._reference_embeddings()` only considers `tag_source =
+'manual'` rows, that left every pre-existing manual tag invisible to
+"Refresh Faces" — it would report `"no individuals have a manually tagged
+face yet"` even on a database with plenty of them. Fixed by a one-time
+`UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND
+tag_source IS NULL` backfill, now in both `database.py`'s `init_db()`
+(so it self-heals on every API startup) and `db/create_tables.sql`; a
+no-op once applied, so it's left in permanently rather than removed after
+one use.
 
 ### Indexes
 
@@ -99,11 +115,13 @@ Don't reorder those two writes.
 
 **Re-detection also wipes tags**: because `replace_faces` deletes and
 reinserts with fresh `id`s, a photo whose content changes (triggering a
-full Florence-2 re-detection) loses any `person_id`/`thumbnail` tags its
-old faces had — there's no attempt to match an old face row to its
-replacement by position/overlap. Accepted as a consequence of the
-existing wipe-and-redetect design, not something tagging tries to
-preserve across.
+full Florence-2 re-detection) loses any `person_id`/`thumbnail`/
+`tag_source`/`match_confidence` tags its old faces had — manual or auto,
+there's no attempt to match an old face row to its replacement by
+position/overlap. Accepted as a consequence of the existing
+wipe-and-redetect design, not something tagging tries to preserve across
+— a later "Refresh Faces" run will simply re-match it if it's still a
+confident match.
 
 ## `individuals`
 
@@ -118,13 +136,44 @@ the management page (`ManagementPage.jsx`, linked from the sidebar).
 |-------------------------------|---------|----------|--------------|
 | `id`                          | `TEXT`  | no       | Primary key. A `uuid4` string, generated when the individual is first catalogued (`POST /api/individuals`). |
 | `name`                        | `TEXT`  | no       | Unique (enforced by a `UNIQUE` constraint — `POST`/`PATCH /api/individuals` map a violation to `409`). Freeform, whatever the user typed. |
-| `representative_thumbnail`    | `BYTEA` | yes      | A small (160×160 max) JPEG crop of the *most recently* tagged face for this person (`people.tag_face`/`people._crop_face`), cropped from the photo's original bytes using the tagged face's `x1`/`y1`/`x2`/`y2` box. `NULL` until this person has been tagged on at least one face. A quick-reference avatar only (e.g. `PhotoModal.jsx`'s People list) — tagging a second face just overwrites this with the new crop; the *gallery* of every face ever tagged to this person is `faces.thumbnail` rows via `GET /api/individuals/{id}/faces`, not this column. Excluded from `GET /api/individuals`'s list response the same way `photos.thumbnail` is excluded from `list_photos` — only `GET /api/individuals/{id}/thumbnail` reads this column; the list response exposes a `has_representative_thumbnail` boolean instead. |
+| `representative_thumbnail`    | `BYTEA` | yes      | A small (160×160 max) JPEG crop of the *most recently* tagged face for this person, manual or auto (`people.tag_face`/`people.crop_face_thumbnail`, also reused by `recognition.py`), cropped from the photo's original bytes using the tagged face's `x1`/`y1`/`x2`/`y2` box. `NULL` until this person has been tagged on at least one face. A quick-reference avatar only (e.g. `PhotoModal.jsx`'s People list) — tagging a second face just overwrites this with the new crop; the *gallery* of every face ever tagged to this person is `faces.thumbnail` rows via `GET /api/individuals/{id}/faces`, not this column. Excluded from `GET /api/individuals`'s list response the same way `photos.thumbnail` is excluded from `list_photos` — only `GET /api/individuals/{id}/thumbnail` reads this column; the list response exposes a `has_representative_thumbnail` boolean instead. |
 | `created_at`                  | `TEXT`  | no       | ISO 8601 timestamp string, same convention as `photos.created_at` — the time the individual was catalogued, not tied to any particular photo. |
 
 ### Deleting an individual also untags their faces
 
-`people.delete_individual` clears `person_id`/`thumbnail` on every face
-tagged to the individual being deleted *before* deleting the `individuals`
-row — same "no FK, so clean up explicitly" rationale as `faces.photo_id`
-above. Those faces aren't deleted, just untagged back to plain
-(undetected-identity) Florence-2 detections.
+`people.delete_individual` clears `person_id`/`thumbnail`/`tag_source`/
+`match_confidence` on every face tagged to the individual being deleted
+(manual or auto) *before* deleting the `individuals` row — same "no FK, so
+clean up explicitly" rationale as `faces.photo_id` above. Those faces
+aren't deleted, just untagged back to plain (undetected-identity)
+Florence-2 detections.
+
+## Automatic face recognition ("Refresh Faces")
+
+`recognition.py` (`POST /api/faces/refresh`, `GET /api/faces/refresh/status`)
+auto-assigns `faces.person_id` to other faces by embedding similarity
+against the faces a user has already manually tagged for that individual
+— the goal is one manual tag per person, not one per photo. It never
+detects faces itself (Florence-2/`sync.py` already did that); it only
+decides *whose* face an already-detected, still-untagged box is. Uses
+facenet-pytorch's `InceptionResnetV1(pretrained="vggface2")` for
+embeddings — a torch-native model, deliberately not DeepFace (which would
+require TensorFlow, a second multi-GB ML framework, alongside the torch/
+transformers stack Florence-2 already needs — see `requirements.txt`'s
+comment on the `facenet-pytorch` line).
+
+Two invariants worth knowing if you're touching this code:
+
+- **Never overwrites an existing tag.** Only faces with `person_id IS
+  NULL` are candidates; a manual correction can never be clobbered by a
+  later run, and re-running is cheap/idempotent after the first pass.
+- **Reference embeddings come only from `tag_source = 'manual'` faces.**
+  An auto-matched face is never itself used as a reference for future
+  matches — otherwise one bad match could compound into more bad matches.
+
+No embeddings are persisted anywhere — every run recomputes reference
+embeddings (from `faces.thumbnail` rows already in the database, no need
+to re-fetch originals for those) and re-embeds/re-compares every
+currently-untagged face from scratch. The match threshold
+(`LUMINARY_FACE_MATCH_THRESHOLD`, default `0.6`, a cosine similarity) is
+read via `config.get_face_match_threshold()`.

@@ -96,14 +96,29 @@ def init_db() -> None:
                 x2 DOUBLE PRECISION NOT NULL,
                 y2 DOUBLE PRECISION NOT NULL,
                 person_id TEXT,
-                thumbnail BYTEA
+                thumbnail BYTEA,
+                tag_source TEXT,
+                match_confidence DOUBLE PRECISION
             )
             """
         )
-        # Guards a database created before person_id/thumbnail existed --
-        # see db/create_tables.sql's matching ALTER TABLEs.
+        # Guards a database created before person_id/thumbnail/tag_source/
+        # match_confidence existed -- see db/create_tables.sql's matching
+        # ALTER TABLEs.
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA")
+        conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT")
+        conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION")
+        # Backfill: any face tagged before tag_source existed was
+        # necessarily tagged via the manual tag_face endpoint --
+        # recognition.py's auto-tagging didn't exist yet to have done it.
+        # Without this, such a row has person_id set but tag_source still
+        # NULL, so recognition._reference_embeddings() (which filters on
+        # tag_source = 'manual') finds no reference faces at all and
+        # "Refresh Faces" silently reports "nothing to match against" even
+        # with plenty of manually tagged faces. A no-op once backfilled --
+        # safe to run on every startup.
+        conn.execute("UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
         conn.commit()

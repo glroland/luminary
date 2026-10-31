@@ -79,13 +79,15 @@ def _insert_bare_photo_row(photo_id: str) -> None:
 
 
 def _without_id(faces: list[dict]) -> list[dict]:
-    """get_faces now also returns `id`/`person_id` (see people.py's manual
-    face tagging) -- these tests only care about the box coordinates, so
-    strip the generated id and assert person_id separately/implicitly via
-    this helper always expecting it untagged (None)."""
+    """get_faces now also returns `id`/`person_id`/`tag_source` (see
+    people.py's manual face tagging and recognition.py's auto-matching) --
+    these tests only care about the box coordinates, so strip the
+    generated id and assert the tag fields separately/implicitly via this
+    helper always expecting them untagged (None)."""
     for face in faces:
         assert face["person_id"] is None
-    return [{k: v for k, v in face.items() if k not in ("id", "person_id")} for face in faces]
+        assert face["tag_source"] is None
+    return [{k: v for k, v in face.items() if k not in ("id", "person_id", "tag_source")} for face in faces]
 
 
 def test_replace_faces_stores_and_fully_replaces_boxes(client):

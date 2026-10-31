@@ -162,8 +162,13 @@ export default function PhotoModal({ photo, onClose }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [photo]);
 
+  // Fetched as soon as a photo is open, not gated on showFaces -- the
+  // "People in this photo" panel below is always visible (unlike the
+  // bounding-box overlay and the catalog-wide "People" panel further
+  // down, both still gated on showFaces), so it needs this data
+  // regardless of whether the user ever presses "f".
   useEffect(() => {
-    if (!photo || !showFaces || faceBoxes !== null) return;
+    if (!photo || faceBoxes !== null) return;
     let cancelled = false;
     fetchFaces(photo.id)
       .then((faces) => {
@@ -175,10 +180,10 @@ export default function PhotoModal({ photo, onClose }) {
     return () => {
       cancelled = true;
     };
-  }, [photo, showFaces, faceBoxes]);
+  }, [photo, faceBoxes]);
 
   useEffect(() => {
-    if (!showFaces || individuals !== null) return;
+    if (!photo || individuals !== null) return;
     let cancelled = false;
     fetchIndividuals()
       .then((list) => {
@@ -190,7 +195,7 @@ export default function PhotoModal({ photo, onClose }) {
     return () => {
       cancelled = true;
     };
-  }, [showFaces, individuals]);
+  }, [photo, individuals]);
 
   const menuOpen = tagMenu !== null;
   useEffect(() => {
@@ -250,6 +255,17 @@ export default function PhotoModal({ photo, onClose }) {
   const canShowBoxes = boxes.length > 0 && photo.width && photo.height && imgRect;
   const canShowFaces = showFaces && faceBoxes && faceBoxes.length > 0 && photo.width && photo.height && imgRect;
 
+  // Distinct individuals present in this photo -- one entry per person_id
+  // across faceBoxes, whether tagged manually or auto-matched (people.py's
+  // tag_face vs recognition.py's "Refresh Faces" -- both set person_id the
+  // same way, so no special-casing is needed here beyond the tag_source
+  // badge below). Keeps the *first* box seen per person for its
+  // tag_source -- a person is realistically tagged the same way on every
+  // face within one photo, so which one wins doesn't matter in practice.
+  const peopleInPhoto = faceBoxes
+    ? Array.from(new Map(faceBoxes.filter((box) => box.person_id).map((box) => [box.person_id, box])).values())
+    : [];
+
   return (
     <div className="photo-modal-backdrop" onClick={onClose}>
       <div className="photo-modal" onClick={(event) => event.stopPropagation()}>
@@ -305,6 +321,36 @@ export default function PhotoModal({ photo, onClose }) {
             </p>
             <p>{new Date(photo.created_at).toLocaleString()}</p>
             {photo.description && <p className="photo-modal-description">{photo.description}</p>}
+          </div>
+
+          <div className="photo-modal-people-in-photo">
+            <h3>People in this photo</h3>
+            {faceBoxes === null ? (
+              <p className="photo-modal-people-loading">Loading…</p>
+            ) : peopleInPhoto.length === 0 ? (
+              <p className="photo-modal-people-empty">No one identified in this photo yet.</p>
+            ) : (
+              <ul className="photo-modal-people-in-photo-list">
+                {peopleInPhoto.map((box) => {
+                  const individual = individuals?.find((candidate) => candidate.id === box.person_id);
+                  return (
+                    <li key={box.person_id}>
+                      {individual?.has_representative_thumbnail && (
+                        <img
+                          src={individualThumbnailUrl(box.person_id)}
+                          alt=""
+                          className="photo-modal-people-thumb"
+                        />
+                      )}
+                      <span>{individual?.name ?? "Unknown"}</span>
+                      {box.tag_source === "auto" && (
+                        <span className="photo-modal-auto-badge">auto-detected</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
 
           <PhotoMap latitude={photo.latitude} longitude={photo.longitude} />
