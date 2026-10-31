@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import ManagementPage from "./components/ManagementPage.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
-import SyncStatus from "./components/SyncStatus.jsx";
+import Sidebar from "./components/Sidebar.jsx";
 import { fetchPhotos, fetchSyncStatus, startSync } from "./api/client.js";
 import logo from "./assets/logo.svg";
 
 const POLL_INTERVAL_MS = 1000;
 const DONE_DISPLAY_MS = 2000;
+
+// A photo's directory is everything in its (root-relative) filename
+// before the last "/" -- "" for one directly under the photos root.
+function directoryOf(filename) {
+  const slash = filename.lastIndexOf("/");
+  return slash === -1 ? "" : filename.slice(0, slash);
+}
 
 export default function App() {
   const [photos, setPhotos] = useState([]);
@@ -14,6 +22,12 @@ export default function App() {
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [view, setView] = useState("gallery"); // "gallery" | "manage"
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // null means no filter (all photos); otherwise a directory path as it
+  // appears in photo.filename, matched by directoryOf() below including
+  // its subdirectories.
+  const [selectedDirectory, setSelectedDirectory] = useState(null);
   const pollRef = useRef(null);
 
   const loadPhotos = useCallback(async () => {
@@ -79,21 +93,58 @@ export default function App() {
     }
   }
 
+  // Used by ManagementPage's per-face "go to the photo this was tagged
+  // from" -- looks the photo up in the already-loaded list rather than
+  // fetching it again, since the full list is already in memory here.
+  function handleNavigateToPhoto(photoId) {
+    const photo = photos.find((candidate) => candidate.id === photoId);
+    if (!photo) return;
+    setView("gallery");
+    setSelectedPhoto(photo);
+  }
+
+  const visiblePhotos =
+    selectedDirectory === null
+      ? photos
+      : photos.filter((photo) => {
+          const dir = directoryOf(photo.filename);
+          return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
+        });
+
   return (
     <div className="app">
       <header className="app-header">
+        <Sidebar
+          open={sidebarOpen}
+          onToggle={() => setSidebarOpen((prev) => !prev)}
+          onClose={() => setSidebarOpen(false)}
+          photos={photos}
+          selectedDirectory={selectedDirectory}
+          onSelectDirectory={(directory) => {
+            setSelectedDirectory(directory);
+            setView("gallery");
+            setSidebarOpen(false);
+          }}
+          syncStatus={syncStatus}
+          onRefresh={handleRefresh}
+          onManage={() => {
+            setView("manage");
+            setSidebarOpen(false);
+          }}
+        />
         <img className="app-logo" src={logo} alt="Luminary" />
-        <SyncStatus status={syncStatus} onRefresh={handleRefresh} />
       </header>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      {isLoading ? (
+      {view === "manage" ? (
+        <ManagementPage onBack={() => setView("gallery")} onNavigateToPhoto={handleNavigateToPhoto} />
+      ) : isLoading ? (
         <p>Loading photos...</p>
       ) : (
-        <PhotoGrid photos={photos} onSelect={setSelectedPhoto} />
+        <PhotoGrid photos={visiblePhotos} onSelect={setSelectedPhoto} />
       )}
       <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
     </div>

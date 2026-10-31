@@ -53,13 +53,20 @@ CREATE TABLE IF NOT EXISTS faces (
     -- Manually assigned via people.tag_face (POST /api/faces/{id}/tag) --
     -- NULL until a user tags this face. Logically references
     -- individuals.id, same "no FK" rationale as faces.photo_id below.
-    person_id TEXT
+    person_id TEXT,
+    -- Small JPEG crop of this specific face, set alongside person_id --
+    -- the management page's per-individual face list reads this (unlike
+    -- individuals.representative_thumbnail above, which only ever holds
+    -- the *latest* tag). Always NULL when person_id is (people.tag_face/
+    -- untag_face/delete_individual keep the two in lockstep).
+    thumbnail BYTEA
 );
 
 -- Added after faces already existed in deployed databases -- IF NOT
--- EXISTS makes this a no-op against a database created after person_id
+-- EXISTS makes each a no-op against a database created after the column
 -- was already part of the CREATE TABLE above.
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT;
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA;
 
 CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id);

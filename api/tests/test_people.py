@@ -92,3 +92,103 @@ def test_retagging_a_face_to_a_different_person_updates_both(client, tmp_path, m
     response = client.post(f"/api/faces/{face['id']}/tag", json={"person_id": second_person})
     assert response.status_code == 200
     assert response.json()["person_id"] == second_person
+
+
+def test_tag_face_also_stores_a_per_face_thumbnail(client, tmp_path, monkeypatch):
+    _, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
+    person_id = client.post("/api/individuals", json={"name": "Heidi"}).json()["id"]
+
+    assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
+
+    client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+
+    response = client.get(f"/api/faces/{face['id']}/thumbnail")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert len(response.content) > 0
+
+
+def test_list_faces_for_individual(client, tmp_path, monkeypatch):
+    photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
+    person_id = client.post("/api/individuals", json={"name": "Ivan"}).json()["id"]
+
+    assert client.get(f"/api/individuals/{person_id}/faces").json() == {"faces": []}
+
+    client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+
+    response = client.get(f"/api/individuals/{person_id}/faces")
+    assert response.status_code == 200
+    assert response.json() == {"faces": [{"id": face["id"], "photo_id": photo_id}]}
+
+
+def test_list_faces_for_unknown_individual_returns_404(client):
+    response = client.get("/api/individuals/does-not-exist/faces")
+    assert response.status_code == 404
+
+
+def test_untag_face_clears_person_id_and_thumbnail(client, tmp_path, monkeypatch):
+    photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
+    person_id = client.post("/api/individuals", json={"name": "Judy"}).json()["id"]
+    client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+
+    response = client.delete(f"/api/faces/{face['id']}/tag")
+    assert response.status_code == 204
+
+    faces = client.get(f"/api/photos/{photo_id}/faces").json()["faces"]
+    assert faces[0]["person_id"] is None
+    assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
+    assert client.get(f"/api/individuals/{person_id}/faces").json() == {"faces": []}
+
+
+def test_untag_face_for_unknown_face_returns_404(client):
+    response = client.delete("/api/faces/does-not-exist/tag")
+    assert response.status_code == 404
+
+
+def test_update_individual_renames(client):
+    person_id = client.post("/api/individuals", json={"name": "Kevin"}).json()["id"]
+
+    response = client.patch(f"/api/individuals/{person_id}", json={"name": "Ken"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "Ken"
+
+    listed = client.get("/api/individuals").json()["individuals"]
+    assert [individual["name"] for individual in listed] == ["Ken"]
+
+
+def test_update_individual_rejects_empty_name(client):
+    person_id = client.post("/api/individuals", json={"name": "Laura"}).json()["id"]
+    response = client.patch(f"/api/individuals/{person_id}", json={"name": "  "})
+    assert response.status_code == 422
+
+
+def test_update_individual_duplicate_name_conflicts(client):
+    client.post("/api/individuals", json={"name": "Mallory"})
+    person_id = client.post("/api/individuals", json={"name": "Nina"}).json()["id"]
+
+    response = client.patch(f"/api/individuals/{person_id}", json={"name": "Mallory"})
+    assert response.status_code == 409
+
+
+def test_update_unknown_individual_returns_404(client):
+    response = client.patch("/api/individuals/does-not-exist", json={"name": "Oscar"})
+    assert response.status_code == 404
+
+
+def test_delete_individual_untags_their_faces(client, tmp_path, monkeypatch):
+    photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
+    person_id = client.post("/api/individuals", json={"name": "Peggy"}).json()["id"]
+    client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+
+    response = client.delete(f"/api/individuals/{person_id}")
+    assert response.status_code == 204
+
+    assert client.get("/api/individuals").json()["individuals"] == []
+    faces = client.get(f"/api/photos/{photo_id}/faces").json()["faces"]
+    assert faces[0]["person_id"] is None
+    assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
+
+
+def test_delete_unknown_individual_returns_404(client):
+    response = client.delete("/api/individuals/does-not-exist")
+    assert response.status_code == 404

@@ -95,13 +95,15 @@ def init_db() -> None:
                 y1 DOUBLE PRECISION NOT NULL,
                 x2 DOUBLE PRECISION NOT NULL,
                 y2 DOUBLE PRECISION NOT NULL,
-                person_id TEXT
+                person_id TEXT,
+                thumbnail BYTEA
             )
             """
         )
-        # Guards a database created before person_id existed -- see
-        # db/create_tables.sql's matching ALTER TABLE.
+        # Guards a database created before person_id/thumbnail existed --
+        # see db/create_tables.sql's matching ALTER TABLEs.
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT")
+        conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
         conn.commit()

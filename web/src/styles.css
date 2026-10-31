@@ -18,7 +18,7 @@ body {
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 1.5rem;
 }
 
@@ -524,4 +524,330 @@ body {
     border-left: none;
     border-top: 1px solid #dce6f2;
   }
+}
+
+/* --- Sidebar (Sidebar.jsx) ------------------------------------------- */
+
+.sidebar-toggle {
+  background: none;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-icon {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-toggle-icon span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: #163a6b;
+  border-radius: 1px;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(22, 58, 107, 0.4);
+  z-index: 900;
+}
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  width: 280px;
+  background: #ffffff;
+  border-right: 1px solid #dce6f2;
+  box-shadow: 4px 0 20px rgba(22, 58, 107, 0.2);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+  z-index: 901;
+}
+
+.sidebar-open {
+  transform: translateX(0);
+}
+
+.sidebar-refresh {
+  padding: 1rem;
+  border-bottom: 1px solid #dce6f2;
+}
+
+.sidebar-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 0.5rem;
+}
+
+.sidebar-tree-root {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #163a6b;
+  cursor: pointer;
+}
+
+.sidebar-footer {
+  padding: 1rem;
+  border-top: 1px solid #dce6f2;
+}
+
+.sidebar-manage-link {
+  display: block;
+  text-align: center;
+  background: #1d4e8c;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+/* --- Directory tree (DirectoryTree.jsx) ------------------------------ */
+
+.directory-tree {
+  list-style: none;
+  margin: 0;
+  padding-left: 0.9rem;
+}
+
+.directory-tree-item {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.directory-tree-item-active {
+  background: #e3edfb;
+}
+
+.directory-tree-toggle,
+.directory-tree-toggle-spacer {
+  width: 1.1rem;
+  flex-shrink: 0;
+}
+
+.directory-tree-toggle {
+  background: none;
+  border: none;
+  font-size: 0.75rem;
+  color: #4a6fa1;
+  cursor: pointer;
+  padding: 0.3rem 0;
+}
+
+.directory-tree-label {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.3rem 0.3rem;
+  font-size: 0.85rem;
+  color: #163a6b;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Management page (ManagementPage.jsx) ---------------------------- */
+
+.management-page {
+  max-width: 700px;
+}
+
+.management-back {
+  background: none;
+  border: none;
+  color: #1d4e8c;
+  font-size: 0.9rem;
+  padding: 0;
+  margin-bottom: 1rem;
+  cursor: pointer;
+}
+
+.management-add-person {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.management-add-person input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.management-add-person button {
+  background: #1d4e8c;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.management-add-person button:disabled {
+  background: #9fb6d6;
+  cursor: not-allowed;
+}
+
+.management-individuals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.management-individual {
+  border: 1px solid #dce6f2;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.management-individual-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: #f4f7fb;
+}
+
+.management-individual-chevron {
+  background: none;
+  border: none;
+  font-size: 0.85rem;
+  color: #4a6fa1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.management-individual-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.management-individual-name {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #163a6b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.management-individual-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.management-individual-actions button {
+  background: #ffffff;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  color: #163a6b;
+  cursor: pointer;
+}
+
+.management-individual-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.management-delete {
+  color: #b91c1c !important;
+}
+
+.management-individual-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.8rem;
+}
+
+.management-face {
+  position: relative;
+  width: 72px;
+  height: 72px;
+}
+
+.management-face-image {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 1px solid #dce6f2;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #f4f7fb;
+}
+
+.management-face-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.management-face-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #b91c1c;
+  color: #ffffff;
+  border: none;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

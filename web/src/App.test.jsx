@@ -74,6 +74,10 @@ describe("App", () => {
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
+    // Refresh now lives inside the collapsible sidebar (see Sidebar.jsx) --
+    // open it first, same as a real user would.
+    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+
     // Optimistic progress UI appears immediately, before the first poll.
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /refresh/i }));

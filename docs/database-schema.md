@@ -60,16 +60,16 @@ Written exclusively by `storage.replace_faces`, called from
 | `x2`        | `DOUBLE PRECISION` | no       | Right edge. |
 | `y2`        | `DOUBLE PRECISION` | no       | Bottom edge. |
 | `person_id` | `TEXT`             | yes      | Manually assigned via `people.tag_face` (`POST /api/faces/{id}/tag`) — logically references `individuals.id` (see "No foreign key" below). `NULL` until a user right-click-drag-tags this face in the UI (`PhotoModal.jsx`'s tag menu); Florence-2's detection pass never sets this itself. |
+| `thumbnail` | `BYTEA`            | yes      | A small (160×160 max) JPEG crop of *this* face, set by `people.tag_face` alongside `person_id` — the management page's per-individual face list (`GET /api/individuals/{id}/faces`, `GET /api/faces/{id}/thumbnail`) reads this, one row per tagged face, unlike `individuals.representative_thumbnail` below which only ever holds the latest. Always `NULL` exactly when `person_id` is — `people.tag_face`/`untag_face`/`delete_individual` keep the two in lockstep, clearing both together. |
 
 ### Indexes
 
 - `idx_faces_photo_id` on `(photo_id)` — every read of this table
   (`storage.get_faces`, `GET /api/photos/{id}/faces`) filters by
   `photo_id`, and every sync deletes by it too (`sync._delete_missing`).
-- `idx_faces_person_id` on `(person_id)` — not currently queried by any
-  endpoint (there's no "all faces tagged as person X" view yet), added
-  alongside the column on the assumption that one will eventually filter
-  by it.
+- `idx_faces_person_id` on `(person_id)` — `people.list_faces_for_individual`
+  (`GET /api/individuals/{id}/faces`, the management page's per-individual
+  face list) filters by it.
 
 ### No foreign key
 
@@ -99,21 +99,32 @@ Don't reorder those two writes.
 
 **Re-detection also wipes tags**: because `replace_faces` deletes and
 reinserts with fresh `id`s, a photo whose content changes (triggering a
-full Florence-2 re-detection) loses any `person_id` tags its old faces had
-— there's no attempt to match an old face row to its replacement by
-position/overlap. Accepted as a consequence of the existing wipe-and-
-redetect design, not something tagging tries to preserve across.
+full Florence-2 re-detection) loses any `person_id`/`thumbnail` tags its
+old faces had — there's no attempt to match an old face row to its
+replacement by position/overlap. Accepted as a consequence of the
+existing wipe-and-redetect design, not something tagging tries to
+preserve across.
 
 ## `individuals`
 
 The catalog of named people faces can be manually tagged as — see
-`people.py` / `routers/individuals.py` / `routers/faces.py`, and
-`PhotoModal.jsx`'s right-click-and-hold tag menu (press "f" in the photo
-viewer to show face boxes, then right-click-drag one onto a name).
+`people.py` / `routers/individuals.py` / `routers/faces.py`. Added to and
+tagged from `PhotoModal.jsx`'s right-click-and-hold tag menu (press "f" in
+the photo viewer to show face boxes, then right-click-drag one onto a
+name); added/renamed/removed, and every tagged face browsed/untagged, from
+the management page (`ManagementPage.jsx`, linked from the sidebar).
 
 | Column                      | Type    | Nullable | Description |
 |-------------------------------|---------|----------|--------------|
 | `id`                          | `TEXT`  | no       | Primary key. A `uuid4` string, generated when the individual is first catalogued (`POST /api/individuals`). |
-| `name`                        | `TEXT`  | no       | Unique (enforced by a `UNIQUE` constraint — `POST /api/individuals` maps a violation to `409`). Freeform, whatever the user typed in the sidebar's "Add a person…" form. |
-| `representative_thumbnail`    | `BYTEA` | yes      | A small (160×160 max) JPEG crop of the *most recently* tagged face for this person (`people.tag_face`/`people._crop_face`), cropped from the photo's original bytes using the tagged face's `x1`/`y1`/`x2`/`y2` box. `NULL` until this person has been tagged on at least one face. There's no gallery of every face ever tagged to a person — tagging a second face just overwrites this with the new crop. Excluded from `GET /api/individuals`'s list response the same way `photos.thumbnail` is excluded from `list_photos` — only `GET /api/individuals/{id}/thumbnail` reads this column; the list response exposes a `has_representative_thumbnail` boolean instead. |
+| `name`                        | `TEXT`  | no       | Unique (enforced by a `UNIQUE` constraint — `POST`/`PATCH /api/individuals` map a violation to `409`). Freeform, whatever the user typed. |
+| `representative_thumbnail`    | `BYTEA` | yes      | A small (160×160 max) JPEG crop of the *most recently* tagged face for this person (`people.tag_face`/`people._crop_face`), cropped from the photo's original bytes using the tagged face's `x1`/`y1`/`x2`/`y2` box. `NULL` until this person has been tagged on at least one face. A quick-reference avatar only (e.g. `PhotoModal.jsx`'s People list) — tagging a second face just overwrites this with the new crop; the *gallery* of every face ever tagged to this person is `faces.thumbnail` rows via `GET /api/individuals/{id}/faces`, not this column. Excluded from `GET /api/individuals`'s list response the same way `photos.thumbnail` is excluded from `list_photos` — only `GET /api/individuals/{id}/thumbnail` reads this column; the list response exposes a `has_representative_thumbnail` boolean instead. |
 | `created_at`                  | `TEXT`  | no       | ISO 8601 timestamp string, same convention as `photos.created_at` — the time the individual was catalogued, not tied to any particular photo. |
+
+### Deleting an individual also untags their faces
+
+`people.delete_individual` clears `person_id`/`thumbnail` on every face
+tagged to the individual being deleted *before* deleting the `individuals`
+row — same "no FK, so clean up explicitly" rationale as `faces.photo_id`
+above. Those faces aren't deleted, just untagged back to plain
+(undetected-identity) Florence-2 detections.

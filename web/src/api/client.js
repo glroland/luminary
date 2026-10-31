@@ -110,8 +110,33 @@ export async function tagFace(faceId, personId) {
   });
 }
 
+export async function untagFace(faceId) {
+  await request(`/faces/${faceId}/tag`, { method: "DELETE" });
+}
+
+export async function updateIndividual(personId, name) {
+  return request(`/individuals/${personId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteIndividual(personId) {
+  await request(`/individuals/${personId}`, { method: "DELETE" });
+}
+
+export async function fetchIndividualFaces(personId) {
+  const data = await request(`/individuals/${personId}/faces`);
+  return data.faces;
+}
+
 export function individualThumbnailUrl(personId) {
   return `${API_BASE}/individuals/${personId}/thumbnail`;
+}
+
+export function faceThumbnailUrl(faceId) {
+  return `${API_BASE}/faces/${faceId}/thumbnail`;
 }
 
 export function thumbnailUrl(photoId) {

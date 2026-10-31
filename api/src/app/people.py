@@ -5,9 +5,13 @@ module never detects anything, it only records a user's manual assignment
 of an already-detected face (storage.get_faces/replace_faces) to a person.
 
 Tagging a face also crops that face's rectangle out of the photo's original
-bytes and stores it as the individual's `representative_thumbnail` -- the
-most recently tagged face "wins"; there's no gallery of every face ever
-tagged to a person, just the one representative crop.
+bytes, storing that crop both on the face itself (`faces.thumbnail`, so the
+management page can list every face ever tagged to a person) and as the
+individual's `representative_thumbnail` (the most recently tagged face
+"wins" there -- it's a single quick-reference avatar, e.g. PhotoModal's
+People list, not a gallery). `faces.thumbnail` is only ever non-NULL while
+`person_id` is also set -- untag_face/delete_individual clear both
+together, so that pairing is never violated.
 """
 
 import io
@@ -53,12 +57,77 @@ def create_individual(name: str) -> dict:
     return {"id": individual_id, "name": name, "has_representative_thumbnail": False, "created_at": created_at}
 
 
+def get_individual(person_id: str) -> Optional[dict]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, created_at "
+            "FROM individuals WHERE id = %s",
+            (person_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_individual(person_id: str, name: str) -> Optional[dict]:
+    """Rename an individual. Returns the updated row, or None if `person_id`
+    doesn't exist. Raises psycopg.errors.UniqueViolation (see
+    create_individual's docstring) if `name` collides with another
+    individual."""
+    with get_connection() as conn:
+        cursor = conn.execute("UPDATE individuals SET name = %s WHERE id = %s", (name, person_id))
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+    return get_individual(person_id)
+
+
+def delete_individual(person_id: str) -> bool:
+    """Delete an individual and untag every face tagged to them (no FK
+    cascade -- see db/create_tables.sql -- so that's done explicitly here,
+    same pattern as storage.delete_photo clearing a photo's faces). Returns
+    whether the individual existed."""
+    with get_connection() as conn:
+        conn.execute("UPDATE faces SET person_id = NULL, thumbnail = NULL WHERE person_id = %s", (person_id,))
+        cursor = conn.execute("DELETE FROM individuals WHERE id = %s", (person_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def get_representative_thumbnail(person_id: str) -> Optional[bytes]:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT representative_thumbnail FROM individuals WHERE id = %s", (person_id,)
         ).fetchone()
         return row["representative_thumbnail"] if row else None
+
+
+def list_faces_for_individual(person_id: str) -> list[dict]:
+    """Every face currently tagged to `person_id` -- the data behind the
+    management page's per-individual accordion. Ordered by id purely for a
+    stable, deterministic response; `faces` has no timestamp column to
+    order by "most recently tagged" (see this module's docstring)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, photo_id FROM faces WHERE person_id = %s ORDER BY id", (person_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_face_thumbnail(face_id: str) -> Optional[bytes]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT thumbnail FROM faces WHERE id = %s", (face_id,)).fetchone()
+        return row["thumbnail"] if row else None
+
+
+def untag_face(face_id: str) -> bool:
+    """Clear a face's tag (person_id and its thumbnail together -- see this
+    module's docstring) without deleting the face/detection itself. Returns
+    whether the face existed."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE faces SET person_id = NULL, thumbnail = NULL WHERE id = %s", (face_id,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def _crop_face(original_bytes: bytes, box: dict) -> Optional[bytes]:
@@ -84,15 +153,23 @@ def _crop_face(original_bytes: bytes, box: dict) -> Optional[bytes]:
 
 def tag_face(face_id: str, person_id: str) -> Optional[dict]:
     """Assign `person_id` to face `face_id`, and best-effort store the
-    cropped face region as that individual's representative thumbnail.
-    Returns the updated face row, or None if the face or the individual
-    doesn't exist.
+    cropped face region both on the face itself (`thumbnail`, for the
+    management page's per-individual face list) and as that individual's
+    representative thumbnail. Returns the updated face row, or None if the
+    face or the individual doesn't exist.
 
     Reads face+photo metadata in one connection, then reads the original
     off the (possibly slow/network) photos backend with no database
     connection held, then writes the update in a second connection --
     mirrors storage.py's "fresh connection per operation" pattern rather
-    than holding one open across that I/O."""
+    than holding one open across that I/O.
+
+    `faces.thumbnail` is always overwritten with this call's result,
+    including to NULL if cropping fails -- a stale thumbnail from a
+    previous (possibly different) tagging of this same face must not
+    survive. `individuals.representative_thumbnail` is gentler: only
+    overwritten when this call's crop actually succeeds, so a transient
+    failure here doesn't blank out that person's avatar elsewhere."""
     with get_connection() as conn:
         face = conn.execute(
             "SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE id = %s", (face_id,)
@@ -115,7 +192,9 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
             thumbnail = _crop_face(original_bytes, dict(face))
 
     with get_connection() as conn:
-        conn.execute("UPDATE faces SET person_id = %s WHERE id = %s", (person_id, face_id))
+        conn.execute(
+            "UPDATE faces SET person_id = %s, thumbnail = %s WHERE id = %s", (person_id, thumbnail, face_id)
+        )
         if thumbnail:
             conn.execute(
                 "UPDATE individuals SET representative_thumbnail = %s WHERE id = %s",

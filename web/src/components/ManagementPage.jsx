@@ -1,0 +1,253 @@
+import { useEffect, useState } from "react";
+import {
+  createIndividual,
+  deleteIndividual,
+  faceThumbnailUrl,
+  fetchIndividualFaces,
+  fetchIndividuals,
+  individualThumbnailUrl,
+  untagFace,
+  updateIndividual,
+} from "../api/client.js";
+
+export default function ManagementPage({ onBack, onNavigateToPhoto }) {
+  const [individuals, setIndividuals] = useState(null);
+  const [pageError, setPageError] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [addError, setAddError] = useState(null);
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  // Keyed by individual id; a key's absence means "not fetched yet" for
+  // that individual (distinct from an empty array, "fetched, no tagged
+  // faces") -- fetched lazily, the first time that individual's accordion
+  // is expanded, same pattern as PhotoModal.jsx's faceBoxes/individuals.
+  const [facesByIndividual, setFacesByIndividual] = useState({});
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  useEffect(() => {
+    fetchIndividuals()
+      .then(setIndividuals)
+      .catch((err) => setPageError(err.message));
+  }, []);
+
+  function sortByName(list) {
+    return [...list].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function toggleExpanded(personId) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(personId)) {
+        next.delete(personId);
+      } else {
+        next.add(personId);
+        if (!(personId in facesByIndividual)) {
+          fetchIndividualFaces(personId)
+            .then((faces) => setFacesByIndividual((prevFaces) => ({ ...prevFaces, [personId]: faces })))
+            .catch((err) => setPageError(err.message));
+        }
+      }
+      return next;
+    });
+  }
+
+  function handleAdd(event) {
+    event.preventDefault();
+    const name = newName.trim();
+    if (!name) return;
+    createIndividual(name)
+      .then((created) => {
+        setIndividuals((prev) => sortByName([...(prev ?? []), created]));
+        setNewName("");
+        setAddError(null);
+      })
+      .catch((err) => setAddError(err.message));
+  }
+
+  function startRename(individual) {
+    setRenamingId(individual.id);
+    setRenameDraft(individual.name);
+  }
+
+  function cancelRename() {
+    setRenamingId(null);
+    setRenameDraft("");
+  }
+
+  function saveRename(personId) {
+    const name = renameDraft.trim();
+    if (!name) return;
+    updateIndividual(personId, name)
+      .then((updated) => {
+        setIndividuals((prev) => sortByName(prev.map((individual) => (individual.id === personId ? updated : individual))));
+        setPageError(null);
+        cancelRename();
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
+  function handleDelete(personId) {
+    deleteIndividual(personId)
+      .then(() => {
+        setIndividuals((prev) => prev.filter((individual) => individual.id !== personId));
+        setFacesByIndividual((prev) => {
+          const next = { ...prev };
+          delete next[personId];
+          return next;
+        });
+        setExpandedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(personId);
+          return next;
+        });
+        setPageError(null);
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
+  function handleUntag(personId, faceId) {
+    untagFace(faceId)
+      .then(() => {
+        setFacesByIndividual((prev) => ({
+          ...prev,
+          [personId]: (prev[personId] ?? []).filter((face) => face.id !== faceId),
+        }));
+        setPageError(null);
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
+  return (
+    <div className="management-page">
+      <button type="button" className="management-back" onClick={onBack}>
+        &larr; Back to gallery
+      </button>
+      <h2>Manage individuals</h2>
+
+      {pageError && (
+        <p role="alert" className="error">
+          {pageError}
+        </p>
+      )}
+
+      <form className="management-add-person" onSubmit={handleAdd}>
+        <input
+          type="text"
+          value={newName}
+          onChange={(event) => setNewName(event.target.value)}
+          placeholder="Add a person…"
+        />
+        <button type="submit" disabled={!newName.trim()}>
+          Add
+        </button>
+      </form>
+      {addError && (
+        <p role="alert" className="error">
+          {addError}
+        </p>
+      )}
+
+      {individuals === null ? (
+        <p>Loading…</p>
+      ) : individuals.length === 0 ? (
+        <p className="empty-state">No individuals catalogued yet.</p>
+      ) : (
+        <ul className="management-individuals">
+          {individuals.map((individual) => {
+            const expanded = expandedIds.has(individual.id);
+            const faces = facesByIndividual[individual.id];
+            const renaming = renamingId === individual.id;
+
+            return (
+              <li key={individual.id} className="management-individual">
+                <div className="management-individual-header">
+                  <button
+                    type="button"
+                    className="management-individual-chevron"
+                    onClick={() => toggleExpanded(individual.id)}
+                    aria-label={expanded ? "Collapse" : "Expand"}
+                    aria-expanded={expanded}
+                  >
+                    {expanded ? "▾" : "▸"}
+                  </button>
+
+                  {individual.has_representative_thumbnail && (
+                    <img
+                      className="management-individual-avatar"
+                      src={individualThumbnailUrl(individual.id)}
+                      alt=""
+                    />
+                  )}
+
+                  {renaming ? (
+                    <input
+                      className="management-rename-input"
+                      value={renameDraft}
+                      autoFocus
+                      onChange={(event) => setRenameDraft(event.target.value)}
+                    />
+                  ) : (
+                    <span className="management-individual-name">{individual.name}</span>
+                  )}
+
+                  <span className="management-individual-actions">
+                    {renaming ? (
+                      <>
+                        <button type="button" onClick={() => saveRename(individual.id)} disabled={!renameDraft.trim()}>
+                          Save
+                        </button>
+                        <button type="button" onClick={cancelRename}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => startRename(individual)}>
+                          Rename
+                        </button>
+                        <button type="button" className="management-delete" onClick={() => handleDelete(individual.id)}>
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {expanded && (
+                  <div className="management-individual-faces">
+                    {faces === undefined ? (
+                      <p>Loading…</p>
+                    ) : faces.length === 0 ? (
+                      <p className="empty-state">No faces tagged to this person yet.</p>
+                    ) : (
+                      faces.map((face) => (
+                        <div key={face.id} className="management-face">
+                          <button
+                            type="button"
+                            className="management-face-image"
+                            onClick={() => onNavigateToPhoto(face.photo_id)}
+                            title="Go to the photo this face was tagged from"
+                          >
+                            <img src={faceThumbnailUrl(face.id)} alt="" />
+                          </button>
+                          <button
+                            type="button"
+                            className="management-face-remove"
+                            onClick={() => handleUntag(individual.id, face.id)}
+                            aria-label="Remove this tag"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}

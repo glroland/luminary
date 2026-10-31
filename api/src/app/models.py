@@ -106,3 +106,17 @@ class CreateIndividualRequest(BaseModel):
 
 class TagFaceRequest(BaseModel):
     person_id: str
+
+
+class TaggedFace(BaseModel):
+    # The management page's per-individual face list -- deliberately
+    # minimal (no x1-y2 box, no photo filename): the frontend already has
+    # the full photo list loaded and only needs enough to render a
+    # thumbnail (GET /api/faces/{id}/thumbnail) and navigate back to the
+    # source photo (`photo_id`).
+    id: str
+    photo_id: str
+
+
+class TaggedFaceList(BaseModel):
+    faces: list[TaggedFace]
