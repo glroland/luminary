@@ -7,11 +7,16 @@ Original photo files themselves are never stored here; they stay on the
 configured photos backend (`LUMINARY_PHOTOS_URI`) and are only read, never
 written (see CLAUDE.md's hard invariant).
 
-There are two tables, `photos` and `faces`, both created by
+There are three tables, `photos`, `faces`, and `individuals`, all created by
 [`db/create_tables.sql`](../db/create_tables.sql) and mirrored by
 `database.py`'s `init_db()` (run on every API startup). **There is no
 migrations framework** — a schema change means updating both of those
-together, by hand.
+together, by hand (see `faces.person_id` below for the one example of that
+so far: a column added after `faces` already existed, via `ALTER TABLE ...
+ADD COLUMN IF NOT EXISTS` in both places), plus staging the same statements
+in [`db/update.sql`](../db/update.sql) so an already-provisioned database
+can be patched in place via `make db-update` instead of a full
+`make db-recreate` drop/rebuild — see the README's "Database" section.
 
 ## `photos`
 
@@ -54,24 +59,32 @@ Written exclusively by `storage.replace_faces`, called from
 | `y1`        | `DOUBLE PRECISION` | no       | Top edge, same coordinate space. |
 | `x2`        | `DOUBLE PRECISION` | no       | Right edge. |
 | `y2`        | `DOUBLE PRECISION` | no       | Bottom edge. |
+| `person_id` | `TEXT`             | yes      | Manually assigned via `people.tag_face` (`POST /api/faces/{id}/tag`) — logically references `individuals.id` (see "No foreign key" below). `NULL` until a user right-click-drag-tags this face in the UI (`PhotoModal.jsx`'s tag menu); Florence-2's detection pass never sets this itself. |
 
-### Index
+### Indexes
 
 - `idx_faces_photo_id` on `(photo_id)` — every read of this table
   (`storage.get_faces`, `GET /api/photos/{id}/faces`) filters by
   `photo_id`, and every sync deletes by it too (`sync._delete_missing`).
+- `idx_faces_person_id` on `(person_id)` — not currently queried by any
+  endpoint (there's no "all faces tagged as person X" view yet), added
+  alongside the column on the assumption that one will eventually filter
+  by it.
 
 ### No foreign key
 
-`faces.photo_id` has no `REFERENCES photos(id)` constraint and no cascade.
-This is deliberate: Postgres can enforce the relationship, but this app
-already deletes dependent face rows explicitly and in the right order
-wherever a photo row is removed or replaced —
-`storage.delete_photo` and `sync._delete_missing` delete from `faces`
-before `photos`, and `storage.replace_faces` always deletes a photo's old
-faces before inserting new ones, even when the new set is empty. Adding a
-constraint wouldn't change application behavior; keep it in mind as
-*documentation* of the relationship rather than database-enforced.
+Neither `faces.photo_id` nor `faces.person_id` has a `REFERENCES ...`
+constraint or cascade. For `photo_id` this is deliberate: Postgres can
+enforce the relationship, but this app already deletes dependent face rows
+explicitly and in the right order wherever a photo row is removed or
+replaced — `storage.delete_photo` and `sync._delete_missing` delete from
+`faces` before `photos`, and `storage.replace_faces` always deletes a
+photo's old faces before inserting new ones, even when the new set is
+empty. For `person_id`, `people.tag_face` checks both the face and the
+individual exist before writing the tag, so the same "app-enforced, not
+database-enforced" rationale applies — adding either constraint wouldn't
+change application behavior; keep both in mind as *documentation* of the
+relationship rather than database-enforced.
 
 ### Write ordering: faces before `description`
 
@@ -83,3 +96,24 @@ the pipeline is interrupted or fails partway, `description` stays `NULL`
 and the next sync retries captioning *and* face detection from scratch —
 there's no state where a half-written face set is mistaken for "done".
 Don't reorder those two writes.
+
+**Re-detection also wipes tags**: because `replace_faces` deletes and
+reinserts with fresh `id`s, a photo whose content changes (triggering a
+full Florence-2 re-detection) loses any `person_id` tags its old faces had
+— there's no attempt to match an old face row to its replacement by
+position/overlap. Accepted as a consequence of the existing wipe-and-
+redetect design, not something tagging tries to preserve across.
+
+## `individuals`
+
+The catalog of named people faces can be manually tagged as — see
+`people.py` / `routers/individuals.py` / `routers/faces.py`, and
+`PhotoModal.jsx`'s right-click-and-hold tag menu (press "f" in the photo
+viewer to show face boxes, then right-click-drag one onto a name).
+
+| Column                      | Type    | Nullable | Description |
+|-------------------------------|---------|----------|--------------|
+| `id`                          | `TEXT`  | no       | Primary key. A `uuid4` string, generated when the individual is first catalogued (`POST /api/individuals`). |
+| `name`                        | `TEXT`  | no       | Unique (enforced by a `UNIQUE` constraint — `POST /api/individuals` maps a violation to `409`). Freeform, whatever the user typed in the sidebar's "Add a person…" form. |
+| `representative_thumbnail`    | `BYTEA` | yes      | A small (160×160 max) JPEG crop of the *most recently* tagged face for this person (`people.tag_face`/`people._crop_face`), cropped from the photo's original bytes using the tagged face's `x1`/`y1`/`x2`/`y2` box. `NULL` until this person has been tagged on at least one face. There's no gallery of every face ever tagged to a person — tagging a second face just overwrites this with the new crop. Excluded from `GET /api/individuals`'s list response the same way `photos.thumbnail` is excluded from `list_photos` — only `GET /api/individuals/{id}/thumbnail` reads this column; the list response exposes a `has_representative_thumbnail` boolean instead. |
+| `created_at`                  | `TEXT`  | no       | ISO 8601 timestamp string, same convention as `photos.created_at` — the time the individual was catalogued, not tied to any particular photo. |

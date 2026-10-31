@@ -320,7 +320,11 @@ def test_sync_stores_detected_faces_for_new_photos(client, tmp_path, monkeypatch
 
     photo_id = client.get("/api/photos").json()["photos"][0]["id"]
     faces = get_faces(photo_id)
-    assert {tuple(face.values()) for face in faces} == {(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)}
+    assert {(face["x1"], face["y1"], face["x2"], face["y2"]) for face in faces} == {
+        (1.0, 2.0, 3.0, 4.0),
+        (5.0, 6.0, 7.0, 8.0),
+    }
+    assert all(face["person_id"] is None for face in faces)
 
 
 def test_sync_treats_zero_detected_faces_as_a_successful_result(client, tmp_path, monkeypatch):
@@ -393,7 +397,10 @@ def test_sync_replaces_faces_rather_than_accumulating_when_a_file_changes_in_pla
 
     faces = get_faces(photo_id)
     assert len(faces) == 2
-    assert {tuple(face.values()) for face in faces} == {(9.0, 9.0, 10.0, 10.0), (11.0, 11.0, 12.0, 12.0)}
+    assert {(face["x1"], face["y1"], face["x2"], face["y2"]) for face in faces} == {
+        (9.0, 9.0, 10.0, 10.0),
+        (11.0, 11.0, 12.0, 12.0),
+    }
 
 
 def test_sync_backfills_faces_alongside_a_missing_description(client, tmp_path, monkeypatch):
@@ -413,7 +420,9 @@ def test_sync_backfills_faces_alongside_a_missing_description(client, tmp_path, 
 
     sync_and_wait(client)
 
-    assert get_faces(photo_id) == [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}]
+    faces = get_faces(photo_id)
+    assert len(faces) == 1
+    assert (faces[0]["x1"], faces[0]["y1"], faces[0]["x2"], faces[0]["y2"]) == (1.0, 2.0, 3.0, 4.0)
 
 
 def test_sync_deletes_faces_for_photos_removed_from_storage(client, tmp_path, monkeypatch):

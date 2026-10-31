@@ -48,7 +48,7 @@ def client(tmp_path, monkeypatch):
         # tables if they didn't exist; truncate them here for isolation
         # between tests.
         with get_connection() as conn:
-            conn.execute("TRUNCATE TABLE photos, faces")
+            conn.execute("TRUNCATE TABLE photos, faces, individuals")
             conn.commit()
         yield test_client
 

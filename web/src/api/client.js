@@ -89,6 +89,31 @@ export async function fetchFaces(photoId) {
   return data.faces;
 }
 
+export async function fetchIndividuals() {
+  const data = await request("/individuals");
+  return data.individuals;
+}
+
+export async function createIndividual(name) {
+  return request("/individuals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function tagFace(faceId, personId) {
+  return request(`/faces/${faceId}/tag`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ person_id: personId }),
+  });
+}
+
+export function individualThumbnailUrl(personId) {
+  return `${API_BASE}/individuals/${personId}/thumbnail`;
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

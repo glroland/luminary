@@ -9,6 +9,6 @@
 --     -v db_user=luminary \
 --     -f db/drop_role.sql
 --
--- `make drop-db`/`make recreate-db` run this once, after drop_database.sql.
+-- `make db-drop`/`make db-recreate` run this once, after drop_database.sql.
 
 DROP ROLE IF EXISTS :"db_user";

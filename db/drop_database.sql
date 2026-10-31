@@ -12,7 +12,7 @@
 --     -v db_name=luminary-dev \
 --     -f db/drop_database.sql
 --
--- `make drop-db`/`make recreate-db` run this once per database.
+-- `make db-drop`/`make db-recreate` run this once per database.
 
 -- DROP DATABASE fails if anything still holds a connection to it (e.g. a
 -- stale `make run-api`/`make test-api` from an earlier run) -- terminate

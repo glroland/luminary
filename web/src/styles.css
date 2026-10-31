@@ -191,8 +191,58 @@ body {
    the yellow chat-grounding boxes above, and no label badge: a face box
    speaks for itself once the toggle's been pressed. */
 .photo-modal-bbox-face {
+  /* Unlike the read-only chat/stored overlays above, a face box is a real
+     target: pointer-events is re-enabled here (overriding the `none` on
+     .photo-modal-bbox) so a right-click-and-hold on it can open the
+     tag menu -- see PhotoModal.jsx's handleFaceMouseDown. */
   border-color: #00e5a0;
   background: rgba(0, 229, 160, 0.12);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.photo-modal-bbox-face-tagged {
+  border-color: #ff7043;
+  background: rgba(255, 112, 67, 0.12);
+}
+
+.photo-modal-bbox-face-tagged .photo-modal-bbox-label {
+  background: #ff7043;
+  color: #ffffff;
+}
+
+/* Right-click-and-hold-to-tag menu (PhotoModal.jsx's tagMenu state) --
+   viewport-fixed and anchored at the mousedown position, offset slightly
+   so the cursor doesn't sit directly on top of the first item. */
+.face-tag-menu {
+  position: fixed;
+  transform: translate(12px, 12px);
+  z-index: 1000;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(22, 58, 107, 0.35);
+  padding: 0.35rem;
+  min-width: 140px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.face-tag-menu-item {
+  padding: 0.4rem 0.7rem;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  color: #163a6b;
+  white-space: nowrap;
+}
+
+.face-tag-menu-item-active {
+  background: #1d4e8c;
+  color: #ffffff;
+}
+
+.face-tag-menu-message {
+  color: #4a6fa1;
+  font-style: italic;
 }
 
 .photo-modal-faces-hint {
@@ -261,6 +311,88 @@ body {
   font-size: 0.85rem;
   text-align: center;
   padding: 0 1rem;
+}
+
+.photo-modal-people {
+  border-top: 1px solid #dce6f2;
+  padding-top: 1rem;
+  flex-shrink: 0;
+}
+
+.photo-modal-people h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: #163a6b;
+}
+
+.photo-modal-people-list {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  color: #1f2d3d;
+}
+
+.photo-modal-people-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.photo-modal-people-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.photo-modal-people-loading,
+.photo-modal-people-empty {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  color: #4a6fa1;
+}
+
+.photo-modal-add-person {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.photo-modal-add-person input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.photo-modal-add-person button {
+  background: #1d4e8c;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.photo-modal-add-person button:disabled {
+  background: #9fb6d6;
+  cursor: not-allowed;
+}
+
+.photo-modal-people-error {
+  margin: 0.4rem 0 0;
+  color: #b91c1c;
+  font-size: 0.8rem;
 }
 
 .photo-chat {

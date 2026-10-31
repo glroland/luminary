@@ -204,17 +204,19 @@ There are three databases, all on the same server and sharing the one
 | `db/create_tables.sql`        | the app role, against one app database | Creates `photos`/`faces` in that database (idempotent; also run automatically on every API startup by `database.init_db()`) |
 | `db/drop_database.sql`       | a Postgres superuser, against the `postgres` maintenance DB | Drops one database (destructive) — run once per database, **before** `drop_role.sql` |
 | `db/drop_role.sql`           | a Postgres superuser, against the `postgres` maintenance DB | Drops the shared role (destructive) — Postgres refuses this while the role still owns any database |
+| `db/update.sql`               | the app role, against one app database | Staging area for the next incremental schema change (`ALTER TABLE`/`CREATE TABLE IF NOT EXISTS`/etc.) — applied by `make db-update` without a full drop/rebuild, which empties this file once it succeeds against both `luminary-dev` and `luminary-unittest`; currently holds the `individuals`/`faces.person_id` change for manual face tagging, for any database (e.g. prod's own, provisioned separately — see below) that hasn't had the current `create_tables.sql` applied to it yet |
 
 See [`docs/database-schema.md`](docs/database-schema.md) for the `photos`/
 `faces` table/column reference.
 
 ```bash
 make db LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>       # create luminary-dev + luminary-unittest
-make recreate-db LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop + recreate, destructive
-make drop-db LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop only
+make db-recreate LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop + recreate, destructive
+make db-drop LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop only
+make db-update                                                      # apply db/update.sql in place, no drop/rebuild
 ```
 
-These three targets only ever touch `luminary-dev`/`luminary-unittest`
+The first three targets only ever touch `luminary-dev`/`luminary-unittest`
 (`LUMINARY_DATABASE_NAME`/`LUMINARY_TEST_DATABASE_NAME`) — prod's
 `luminary` database is provisioned the same way, but separately and once,
 against prod's own Postgres host, by invoking `db/create_db_and_user.sql`/
@@ -222,10 +224,19 @@ against prod's own Postgres host, by invoking `db/create_db_and_user.sql`/
 header comments for the exact `psql` invocations).
 
 `LUMINARY_DATABASE_ADMIN_USER`/`_PASSWORD` (default user `postgres`, no
-default password) authenticate only for these three targets — the running
-API never uses them. There's no migrations framework (see `database.py`'s
-module docs): a schema change means updating `database.py`'s `init_db()`
-and `db/create_tables.sql` together.
+default password) authenticate only for `db`/`db-recreate`/`db-drop` — the
+running API never uses them, and neither does `db-update`, which connects
+as the app role instead (it only ever alters objects inside a database
+that role already owns, never roles/database ownership itself).
+`db-update` also only touches `luminary-dev`/`luminary-unittest` — apply
+`db/update.sql` to prod's `luminary` by hand (see that file's own header
+comment for the `psql` invocation), the same "separately, not by these
+targets" split as provisioning. There's no migrations framework (see
+`database.py`'s module docs): a schema change means updating
+`database.py`'s `init_db()`, `db/create_tables.sql`, *and* `db/update.sql`
+together — the first two so a brand-new database comes up fully current,
+the third so an already-provisioned one can be patched up to match
+without a full rebuild.
 
 ### Photo chat
 

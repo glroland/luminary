@@ -45,8 +45,9 @@ make run-api     # uvicorn --reload on :8080 (PYTHONPATH=api/src)
 make run-web     # vite dev server on :5173, proxies /api -> :8080
 make build       # builds luminary-api and luminary-web container images
 make db          # provisions the Postgres database + role + tables (db/)
-make recreate-db # drops and recreates them
-make drop-db     # drops them
+make db-recreate # drops and recreates them
+make db-drop     # drops them
+make db-update   # applies db/update.sql's schema change in place, then clears it (no drop/rebuild)
 make helm-lint   # helm lint deploy/helm/luminary
 make helm-template
 make clean       # rm -rf target/ (+ web/node_modules, web/dist)
@@ -156,7 +157,7 @@ Postgres) lives in `storage.py`/`sync.py`:
   `init_db()` creates the `photos`/`faces` tables if missing. Connection
   parameters come from `config.get_database_host/_port/_name/_user/
   _password()` — a remote server provisioned via `db/`'s SQL (see the
-  README's "Database" section and `make db`/`make recreate-db`), not
+  README's "Database" section and `make db`/`make db-recreate`), not
   something this app stands up itself.
 - `sync.py` is the *only* way photos enter the index — it reconciles
   Postgres against whatever `fs.find()` discovers under the photos root, filtered to
@@ -358,6 +359,27 @@ cached) is also per-pod, in-memory state — same caveat.
   [Florence-2-large-ft discussion board](https://huggingface.co/microsoft/Florence-2-large-ft/discussions/40)
   for multiple independent reports of the same fix.
 
+- `people.py` (`routers/individuals.py`, `routers/faces.py`) is manual face
+  tagging — a catalog of named individuals (`individuals` table) and a
+  `person_id` column on `faces`, both distinct from `sync.py`'s Florence-2
+  face *detection*: this module never detects anything, it only records a
+  user's manual assignment of an already-detected face to a person. See
+  `docs/database-schema.md`'s `individuals` section for the full schema.
+  `people.tag_face` reads face+photo metadata in one connection, reads the
+  original off the photos backend with *no* connection held (mirrors
+  `storage.py`'s per-operation-connection pattern, just split around
+  potentially-slow backend I/O rather than holding a connection through
+  it), then writes the update in a second connection. Tagging also crops
+  the face rectangle out of the original (same EXIF-transposed pixel space
+  `sync.py`'s detection used) and stores it as that individual's
+  `representative_thumbnail` — the most recently tagged face wins, there's
+  no gallery of every face ever tagged to a person. Re-tagging a face to a
+  different person just overwrites `person_id` and the representative
+  crop; there's no untag endpoint yet. Note `storage.replace_faces` (full
+  rewrite on re-sync, new `id`s every time) means a photo whose content
+  changes loses its face tags along with its stale boxes — tagging doesn't
+  try to survive that.
+
 ## Web architecture (`web/src/`)
 
 - `api/client.js` is the only place that talks to the backend — all
@@ -385,6 +407,40 @@ cached) is also per-pod, in-memory state — same caveat.
   filling most of the viewport (`.photo-modal`: 94vw × 92vh) — a large
   image pane plus a sidebar composing `PhotoMap.jsx` and `PhotoChat.jsx`.
   Stacks vertically under 700px width.
+
+  Pressing "f" also drives manual face tagging (`people.py`'s backend --
+  see its CLAUDE.md entry above): once face boxes are shown, right-mouse-
+  down (`event.button === 2`) on one opens a small viewport-fixed menu
+  (`.face-tag-menu`) listing catalogued individuals, anchored at the
+  mousedown position via `tagMenu` state; `.photo-modal-bbox-face` has
+  `pointer-events: auto` (overriding the `none` the read-only chat/stored
+  overlays use) specifically so this mousedown can land on it. Right-click
+  rather than middle-click: a Mac trackpad's two-finger click is a
+  secondary click at the OS/DOM level (button 2, firing a "contextmenu"
+  event), never a true middle click (button 1) — there's no trackpad
+  gesture that produces that at all. `handleFaceContextMenu` suppresses
+  the browser's native context menu, but only on the face box element
+  itself (via `onContextMenu`), so right-click still works normally
+  everywhere else in the modal (e.g. to save the photo). While the
+  button stays down, each menu item's plain `onMouseEnter`/`onMouseLeave`
+  (hover events fire independent of button state) sets `tagMenu.hoveredId`
+  to highlight it. Releasing the button is handled by a `window` "mouseup"
+  listener, not an element handler — the cursor is typically over a menu
+  item, not the original face box, by the time it's released. That
+  listener is attached/detached only when the menu opens/closes (a
+  `menuOpen` boolean dependency), not on every hover change, to avoid
+  re-registering it on every mousemove; it reads the *current* hoveredId
+  via `tagMenuRef` (a ref mirrored alongside the `tagMenu` state through a
+  `setTagMenu` wrapper) rather than a stale closure over the state at
+  attach time. Releasing over a highlighted name calls `client.js`'s
+  `tagFace(faceId, personId)`; releasing over nothing (or outside any
+  item) just closes the menu with no API call. A tagged face gets a
+  distinct border color (`.photo-modal-bbox-face-tagged`) and the
+  individual's name as a label. The sidebar's "People" section (also
+  gated on `showFaces`) is the only way to add a new individual to the
+  catalog — a plain name input/button calling `client.js`'s
+  `createIndividual`; there's no catalog management UI beyond that yet
+  (no rename/delete).
 - `PhotoMap.jsx` renders an interactive map (Leaflet + OpenStreetMap tiles,
   no API key) centered on `photo.latitude`/`photo.longitude`, or a "No
   location data" placeholder when either is null. Leaflet's default marker

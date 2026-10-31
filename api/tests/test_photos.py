@@ -84,7 +84,12 @@ def test_get_faces_returns_stored_boxes(client, tmp_path, monkeypatch):
 
     response = client.get(f"/api/photos/{photo_id}/faces")
     assert response.status_code == 200
-    assert response.json() == {"faces": [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}]}
+    faces = response.json()["faces"]
+    assert len(faces) == 1
+    face = faces[0]
+    assert isinstance(face["id"], str) and face["id"]
+    assert face["person_id"] is None
+    assert {k: face[k] for k in ("x1", "y1", "x2", "y2")} == {"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}
 
 
 def test_get_faces_returns_empty_list_when_no_faces_were_detected(client, tmp_path):

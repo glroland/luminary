@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db
 from .logging_config import configure_logging
-from .routers import health, photos, sync
+from .routers import faces, health, individuals, photos, sync
 
 configure_logging()
 
@@ -43,3 +43,5 @@ async def log_unhandled_exception(request: Request, exc: Exception) -> JSONRespo
 app.include_router(health.router, prefix="/api")
 app.include_router(photos.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(individuals.router, prefix="/api")
+app.include_router(faces.router, prefix="/api")

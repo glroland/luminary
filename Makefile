@@ -17,7 +17,7 @@ LUMINARY_PHOTOS_URI ?= "smb://data.home.glroland.com/photo/2019 Spring Break in 
 
 # Postgres connection for photo metadata + thumbnails -- a remote server
 # that already exists outside this repo's Helm chart/ArgoCD app (see
-# CLAUDE.md); `make db`/`make recreate-db` provision databases+role on it,
+# CLAUDE.md); `make db`/`make db-recreate` provision databases+role on it,
 # they don't stand up Postgres itself. The same `luminary` role is shared
 # across every database (dev, unittest, and prod's own "luminary" -- see
 # values.yaml's api.env.database.name, used by the Helm deployment); only
@@ -28,7 +28,7 @@ LUMINARY_DATABASE_PORT     ?= 5432
 LUMINARY_DATABASE_USER     ?= luminary
 LUMINARY_DATABASE_PASSWORD ?= luminary
 
-# Database name run-api/db/recreate-db/drop-db use -- local development's
+# Database name run-api/db/db-recreate/db-drop use -- local development's
 # own database, distinct from the one `make test-api` uses (below) and from
 # prod's "luminary" (the Helm deployment's database.name, never this repo's
 # to create/drop -- see the README's "Database" section).
@@ -39,7 +39,7 @@ LUMINARY_DATABASE_NAME ?= luminary-dev
 # can't wipe your locally-indexed dev photos.
 LUMINARY_TEST_DATABASE_NAME ?= luminary-unittest
 
-# Admin credentials used only by `make db`/`make recreate-db`/`make drop-db`
+# Admin credentials used only by `make db`/`make db-recreate`/`make db-drop`
 # to connect to the `postgres` maintenance database and create/drop the
 # database+role above -- never used by the running API itself, and never
 # defaulted to a real password; supply it explicitly, e.g.
@@ -87,7 +87,7 @@ LUMINARY_TEST_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
         build build-api build-web \
         push push-api push-web \
         images \
-        db recreate-db drop-db \
+        db db-recreate db-drop db-update \
         helm-lint helm-template \
         clean
 
@@ -101,8 +101,9 @@ help:
 	@echo "  build           Build container images for api and web"
 	@echo "  push            Push container images for api and web"
 	@echo "  db              Create the luminary-dev/luminary-unittest databases, role, and tables (see db/)"
-	@echo "  recreate-db     Drop and recreate them"
-	@echo "  drop-db         Drop them"
+	@echo "  db-recreate     Drop and recreate them"
+	@echo "  db-drop         Drop them"
+	@echo "  db-update       Apply db/update.sql's schema changes in place (no drop/rebuild), then clear it"
 	@echo "  helm-lint       Lint the Helm chart"
 	@echo "  helm-template   Render the Helm chart"
 	@echo "  clean           Remove local build/test artifacts"
@@ -174,7 +175,8 @@ push-web:
 # up. Prod's own "luminary" database (values.yaml's api.env.database.name)
 # is provisioned the same way but separately, against prod's own Postgres
 # host -- not by these targets. LUMINARY_DATABASE_ADMIN_PASSWORD must be
-# supplied for all three targets below.
+# supplied for db/db-recreate/db-drop (not db-update, below -- that one
+# only needs the app role's own credentials).
 
 define CREATE_DATABASE
 	PGPASSWORD=$(LUMINARY_DATABASE_ADMIN_PASSWORD) psql \
@@ -197,7 +199,7 @@ db:
 	$(call CREATE_DATABASE,$(LUMINARY_DATABASE_NAME))
 	$(call CREATE_DATABASE,$(LUMINARY_TEST_DATABASE_NAME))
 
-drop-db:
+db-drop:
 	$(call DROP_DATABASE,$(LUMINARY_DATABASE_NAME))
 	$(call DROP_DATABASE,$(LUMINARY_TEST_DATABASE_NAME))
 	PGPASSWORD=$(LUMINARY_DATABASE_ADMIN_PASSWORD) psql \
@@ -205,7 +207,28 @@ drop-db:
 		-v db_user=$(LUMINARY_DATABASE_USER) \
 		-f db/drop_role.sql
 
-recreate-db: drop-db db
+db-recreate: db-drop db
+
+# Lighter-weight alternative to db-recreate: applies db/update.sql's ALTER/
+# CREATE statements to an already-provisioned database in place, instead
+# of dropping and rebuilding it (which would discard its data). Connects
+# as the app role (LUMINARY_DATABASE_USER/_PASSWORD) -- no admin password
+# needed, since this never touches roles/database ownership, only objects
+# inside a database the role already owns. -v ON_ERROR_STOP=1 makes psql
+# exit non-zero on the first SQL error, which is what makes the "clear the
+# file" step below only run after every target database actually applied
+# cleanly -- make aborts the whole recipe on the first failing line.
+define DB_UPDATE
+	PGPASSWORD=$(LUMINARY_DATABASE_PASSWORD) psql \
+		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_USER) -d $(1) \
+		-v ON_ERROR_STOP=1 \
+		-f db/update.sql
+endef
+
+db-update:
+	$(call DB_UPDATE,$(LUMINARY_DATABASE_NAME))
+	$(call DB_UPDATE,$(LUMINARY_TEST_DATABASE_NAME))
+	: > db/update.sql
 
 ## --- Helm -----------------------------------------------------------------
 

@@ -29,7 +29,7 @@ api:
     # --- Database: photo metadata + thumbnails -----------------------------
     # A remote Postgres server that already exists outside this chart/the
     # ArgoCD app it tracks -- this chart never stands up Postgres itself.
-    # Provision the database/role on it with `make db`/`make recreate-db`
+    # Provision the database/role on it with `make db`/`make db-recreate`
     # (see db/ and the README) before deploying.
     database:
       host: db.example.com

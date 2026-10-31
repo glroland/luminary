@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchFaces, originalUrl } from "../api/client.js";
+import {
+  createIndividual,
+  fetchFaces,
+  fetchIndividuals,
+  individualThumbnailUrl,
+  originalUrl,
+  tagFace,
+} from "../api/client.js";
 import PhotoChat from "./PhotoChat.jsx";
 import PhotoMap from "./PhotoMap.jsx";
 
@@ -75,6 +82,39 @@ export default function PhotoModal({ photo, onClose }) {
   const [faceBoxes, setFaceBoxes] = useState(null);
   const [facesError, setFacesError] = useState(null);
 
+  // Manual face-tagging (catalog of named individuals + assigning a face
+  // to one -- see people.py/routers/faces.py). `individuals` is fetched
+  // lazily the same way faceBoxes is: null means "not fetched yet",
+  // distinct from "[]", fetched but empty.
+  const [individuals, setIndividuals] = useState(null);
+  const [newPersonName, setNewPersonName] = useState("");
+  const [addPersonError, setAddPersonError] = useState(null);
+  const [tagError, setTagError] = useState(null);
+
+  // The in-progress right-mouse-drag tag menu: {faceId, x, y, hoveredId}
+  // while a face box's right (secondary) button is held down, else null.
+  // Right-click rather than middle-click: a Mac trackpad's two-finger
+  // click is a secondary click at the OS/DOM level (button 2, firing
+  // "contextmenu"), never a true middle click (button 1) -- there's no
+  // trackpad gesture that produces that at all, only a physical mouse's
+  // scroll-wheel click does. `x`/`y` are viewport coordinates (the
+  // mousedown's clientX/clientY) since the menu
+  // is positioned with `position: fixed`. Mirrored into tagMenuRef so the
+  // window "mouseup" listener (attached/detached only when the menu opens/
+  // closes, not on every hover change -- see the effect below) always
+  // reads the latest hoveredId without needing to be re-attached per
+  // mousemove.
+  const [tagMenu, setTagMenuState] = useState(null);
+  const tagMenuRef = useRef(null);
+
+  function setTagMenu(updater) {
+    setTagMenuState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      tagMenuRef.current = next;
+      return next;
+    });
+  }
+
   function updateImgRect() {
     if (imgRef.current && wrapRef.current) {
       setImgRect(measureVisibleImageRect(imgRef.current, wrapRef.current));
@@ -98,6 +138,8 @@ export default function PhotoModal({ photo, onClose }) {
     setShowFaces(false);
     setFaceBoxes(null);
     setFacesError(null);
+    setTagMenu(null);
+    setTagError(null);
   }, [photo?.id]);
 
   useEffect(() => {
@@ -135,6 +177,74 @@ export default function PhotoModal({ photo, onClose }) {
     };
   }, [photo, showFaces, faceBoxes]);
 
+  useEffect(() => {
+    if (!showFaces || individuals !== null) return;
+    let cancelled = false;
+    fetchIndividuals()
+      .then((list) => {
+        if (!cancelled) setIndividuals(list);
+      })
+      .catch((err) => {
+        if (!cancelled) setTagError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showFaces, individuals]);
+
+  const menuOpen = tagMenu !== null;
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    function handleMouseUp(event) {
+      if (event.button !== 2) return;
+      const current = tagMenuRef.current;
+      setTagMenu(null);
+      if (!current?.hoveredId) return;
+      tagFace(current.faceId, current.hoveredId)
+        .then((updated) => {
+          setFaceBoxes((prev) =>
+            prev ? prev.map((box) => (box.id === updated.id ? { ...box, person_id: updated.person_id } : box)) : prev
+          );
+          setTagError(null);
+        })
+        .catch((err) => setTagError(err.message));
+    }
+
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, [menuOpen]);
+
+  function handleFaceMouseDown(event, faceId) {
+    if (event.button !== 2) return;
+    // The actual menu-open signal is the "contextmenu" event below -- this
+    // preventDefault just stops any other native right-click handling on
+    // mousedown itself, mirroring handleFaceContextMenu.
+    event.preventDefault();
+    setTagMenu({ faceId, x: event.clientX, y: event.clientY, hoveredId: null });
+    setTagError(null);
+  }
+
+  function handleFaceContextMenu(event) {
+    // Suppresses the browser's native right-click menu on a face box only
+    // -- scoped to this element (not the whole modal/image) so right-click
+    // still works normally everywhere else, e.g. to save the photo.
+    event.preventDefault();
+  }
+
+  function handleAddIndividual(event) {
+    event.preventDefault();
+    const name = newPersonName.trim();
+    if (!name) return;
+    createIndividual(name)
+      .then((created) => {
+        setIndividuals((prev) => [...(prev ?? []), created].sort((a, b) => a.name.localeCompare(b.name)));
+        setNewPersonName("");
+        setAddPersonError(null);
+      })
+      .catch((err) => setAddPersonError(err.message));
+  }
+
   if (!photo) return null;
 
   const canShowBoxes = boxes.length > 0 && photo.width && photo.height && imgRect;
@@ -157,13 +267,22 @@ export default function PhotoModal({ photo, onClose }) {
                 </div>
               ))}
             {canShowFaces &&
-              faceBoxes.map((box, index) => (
-                <div
-                  key={index}
-                  className="photo-modal-bbox photo-modal-bbox-face"
-                  style={boxStyle(box, photo, imgRect)}
-                />
-              ))}
+              faceBoxes.map((box, index) => {
+                const taggedName = box.person_id
+                  ? individuals?.find((individual) => individual.id === box.person_id)?.name
+                  : null;
+                return (
+                  <div
+                    key={box.id ?? index}
+                    className={`photo-modal-bbox photo-modal-bbox-face${box.person_id ? " photo-modal-bbox-face-tagged" : ""}`}
+                    style={boxStyle(box, photo, imgRect)}
+                    onMouseDown={box.id ? (event) => handleFaceMouseDown(event, box.id) : undefined}
+                    onContextMenu={box.id ? handleFaceContextMenu : undefined}
+                  >
+                    {taggedName && <span className="photo-modal-bbox-label">{taggedName}</span>}
+                  </div>
+                );
+              })}
             {showFaces && (
               <p className="photo-modal-faces-hint">
                 {facesError
@@ -190,9 +309,85 @@ export default function PhotoModal({ photo, onClose }) {
 
           <PhotoMap latitude={photo.latitude} longitude={photo.longitude} />
 
+          {showFaces && (
+            <div className="photo-modal-people">
+              <h3>People</h3>
+              {individuals === null ? (
+                <p className="photo-modal-people-loading">Loading…</p>
+              ) : individuals.length === 0 ? (
+                <p className="photo-modal-people-empty">
+                  No individuals catalogued yet -- add one below, then right-click and hold a face box to tag it.
+                </p>
+              ) : (
+                <ul className="photo-modal-people-list">
+                  {individuals.map((individual) => (
+                    <li key={individual.id}>
+                      {individual.has_representative_thumbnail && (
+                        <img
+                          src={individualThumbnailUrl(individual.id)}
+                          alt=""
+                          className="photo-modal-people-thumb"
+                        />
+                      )}
+                      {individual.name}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <form className="photo-modal-add-person" onSubmit={handleAddIndividual}>
+                <input
+                  type="text"
+                  value={newPersonName}
+                  onChange={(event) => setNewPersonName(event.target.value)}
+                  placeholder="Add a person…"
+                />
+                <button type="submit" disabled={!newPersonName.trim()}>
+                  Add
+                </button>
+              </form>
+              {addPersonError && (
+                <p role="alert" className="photo-modal-people-error">
+                  {addPersonError}
+                </p>
+              )}
+              {tagError && (
+                <p role="alert" className="photo-modal-people-error">
+                  {tagError}
+                </p>
+              )}
+            </div>
+          )}
+
           <PhotoChat photoId={photo.id} onBoxesChange={setBoxes} />
         </div>
       </div>
+
+      {tagMenu && (
+        <div
+          className="face-tag-menu"
+          style={{ left: tagMenu.x, top: tagMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {individuals === null ? (
+            <div className="face-tag-menu-item face-tag-menu-message">Loading…</div>
+          ) : individuals.length === 0 ? (
+            <div className="face-tag-menu-item face-tag-menu-message">No individuals catalogued yet</div>
+          ) : (
+            individuals.map((individual) => (
+              <div
+                key={individual.id}
+                className={`face-tag-menu-item${tagMenu.hoveredId === individual.id ? " face-tag-menu-item-active" : ""}`}
+                onMouseEnter={() => setTagMenu((prev) => (prev ? { ...prev, hoveredId: individual.id } : prev))}
+                onMouseLeave={() =>
+                  setTagMenu((prev) => (prev && prev.hoveredId === individual.id ? { ...prev, hoveredId: null } : prev))
+                }
+              >
+                {individual.name}
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }

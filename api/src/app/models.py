@@ -72,11 +72,37 @@ class FaceBox(BaseModel):
     # Same pixel-coordinate convention as BoundingBox, but no `label` --
     # the `faces` table doesn't store one; every row is a face by
     # construction (see sync.py's Florence-2 face-detection pipeline).
+    id: str
     x1: float
     y1: float
     x2: float
     y2: float
+    # Set by POST /api/faces/{id}/tag once a user has manually tagged this
+    # face as a known individual; null otherwise.
+    person_id: Optional[str] = None
 
 
 class FaceList(BaseModel):
     faces: list[FaceBox]
+
+
+class Individual(BaseModel):
+    id: str
+    name: str
+    # Whether people.tag_face has stored a representative crop for this
+    # person yet -- the actual bytes are fetched separately via
+    # GET /api/individuals/{id}/thumbnail, same split as Photo/thumbnail.
+    has_representative_thumbnail: bool
+    created_at: str
+
+
+class IndividualList(BaseModel):
+    individuals: list[Individual]
+
+
+class CreateIndividualRequest(BaseModel):
+    name: str
+
+
+class TagFaceRequest(BaseModel):
+    person_id: str

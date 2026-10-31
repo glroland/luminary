@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS photos (
     description TEXT
 );
 
+-- Catalog of named individuals faces can be manually tagged as (see
+-- `faces.person_id` below) -- people.py / routers/individuals.py.
+CREATE TABLE IF NOT EXISTS individuals (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    -- Small JPEG crop of the most recently tagged face for this person
+    -- (people.tag_face) -- a single representative image, not a gallery of
+    -- every face ever tagged to them.
+    representative_thumbnail BYTEA,
+    created_at TEXT NOT NULL
+);
+
 -- One photo -> many detected faces (sync.py's Florence-2 face detection).
 -- No FK constraint, to match the app's own explicit-delete approach
 -- (storage.delete_photo, sync._delete_missing) rather than relying on a
@@ -37,7 +49,17 @@ CREATE TABLE IF NOT EXISTS faces (
     x1 DOUBLE PRECISION NOT NULL,
     y1 DOUBLE PRECISION NOT NULL,
     x2 DOUBLE PRECISION NOT NULL,
-    y2 DOUBLE PRECISION NOT NULL
+    y2 DOUBLE PRECISION NOT NULL,
+    -- Manually assigned via people.tag_face (POST /api/faces/{id}/tag) --
+    -- NULL until a user tags this face. Logically references
+    -- individuals.id, same "no FK" rationale as faces.photo_id below.
+    person_id TEXT
 );
 
+-- Added after faces already existed in deployed databases -- IF NOT
+-- EXISTS makes this a no-op against a database created after person_id
+-- was already part of the CREATE TABLE above.
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id);
+CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id);

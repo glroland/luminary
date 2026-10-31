@@ -157,7 +157,9 @@ def delete_photo(photo_id: str) -> bool:
 
 def get_faces(photo_id: str) -> list[dict]:
     with get_connection() as conn:
-        rows = conn.execute("SELECT x1, y1, x2, y2 FROM faces WHERE photo_id = %s", (photo_id,)).fetchall()
+        rows = conn.execute(
+            "SELECT id, x1, y1, x2, y2, person_id FROM faces WHERE photo_id = %s", (photo_id,)
+        ).fetchall()
         return [dict(row) for row in rows]
 
 
@@ -170,7 +172,13 @@ def replace_faces(photo_id: str, boxes: list[dict]) -> None:
     all, so stale boxes from a previous photo version -- or from an earlier
     attempt that didn't finish successfully -- must not survive alongside
     (or instead of) a fresh result. See sync.py's module docstring for the
-    full before/after-`description` ordering this is part of."""
+    full before/after-`description` ordering this is part of.
+
+    Note this also discards any `person_id` tags (people.tag_face) on the
+    old rows -- new face rows get fresh ids and start untagged, so a photo
+    whose content changes loses its face tags along with the stale boxes.
+    That's accepted as part of this already-exists wipe-and-redetect
+    behavior, not something this function tries to preserve across."""
     with get_connection() as conn:
         conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
         if boxes:
