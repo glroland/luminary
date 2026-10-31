@@ -7,10 +7,10 @@ image and deployed together via Helm/ArgoCD on OpenShift.
 
 **The API never writes to, modifies, or deletes anything on the configured
 photos backend, under any circumstance.** It only reads from it (to list,
-thumbnail, and serve originals) and to index what it finds into its own
-local SQLite database. There is no upload endpoint that writes a file there,
-and deleting a photo through the API only removes it from the local index —
-it never touches the source file. See "Data safety" below.
+thumbnail, and serve originals) and indexes what it finds into its own
+Postgres database. There is no upload endpoint that writes a file there,
+and deleting a photo through the API only removes it from the index — it
+never touches the source file. See "Data safety" below.
 
 ## Architecture
 
@@ -23,9 +23,16 @@ it never touches the source file. See "Data safety" below.
                                                ▼
                                  ┌──────────────────────────┐
                                  │  api (FastAPI, Python)    │
-                                 │   - photo metadata (SQLite)│
-                                 │   - original + thumbnail  │
-                                 │     files on disk (PVC)   │
+                                 │   - original + thumbnail  │──┐
+                                 │     files on disk (PVC)   │  │
+                                 └──────────────────────────┘  │
+                                               │                │
+                                               ▼                │
+                                 ┌──────────────────────────┐  │
+                                 │  Postgres (external,     │◀─┘
+                                 │  not part of this chart) │
+                                 │   - photo metadata +     │
+                                 │     thumbnails            │
                                  └──────────────────────────┘
 ```
 
@@ -35,9 +42,11 @@ it never touches the source file. See "Data safety" below.
   to one origin.
 - **api** — a FastAPI service exposing a small REST API for photo metadata
   and files. It indexes an existing, externally-managed photo library (read
-  only — see "Data safety") into SQLite, which also holds generated
+  only — see "Data safety") into Postgres, which also holds generated
   thumbnails; the library itself can be a local path, an NFS mount (backed
   by a PersistentVolumeClaim in the cluster), S3, SMB, or read-only HTTP(S).
+  The Postgres server is remote and managed independently of this repo's
+  Helm chart/ArgoCD app — see "Database" below.
 - The two components know nothing about each other beyond the `/api` HTTP
   contract, and ship as separate container images so they can be built,
   versioned, and scaled independently.
@@ -55,14 +64,17 @@ api/                  Python API
   tests/              pytest test suite
   Containerfile       python:3.12-slim runtime image
 
+db/                   SQL to provision/tear down the Postgres database +
+                      role the API uses -- see "Database" below
+
 deploy/
   helm/luminary/      Helm chart deploying both components to OpenShift
   argo-app.yaml       ArgoCD Application pointing at the Helm chart
   Jenkinsfile         Jenkins pipeline: build, package, and push both images
 
-Makefile             install / test / build / deploy helpers
-target/               (generated, gitignored) local venv, SQLite DB, photo
-                      storage, pytest cache -- see "Local development"
+Makefile             install / test / build / deploy / db helpers
+target/               (generated, gitignored) local venv and pytest cache --
+                      see "Local development"
 ```
 
 ## API
@@ -73,10 +85,10 @@ target/               (generated, gitignored) local venv, SQLite DB, photo
 | GET    | `/api/photos`               | List indexed photo metadata         |
 | POST   | `/api/photos`               | Always `403` — uploads are disabled; see "Data safety" |
 | GET    | `/api/photos/{id}`          | Get metadata for one photo          |
-| GET    | `/api/photos/{id}/thumbnail`| Thumbnail JPEG (served from SQLite) |
+| GET    | `/api/photos/{id}/thumbnail`| Thumbnail JPEG (served from Postgres) |
 | GET    | `/api/photos/{id}/original` | Original file, streamed from the photos backend |
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
-| POST   | `/api/sync`                 | Start a background reconciliation of the SQLite index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
+| POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, error}` |
 | POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{backend: "openai"\|"florence", message, history}` → `{reply}` (JSON), or a streamed `text/plain` body if `LUMINARY_OPENAI_STREAMING` is on; see "Photo chat" below |
 
@@ -100,8 +112,8 @@ library on NFS/SMB/S3:
 - `POST /api/photos` (upload) always returns `403` without touching the
   backend. There is no server-side code that opens a file there for
   writing.
-- `DELETE /api/photos/{id}` only deletes the SQLite row for that photo. If
-  the source file is still there, the next sync re-indexes it.
+- `DELETE /api/photos/{id}` only deletes the Postgres row for that photo.
+  If the source file is still there, the next sync re-indexes it.
 - `POST /api/sync` only reads from the backend (`fs.find`/`fs.info`/
   `fs.open(..., "rb")`) to build the index; it never calls a write, delete,
   or directory-creation method on it.
@@ -118,7 +130,11 @@ Configuration (environment variables):
 | `LUMINARY_PHOTOS_URI`      | `/data/photos`      | The photo library to index (read-only) |
 | `LUMINARY_PHOTOS_USERNAME` | *(none)*            | Backend auth — see below               |
 | `LUMINARY_PHOTOS_PASSWORD` | *(none)*            | Backend auth — see below               |
-| `LUMINARY_DATABASE_PATH`   | `/data/photos.db`   | SQLite database file                  |
+| `LUMINARY_DATABASE_HOST`   | `localhost`         | Postgres host — see "Database" below  |
+| `LUMINARY_DATABASE_PORT`   | `5432`              | Postgres port                          |
+| `LUMINARY_DATABASE_NAME`   | `luminary`          | Postgres database name                |
+| `LUMINARY_DATABASE_USER`   | `luminary`          | Postgres role                          |
+| `LUMINARY_DATABASE_PASSWORD` | *(none — required)* | Postgres role's password          |
 | `LUMINARY_CORS_ORIGINS`    | `*`                 | Comma-separated list of allowed origins |
 | `LUMINARY_LOG_LEVEL`       | `INFO`              | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `PORT`                     | `8080`              | Port uvicorn listens on                |
@@ -162,8 +178,54 @@ so it accepts any of the following:
 | SMB/CIFS          | `smb://user:pass@server/share/photos`   | Pure-Python client, no OS-level mount needed |
 | HTTP(S)           | `https://host/photos`                   | Read-only, and `POST /api/sync` needs directory-listing support, which plain HTTP(S) servers generally don't have |
 
-The database always stays on local disk regardless of `LUMINARY_PHOTOS_URI`
-(SQLite needs real filesystem locking).
+### Database
+
+Photo metadata and generated thumbnails live in Postgres — a server that
+already exists and is managed independently of this repo's Helm
+chart/ArgoCD app (it's never stood up by `make build`/`helm install`, and
+there's no PVC for it). Point `LUMINARY_DATABASE_HOST`/`_PORT`/`_NAME`/
+`_USER`/`_PASSWORD` at it; the API connects with those on every request (no
+connection pooling), same as it does to the photos backend.
+
+There are three databases, all on the same server and sharing the one
+`luminary` role, distinguished only by name:
+
+| Database            | Used by                                  |
+|-----------------------|-------------------------------------------|
+| `luminary-dev`        | `make run-api` (local development)       |
+| `luminary-unittest`   | `make test-api` (truncated between every test — see "Testing" below) |
+| `luminary`            | Prod — `values.yaml`'s `api.env.database.name`, used by the Helm deployment |
+
+`db/` holds the SQL to provision and tear them down:
+
+| File                          | Run as                     | Purpose                                 |
+|--------------------------------|-----------------------------|------------------------------------------|
+| `db/create_db_and_user.sql`   | a Postgres superuser, against the `postgres` maintenance DB | Creates one database + the shared role, if it doesn't exist yet (idempotent) — run once per database |
+| `db/create_tables.sql`        | the app role, against one app database | Creates `photos`/`faces` in that database (idempotent; also run automatically on every API startup by `database.init_db()`) |
+| `db/drop_database.sql`       | a Postgres superuser, against the `postgres` maintenance DB | Drops one database (destructive) — run once per database, **before** `drop_role.sql` |
+| `db/drop_role.sql`           | a Postgres superuser, against the `postgres` maintenance DB | Drops the shared role (destructive) — Postgres refuses this while the role still owns any database |
+
+See [`docs/database-schema.md`](docs/database-schema.md) for the `photos`/
+`faces` table/column reference.
+
+```bash
+make db LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>       # create luminary-dev + luminary-unittest
+make recreate-db LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop + recreate, destructive
+make drop-db LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop only
+```
+
+These three targets only ever touch `luminary-dev`/`luminary-unittest`
+(`LUMINARY_DATABASE_NAME`/`LUMINARY_TEST_DATABASE_NAME`) — prod's
+`luminary` database is provisioned the same way, but separately and once,
+against prod's own Postgres host, by invoking `db/create_db_and_user.sql`/
+`db/create_tables.sql` directly with `db_name=luminary` (see their own
+header comments for the exact `psql` invocations).
+
+`LUMINARY_DATABASE_ADMIN_USER`/`_PASSWORD` (default user `postgres`, no
+default password) authenticate only for these three targets — the running
+API never uses them. There's no migrations framework (see `database.py`'s
+module docs): a schema change means updating `database.py`'s `init_db()`
+and `db/create_tables.sql` together.
 
 ### Photo chat
 
@@ -218,22 +280,23 @@ wheel index to avoid pulling in CUDA libraries you don't need without a GPU.
 
 ## Local development
 
-Requires Python 3.12+, Node 20+, and `podman` (or `docker`) on your `PATH`.
+Requires Python 3.12+, Node 20+, `podman` (or `docker`), and a reachable
+Postgres server (see "Database" above) on your `PATH`/network.
 
 ```bash
 make install     # creates target/venv and installs web/node_modules
+make db          # provisions luminary-dev + luminary-unittest, role, and tables (first time only)
 make test        # runs pytest (api) and vitest (web)
 make run-api     # starts the API on http://localhost:8080 (reload)
 make run-web     # starts the Vite dev server on http://localhost:5173
                  # (proxies /api to http://localhost:8080 by default)
 ```
 
-All local `make` run/build artifacts — the Python venv, the local SQLite
-database, local photo storage (`make run-api`'s default
-`LUMINARY_PHOTOS_URI`/`LUMINARY_DATABASE_PATH`), and the pytest cache — live
-under `target/` at the repo root. `make clean` removes it (along with
-`web/node_modules` and `web/dist`, which stay in `web/` since the container
-build expects them there).
+All local `make` run/build artifacts — the Python venv and the pytest
+cache — live under `target/` at the repo root. `make clean` removes it
+(along with `web/node_modules` and `web/dist`, which stay in `web/` since
+the container build expects them there). Photo metadata now lives in
+Postgres rather than under `target/` — see "Database" above.
 
 See `make help` for all targets.
 
@@ -290,12 +353,18 @@ this repository and self-heal any drift.
 
 - **api**: `pytest` with FastAPI's `TestClient`, exercising sync/list/
   metadata/thumbnail/original/delete/chat flows against a temporary photos
-  directory and SQLite database per test (`make test-api`). Chat tests mock
-  the `openai` client and the `chat.ask`/`chat._ask_florence` boundary
-  rather than hitting a real endpoint or loading real model weights; the
-  Florence-2 "torch/transformers not installed" error path is simulated by
-  patching `__import__` rather than relying on them being absent from the
-  environment (`make install` does pull them in).
+  directory and the real `luminary-unittest` Postgres database (`make
+  test-api` points `LUMINARY_DATABASE_*` at it — see "Database" above) —
+  there's no per-test throwaway database; the test fixture truncates
+  `photos`/`faces` at the start of every test for isolation instead.
+  `luminary-unittest` is separate from `luminary-dev` (what `make run-api`
+  uses), so a test run never clears your locally-indexed dev photos. Chat
+  tests mock the `openai` client and the
+  `chat.ask`/`chat._ask_florence` boundary rather than hitting a real
+  endpoint or loading real model weights; the Florence-2 "torch/transformers
+  not installed" error path is simulated by patching `__import__` rather
+  than relying on them being absent from the environment (`make install`
+  does pull them in).
 - **web**: `vitest` + `@testing-library/react`, mocking the API client to
   test loading, empty, populated, and error states (`make test-web`).
 
@@ -306,9 +375,13 @@ this repository and self-heal any drift.
   the production nginx image, which only contains the built static assets.
   Run `npm audit` in `web/` periodically and upgrade when a non-breaking fix
   lands.
-- Photo metadata is stored in a single SQLite file; this is fine for a
-  single-replica deployment but is not meant for `api.replicaCount > 1`
-  without moving to a shared database.
+- Photo metadata now lives in Postgres, which multiple API replicas could
+  share, but `api.replicaCount > 1` still isn't supported: `sync.py`'s
+  in-flight progress (`sync.progress`) and background thread are in-memory,
+  per-process state, not backed by the database. Each connection is also a
+  fresh, unpooled Postgres connection per call — fine at this project's
+  scale, but a connection pool would be the first thing to add alongside
+  multi-replica support.
 - The Florence-2 chat backend has been smoke-tested end-to-end against real
   `microsoft/Florence-2-base` weights on CPU (both the grounding and plain
   caption paths). Unit tests cover the documented boundary

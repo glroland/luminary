@@ -72,7 +72,7 @@ def _insert_bare_photo_row(photo_id: str) -> None:
 
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at) VALUES (%s, %s, %s, %s, %s)",
             (photo_id, "a.jpg", "image/jpeg", 1, "2024-01-01T00:00:00"),
         )
         conn.commit()

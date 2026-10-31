@@ -1,5 +1,5 @@
 """Background reconciliation between the configured photos backend and the
-SQLite index: inserts rows for new files, updates rows whose file changed,
+Postgres index: inserts rows for new files, updates rows whose file changed,
 and deletes rows for files no longer present. This only ever reads from the
 backend (fs.find/fs.info/fs.open in "rb" mode) -- "deleted" here means the
 SQLite row is removed because the file is gone, never the reverse. Runs as
@@ -290,16 +290,16 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
 
     with get_connection() as conn:
         if existing_row:
-            set_clause = ", ".join(f"{column} = ?" for column in fields)
+            set_clause = ", ".join(f"{column} = %s" for column in fields)
             conn.execute(
-                f"UPDATE photos SET {set_clause} WHERE id = ?",
+                f"UPDATE photos SET {set_clause} WHERE id = %s",
                 (*fields.values(), photo_id),
             )
         else:
             fields["id"] = photo_id
             fields["filename"] = relative_path
             columns = ", ".join(fields)
-            placeholders = ", ".join("?" for _ in fields)
+            placeholders = ", ".join("%s" for _ in fields)
             conn.execute(f"INSERT INTO photos ({columns}) VALUES ({placeholders})", tuple(fields.values()))
         conn.commit()
 
@@ -347,7 +347,7 @@ def _run_florence_pipeline(photo_id: str, image, relative_path: str) -> None:
     storage.replace_faces(photo_id, boxes)
 
     with get_connection() as conn:
-        conn.execute("UPDATE photos SET description = ? WHERE id = ?", (description, photo_id))
+        conn.execute("UPDATE photos SET description = %s WHERE id = %s", (description, photo_id))
         conn.commit()
 
 
@@ -393,8 +393,9 @@ def _delete_missing(existing: dict, seen: set) -> int:
         return 0
     with get_connection() as conn:
         # No FK cascade (see database.py) -- clean up faces explicitly.
-        conn.executemany("DELETE FROM faces WHERE photo_id = ?", [(photo_id,) for photo_id in missing_ids])
-        conn.executemany("DELETE FROM photos WHERE id = ?", [(photo_id,) for photo_id in missing_ids])
+        with conn.cursor() as cursor:
+            cursor.executemany("DELETE FROM faces WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids])
+            cursor.executemany("DELETE FROM photos WHERE id = %s", [(photo_id,) for photo_id in missing_ids])
         conn.commit()
     return len(missing_ids)
 

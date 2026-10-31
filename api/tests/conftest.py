@@ -13,9 +13,9 @@ if str(SRC_DIR) not in sys.path:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LUMINARY_PHOTOS_URI", str(tmp_path / "photos"))
-    monkeypatch.setenv("LUMINARY_DATABASE_PATH", str(tmp_path / "photos.db"))
 
     from app import chat
+    from app.database import get_connection
     from fastapi.testclient import TestClient
 
     from app.main import app
@@ -38,6 +38,18 @@ def client(tmp_path, monkeypatch):
     sync_progress.reset()
 
     with TestClient(app) as test_client:
+        # There's no per-test throwaway SQLite file anymore -- tests share
+        # one real Postgres database, the `luminary-unittest` one `make db`
+        # provisions and `make test-api` points LUMINARY_DATABASE_* at (see
+        # config.py/README/Makefile) -- distinct from the `luminary-dev`
+        # database `make run-api` uses, so running tests doesn't wipe your
+        # locally-indexed dev photos. The app's startup lifespan (just run
+        # by entering the `with` block above) has already created the
+        # tables if they didn't exist; truncate them here for isolation
+        # between tests.
+        with get_connection() as conn:
+            conn.execute("TRUNCATE TABLE photos, faces")
+            conn.commit()
         yield test_client
 
 

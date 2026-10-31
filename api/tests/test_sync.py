@@ -269,7 +269,7 @@ def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_descri
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE photos SET thumbnail = NULL, description = 'a pre-existing description' WHERE id = ?",
+            "UPDATE photos SET thumbnail = NULL, description = 'a pre-existing description' WHERE id = %s",
             (photo_id,),
         )
         conn.commit()

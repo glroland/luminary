@@ -6,7 +6,6 @@ can override them per-case with monkeypatched environment variables.
 
 import os
 import re
-from pathlib import Path
 from typing import Optional
 
 
@@ -32,8 +31,33 @@ def get_photos_password() -> Optional[str]:
     return os.environ.get("LUMINARY_PHOTOS_PASSWORD") or None
 
 
-def get_database_path() -> Path:
-    return Path(os.environ.get("LUMINARY_DATABASE_PATH", "/data/photos.db"))
+def get_database_host() -> str:
+    """Postgres host holding photo metadata + thumbnails. Unlike
+    LUMINARY_PHOTOS_URI, this is always Postgres, always remote to this
+    app's own deployment -- the database is provisioned and maintained
+    separately (see db/ and the `make db`/`make recreate-db` targets), not
+    stood up by the Helm chart/ArgoCD app alongside the API."""
+    return os.environ.get("LUMINARY_DATABASE_HOST", "localhost")
+
+
+def get_database_port() -> int:
+    return int(os.environ.get("LUMINARY_DATABASE_PORT", "5432"))
+
+
+def get_database_name() -> str:
+    return os.environ.get("LUMINARY_DATABASE_NAME", "luminary")
+
+
+def get_database_user() -> str:
+    return os.environ.get("LUMINARY_DATABASE_USER", "luminary")
+
+
+def get_database_password() -> Optional[str]:
+    """No default -- unlike the photos backend's credentials, which may
+    legitimately be absent (a local path/NFS mount needs none), a Postgres
+    connection always authenticates with something; leaving this unset
+    is a misconfiguration, not a valid "no auth needed" state."""
+    return os.environ.get("LUMINARY_DATABASE_PASSWORD") or None
 
 
 def get_cors_origins() -> list[str]:

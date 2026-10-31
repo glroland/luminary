@@ -30,7 +30,7 @@ def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
     path. Read-only: the app never writes to, creates in, or deletes from
     this backend -- it's treated as someone else's existing photo library
     (originals live directly under the root; there's no app-managed
-    subdirectory). Photos only enter the SQLite index via sync.py scanning
+    subdirectory). Photos only enter the Postgres index via sync.py scanning
     what's already there.
 
     Credentials (LUMINARY_PHOTOS_USERNAME/_PASSWORD) are passed to fsspec
@@ -112,14 +112,14 @@ def list_photos() -> list[dict]:
 def get_photo(photo_id: str) -> Optional[dict]:
     with get_connection() as conn:
         row = conn.execute(
-            f"SELECT {METADATA_COLUMNS} FROM photos WHERE id = ?", (photo_id,)
+            f"SELECT {METADATA_COLUMNS} FROM photos WHERE id = %s", (photo_id,)
         ).fetchone()
         return dict(row) if row else None
 
 
 def get_thumbnail(photo_id: str) -> Optional[bytes]:
     with get_connection() as conn:
-        row = conn.execute("SELECT thumbnail FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        row = conn.execute("SELECT thumbnail FROM photos WHERE id = %s", (photo_id,)).fetchone()
         return row["thumbnail"] if row else None
 
 
@@ -143,21 +143,21 @@ def read_original_bytes(metadata: dict) -> Optional[bytes]:
 
 
 def delete_photo(photo_id: str) -> bool:
-    """Remove a photo from the SQLite index only. Never touches the file on
-    the photos backend -- that's someone else's data, not ours to delete.
-    If the file is still there, the next sync will re-index it."""
+    """Remove a photo from the Postgres index only. Never touches the file
+    on the photos backend -- that's someone else's data, not ours to
+    delete. If the file is still there, the next sync will re-index it."""
     with get_connection() as conn:
         # No FK cascade (see database.py) -- clean up the photo's faces
         # explicitly so they don't outlive their photo row.
-        conn.execute("DELETE FROM faces WHERE photo_id = ?", (photo_id,))
-        cursor = conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+        conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
+        cursor = conn.execute("DELETE FROM photos WHERE id = %s", (photo_id,))
         conn.commit()
         return cursor.rowcount > 0
 
 
 def get_faces(photo_id: str) -> list[dict]:
     with get_connection() as conn:
-        rows = conn.execute("SELECT x1, y1, x2, y2 FROM faces WHERE photo_id = ?", (photo_id,)).fetchall()
+        rows = conn.execute("SELECT x1, y1, x2, y2 FROM faces WHERE photo_id = %s", (photo_id,)).fetchall()
         return [dict(row) for row in rows]
 
 
@@ -172,10 +172,11 @@ def replace_faces(photo_id: str, boxes: list[dict]) -> None:
     (or instead of) a fresh result. See sync.py's module docstring for the
     full before/after-`description` ordering this is part of."""
     with get_connection() as conn:
-        conn.execute("DELETE FROM faces WHERE photo_id = ?", (photo_id,))
+        conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
         if boxes:
-            conn.executemany(
-                "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (?, ?, ?, ?, ?, ?)",
-                [(str(uuid.uuid4()), photo_id, box["x1"], box["y1"], box["x2"], box["y2"]) for box in boxes],
-            )
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (%s, %s, %s, %s, %s, %s)",
+                    [(str(uuid.uuid4()), photo_id, box["x1"], box["y1"], box["x2"], box["y2"]) for box in boxes],
+                )
         conn.commit()

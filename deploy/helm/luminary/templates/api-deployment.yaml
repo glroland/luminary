@@ -38,8 +38,22 @@ spec:
                   name: {{ .Values.api.env.photosCredentialsSecret }}
                   key: password
             {{- end }}
-            - name: LUMINARY_DATABASE_PATH
-              value: /data/photos.db
+            - name: LUMINARY_DATABASE_HOST
+              value: {{ .Values.api.env.database.host | quote }}
+            - name: LUMINARY_DATABASE_PORT
+              value: {{ .Values.api.env.database.port | quote }}
+            - name: LUMINARY_DATABASE_NAME
+              value: {{ .Values.api.env.database.name | quote }}
+            - name: LUMINARY_DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.env.databaseCredentialsSecret }}
+                  key: username
+            - name: LUMINARY_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.env.databaseCredentialsSecret }}
+                  key: password
             - name: LUMINARY_CORS_ORIGINS
               value: {{ .Values.api.env.corsOrigins | quote }}
             {{- if .Values.api.env.openaiBaseUrl }}

@@ -7,6 +7,12 @@ s3fs==2026.9.0
 smbprotocol==1.17.0
 aiohttp==3.14.5
 
+# Photo metadata + thumbnails: a remote Postgres, provisioned/maintained
+# separately from this app (see db/ and the `make db`/`make recreate-db`
+# targets) -- [binary] bundles libpq so there's no system Postgres client
+# library to install in the Containerfile.
+psycopg[binary]==3.3.6
+
 # Photo chat: path 1 (any OpenAI-compatible multimodal endpoint)
 openai==3.41.0
 

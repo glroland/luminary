@@ -10,8 +10,8 @@ photo library, browse it in a gallery, view full-size.
 **Hard invariant: the API never writes to, creates in, or deletes from the
 configured photos backend (`LUMINARY_PHOTOS_URI`), under any circumstance.**
 There is no upload endpoint that writes a file there (`POST /api/photos`
-always returns `403`), and `DELETE /api/photos/{id}` only removes the SQLite
-row — it never touches the source file. This is intentional and was an
+always returns `403`), and `DELETE /api/photos/{id}` only removes the
+Postgres row — it never touches the source file. This is intentional and was an
 explicit, direct requirement, not an incidental design choice — treat any
 change that would add a write/delete/mkdir call against that backend as a
 regression to flag, not a reasonable refactor. See storage.py's and sync.py's
@@ -25,8 +25,10 @@ deployed together via Helm/ArgoCD on OpenShift:
   unprivileged nginx, which also reverse-proxies `/api/*` to the API service
   so the browser only ever talks to one origin.
 - **`api/`** — FastAPI service. Photo metadata + generated thumbnails in
-  SQLite; originals are read from wherever `LUMINARY_PHOTOS_URI` points (a
-  PVC/NFS mount in the cluster, or S3/SMB/HTTP) and never written back to.
+  Postgres (a remote server managed independently of this repo's Helm
+  chart/ArgoCD app — see `db/` and the README's "Database" section);
+  originals are read from wherever `LUMINARY_PHOTOS_URI` points (a PVC/NFS
+  mount in the cluster, or S3/SMB/HTTP) and never written back to.
 
 The two components only know about each other through the `/api` HTTP
 contract — no shared code, no shared types.
@@ -42,6 +44,9 @@ make lint        # eslint on web/src (no Python linter configured)
 make run-api     # uvicorn --reload on :8080 (PYTHONPATH=api/src)
 make run-web     # vite dev server on :5173, proxies /api -> :8080
 make build       # builds luminary-api and luminary-web container images
+make db          # provisions the Postgres database + role + tables (db/)
+make recreate-db # drops and recreates them
+make drop-db     # drops them
 make helm-lint   # helm lint deploy/helm/luminary
 make helm-template
 make clean       # rm -rf target/ (+ web/node_modules, web/dist)
@@ -55,24 +60,24 @@ There's no `api` virtualenv activation step baked into other targets —
 `run-api` and `test-api` call `target/venv/bin/python`/`uvicorn` directly, so
 run commands the same way instead of assuming an activated venv.
 
-All local run/build artifacts — the venv, the local SQLite DB + photo
-storage `make run-api` defaults to (`LUMINARY_PHOTOS_URI`/
-`LUMINARY_DATABASE_PATH` set to paths under `target/data/`), and the pytest
-cache (`cache_dir` in `api/pyproject.toml`) — live under `target/` at the
-repo root (gitignored), so `make clean` is just `rm -rf target/`. The one
-exception is `web/node_modules`/`web/dist`: left in `web/` rather than moved
-under `target/`, since `web/Containerfile`'s container build (`COPY
---from=build /app/dist ...`) expects `dist` there and Node's module
-resolution requires `node_modules` to live alongside `package.json` — both
-are still covered by `make clean` explicitly, just not by the `target/`
-rename.
+All local run/build artifacts — the venv and the pytest cache (`cache_dir`
+in `api/pyproject.toml`) — live under `target/` at the repo root
+(gitignored), so `make clean` is just `rm -rf target/`. Photo metadata lives
+in a separate, remote Postgres (`LUMINARY_DATABASE_*`, provisioned via
+`make db`/`db/` — see the README's "Database" section) rather than under
+`target/`. The one exception to the `target/` rule is `web/node_modules`/
+`web/dist`: left in `web/` rather than moved under `target/`, since
+`web/Containerfile`'s container build (`COPY --from=build /app/dist ...`)
+expects `dist` there and Node's module resolution requires `node_modules`
+to live alongside `package.json` — both are still covered by `make clean`
+explicitly, just not by the `target/` rename.
 
 ## API architecture (`api/src/app/`)
 
 Request flow: `main.py` wires CORS + the `health`, `photos`, and `sync`
 routers under `/api`, with lifespan calling `database.init_db()` on startup.
 `routers/photos.py` is thin — all actual work (file I/O, thumbnailing,
-SQLite) lives in `storage.py`/`sync.py`:
+Postgres) lives in `storage.py`/`sync.py`:
 
 - Logging: standard-library `logging`, configured once in
   `logging_config.configure_logging()` (called at the top of `main.py`,
@@ -87,11 +92,18 @@ SQLite) lives in `storage.py`/`sync.py`:
   from `LUMINARY_PHOTOS_URI` is logged — never log `get_photos_uri()`'s
   return value directly.
 
-- `config.py` reads `LUMINARY_PHOTOS_URI`, `LUMINARY_DATABASE_PATH`,
-  `LUMINARY_CORS_ORIGINS` from env **lazily per-call** (not cached at import
-  time) specifically so tests can override them per-case with
-  `monkeypatch.setenv` — see `tests/conftest.py`'s `client` fixture, which
-  points both at a fresh `tmp_path` per test.
+- `config.py` reads `LUMINARY_PHOTOS_URI`, `LUMINARY_DATABASE_HOST`/`_PORT`/
+  `_NAME`/`_USER`/`_PASSWORD`, `LUMINARY_CORS_ORIGINS` from env **lazily
+  per-call** (not cached at import time) specifically so tests can override
+  them per-case with `monkeypatch.setenv` — see `tests/conftest.py`'s
+  `client` fixture, which points the photos URI at a fresh `tmp_path` per
+  test. The database connection itself isn't overridden per test —
+  `make test-api` points `LUMINARY_DATABASE_NAME` at the dedicated
+  `luminary-unittest` database (separate from `luminary-dev`, which
+  `make run-api` uses, and from prod's own `luminary` — see the Makefile
+  and README's "Database" section) and the fixture truncates `photos`/
+  `faces` at the start of each test for isolation instead (there's no
+  per-test throwaway file the way `tmp_path` gives SQLite).
 - `storage.py` is read-only against the photos backend by construction: grep
   it (or the whole `api/` tree) for `"wb"`/`fs.rm`/`fs.makedirs`/`.write(` if
   you're ever unsure — there should be nothing. It resolves
@@ -115,8 +127,8 @@ SQLite) lives in `storage.py`/`sync.py`:
   subdirectory (an earlier version wrote uploads under `{root}/originals/`;
   that convention is gone along with the upload path it existed for).
   Thumbnails (320x320 JPEG, best-effort via Pillow) are generated at index
-  time and stored as a `BLOB` in SQLite, never written back to the backend —
-  this also means thumbnails work on read-only `https://` backends where
+  time and stored as a `BYTEA` in Postgres, never written back to the
+  backend — this also means thumbnails work on read-only `https://` backends where
   writing a second file wouldn't be possible anyway. The `filename` column
   holds the path *relative to the photos root* exactly as discovered (e.g.
   `vacation/2019/beach.jpg`) — `stream_original` builds the backend path
@@ -134,13 +146,20 @@ SQLite) lives in `storage.py`/`sync.py`:
   (`storage.METADATA_COLUMNS`) that excludes the thumbnail blob, so listing
   photos never pulls thumbnail bytes off disk — only `get_thumbnail` does
   that, per photo, on demand. There are no DB migrations (see `database.py`
-  below), so an existing local `photos.db` from before a schema change needs
-  to be deleted/recreated.
-- `database.py` opens a fresh sqlite3 connection per operation (no pooling);
-  `init_db()` just creates the `photos` table if missing — there are no
-  migrations, so schema changes need a manual `ALTER TABLE` added here.
-- `sync.py` is the *only* way photos enter the index — it reconciles SQLite
-  against whatever `fs.find()` discovers under the photos root, filtered to
+  below) — `init_db()`'s `CREATE TABLE IF NOT EXISTS` only covers a
+  brand-new database; a schema change needs a manual `ALTER TABLE` added to
+  both `init_db()` and `db/create_tables.sql` together.
+- `database.py` opens a fresh `psycopg` connection per operation (no
+  pooling), row factory set to `psycopg.rows.dict_row` so query results
+  come back as plain dicts (matching `storage.py`/`sync.py`'s `dict(row)`
+  calls, carried over from the pre-Postgres `sqlite3.Row` behavior);
+  `init_db()` creates the `photos`/`faces` tables if missing. Connection
+  parameters come from `config.get_database_host/_port/_name/_user/
+  _password()` — a remote server provisioned via `db/`'s SQL (see the
+  README's "Database" section and `make db`/`make recreate-db`), not
+  something this app stands up itself.
+- `sync.py` is the *only* way photos enter the index — it reconciles
+  Postgres against whatever `fs.find()` discovers under the photos root, filtered to
   a fixed set of image extensions (`sync.IMAGE_EXTENSIONS`) so non-photo
   files in a real, messy library (sidecar files, `.DS_Store`, etc.) don't
   get indexed as broken photos. Read-only like `storage.py` — see
@@ -207,11 +226,13 @@ SQLite) lives in `storage.py`/`sync.py`:
   silent (bare `except: pass` / `progress.fail()` with no log call) —
   don't reintroduce a silent except around backend I/O in this module.
 
-SQLite + on-disk files means the API is single-replica only (see
-`api.replicaCount` note in Helm values) — don't add code that assumes
-multiple API pods share storage without also changing the storage layer.
-The same applies to `sync.py`'s in-memory progress state and thread: it
-isn't shared across replicas either. Florence-2's loaded model (`chat.py`'s
+Moving metadata to Postgres means multiple API replicas *could* share that
+part of the storage layer, but on-disk originals/thumbnails were never the
+only obstacle: `sync.py`'s in-memory progress state and background thread
+are per-process and aren't shared across replicas either, so
+`api.replicaCount > 1` still isn't supported (see Helm values' note) —
+don't add code that assumes otherwise without also addressing that.
+Florence-2's loaded model (`chat.py`'s
 module-level `_florence_model`/`_florence_processor`, lazily populated and
 cached) is also per-pod, in-memory state — same caveat.
 
