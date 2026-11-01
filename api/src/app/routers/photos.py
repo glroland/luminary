@@ -84,6 +84,16 @@ def remove_photo(photo_id: str) -> None:
         raise HTTPException(status_code=404, detail="Photo not found")
 
 
+@router.delete("/purge", status_code=204)
+def purge_database() -> None:
+    # Clears every photos/faces/individuals row -- the photos backend itself
+    # is never touched, so a subsequent sync re-indexes everything found
+    # there. Registered as a static "/purge" path, not under "/photos/...",
+    # so it can never collide with the "/photos/{photo_id}" route above.
+    logger.warning("Purging all photos, faces, and individuals from the database")
+    storage.purge_all()
+
+
 @router.post("/photos/{photo_id}/chat", response_model=ChatResponse)
 def chat_about_photo(photo_id: str, body: ChatRequest):
     photo = storage.get_photo(photo_id)

@@ -53,6 +53,30 @@ def test_delete_removes_index_entry_but_not_the_source_file(client, tmp_path):
     assert len(client.get("/api/photos").json()["photos"]) == 1
 
 
+def test_purge_clears_photos_faces_and_individuals_but_not_the_source_file(client, tmp_path):
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    assert len(client.get("/api/photos").json()["photos"]) == 1
+
+    person_id = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+
+    response = client.delete("/api/purge")
+    assert response.status_code == 204
+
+    assert client.get("/api/photos").json() == {"photos": []}
+    assert client.get("/api/individuals").json() == {"individuals": []}
+    assert client.get(f"/api/individuals/{person_id}/faces").status_code == 404
+
+    # The underlying file on the photos backend must be untouched.
+    assert image_path.exists()
+
+    # Since the file is still there, a re-sync indexes it again.
+    status = sync_and_wait(client)
+    assert status["inserted"] == 1
+    assert len(client.get("/api/photos").json()["photos"]) == 1
+
+
 def test_upload_endpoint_is_disabled(client, caplog):
     with caplog.at_level(logging.WARNING, logger="app.routers.photos"):
         response = client.post(

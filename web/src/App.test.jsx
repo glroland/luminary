@@ -74,13 +74,14 @@ describe("App", () => {
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
-    // Refresh now lives inside the collapsible sidebar (see Sidebar.jsx) --
-    // open it first, same as a real user would.
+    // Refresh now lives on the Manage page (see ManagementPage.jsx) --
+    // navigate there first, same as a real user would.
     fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+    fireEvent.click(screen.getByText("Manage"));
 
     // Optimistic progress UI appears immediately, before the first poll.
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
       await Promise.resolve();
     });
     expect(screen.getByRole("status")).toBeInTheDocument();
@@ -93,6 +94,6 @@ describe("App", () => {
     expect(client.fetchPhotos).toHaveBeenCalledTimes(2);
 
     await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(screen.getByRole("button", { name: /refresh/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeInTheDocument();
   });
 });

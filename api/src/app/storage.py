@@ -155,6 +155,18 @@ def delete_photo(photo_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def purge_all() -> None:
+    """Delete every row from every table -- individuals, faces, and photos.
+    Like delete_photo, this only ever touches Postgres; the photos backend
+    itself is never written to or deleted from. Originals are untouched and
+    will simply be re-indexed as new photos the next time someone syncs."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM faces")
+        conn.execute("DELETE FROM individuals")
+        conn.execute("DELETE FROM photos")
+        conn.commit()
+
+
 def get_faces(photo_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(

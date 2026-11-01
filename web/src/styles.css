@@ -10,6 +10,13 @@ body {
 }
 
 .app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
   max-width: 1100px;
   margin: 0 auto;
   padding: 1.5rem;
@@ -568,6 +575,13 @@ body {
 }
 
 /* --- Sidebar (Sidebar.jsx) ------------------------------------------- */
+/* A traditional, non-overlaying sidebar: it's a flex column alongside
+   ".app-main" (see ".app" above), flush against the window's left edge,
+   not a fixed-position panel over it, so it can be toggled open/closed
+   without ever blocking the main view. The toggle button that opens/closes
+   it lives in ".app-header" (next to the logo, see App.jsx) rather than
+   inside ".sidebar" itself, so it stays visible and clickable regardless
+   of open/closed state -- only ".sidebar" itself collapses. */
 
 .sidebar-toggle {
   background: none;
@@ -596,36 +610,27 @@ body {
   border-radius: 1px;
 }
 
-.sidebar-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(22, 58, 107, 0.4);
-  z-index: 900;
-}
-
 .sidebar {
-  position: fixed;
+  flex-shrink: 0;
+  width: 0;
+  /* Sticky + a viewport-relative height (rather than stretching to match
+     ".app-main"'s content height, which can be much taller than the
+     viewport) keeps the sidebar -- and its "Manage" link at the bottom --
+     always reachable without scrolling the gallery all the way down. */
+  position: sticky;
   top: 0;
-  left: 0;
   height: 100vh;
-  width: 280px;
-  background: #ffffff;
-  border-right: 1px solid #dce6f2;
-  box-shadow: 4px 0 20px rgba(22, 58, 107, 0.2);
+  background: #f4f7fb;
+  border-right: 0 solid #dce6f2;
   display: flex;
   flex-direction: column;
-  transform: translateX(-100%);
-  transition: transform 0.2s ease;
-  z-index: 901;
+  overflow: hidden;
+  transition: width 0.2s ease;
 }
 
 .sidebar-open {
-  transform: translateX(0);
-}
-
-.sidebar-refresh {
-  padding: 1rem;
-  border-bottom: 1px solid #dce6f2;
+  width: 280px;
+  border-right-width: 1px;
 }
 
 .sidebar-tree {
@@ -904,6 +909,33 @@ body {
   border-radius: 999px;
 }
 
+.management-refresh {
+  margin-bottom: 1rem;
+}
+
 .management-refresh-faces {
   margin-bottom: 1rem;
+}
+
+.management-danger-zone {
+  margin-top: 2rem;
+  padding: 1rem;
+  border: 1px solid #f3c7c7;
+  border-radius: 8px;
+  background: #fdf3f3;
+}
+
+.management-danger-zone h3 {
+  margin-top: 0;
+  color: #b91c1c;
+}
+
+.management-purge {
+  background: #b91c1c;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
 }

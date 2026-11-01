@@ -7,15 +7,17 @@ import {
   fetchIndividualFaces,
   fetchIndividuals,
   individualThumbnailUrl,
+  purgeDatabase,
   refreshFaces,
   untagFace,
   updateIndividual,
 } from "../api/client.js";
+import SyncStatus from "./SyncStatus.jsx";
 
 const REFRESH_POLL_INTERVAL_MS = 1000;
 const REFRESH_DONE_DISPLAY_MS = 2000;
 
-export default function ManagementPage({ onBack, onNavigateToPhoto }) {
+export default function ManagementPage({ syncStatus, onRefresh, onBack, onNavigateToPhoto, onPurged }) {
   const [individuals, setIndividuals] = useState(null);
   const [pageError, setPageError] = useState(null);
   const [newName, setNewName] = useState("");
@@ -34,6 +36,7 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
   // of global app state, since it's specific to the individuals catalog.
   const [refreshStatus, setRefreshStatus] = useState(null);
   const refreshPollRef = useRef(null);
+  const [purgeError, setPurgeError] = useState(null);
 
   useEffect(() => {
     fetchIndividuals()
@@ -173,12 +176,40 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
       .catch((err) => setPageError(err.message));
   }
 
+  // Purges the whole database (photos, faces, individuals) -- irreversible
+  // and global, unlike the per-item Delete buttons above, so it's the one
+  // destructive action here that confirms first.
+  function handlePurge() {
+    if (
+      !window.confirm(
+        "This permanently deletes every photo, face, and individual from the database. " +
+          "The original files on the photos backend are untouched and will be re-indexed " +
+          "on the next sync. This cannot be undone. Continue?"
+      )
+    ) {
+      return;
+    }
+    purgeDatabase()
+      .then(() => {
+        setIndividuals([]);
+        setFacesByIndividual({});
+        setExpandedIds(new Set());
+        setPurgeError(null);
+        onPurged();
+      })
+      .catch((err) => setPurgeError(err.message));
+  }
+
   return (
     <div className="management-page">
       <button type="button" className="management-back" onClick={onBack}>
         &larr; Back to gallery
       </button>
       <h2>Manage individuals</h2>
+
+      <div className="management-refresh">
+        <SyncStatus status={syncStatus} onRefresh={onRefresh} />
+      </div>
 
       <div className="management-refresh-faces">
         {!refreshStatus || refreshStatus.status === "idle" ? (
@@ -339,6 +370,22 @@ export default function ManagementPage({ onBack, onNavigateToPhoto }) {
           })}
         </ul>
       )}
+
+      <div className="management-danger-zone">
+        <h3>Danger zone</h3>
+        <p>
+          Permanently deletes every photo, face, and individual from the database. The original
+          files on the photos backend are untouched and will be re-indexed on the next sync.
+        </p>
+        <button type="button" className="management-purge" onClick={handlePurge}>
+          Purge database
+        </button>
+        {purgeError && (
+          <p role="alert" className="error">
+            {purgeError}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

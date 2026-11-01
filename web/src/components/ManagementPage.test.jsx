@@ -184,6 +184,49 @@ describe("ManagementPage", () => {
     expect(screen.getByRole("button", { name: /refresh faces/i })).toBeInTheDocument();
   });
 
+  it("renders the library Refresh control (moved here from the sidebar) and calls onRefresh", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+    const onRefresh = vi.fn();
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} onRefresh={onRefresh} syncStatus={null} />);
+    await waitFor(() => expect(screen.getByText(/no individuals catalogued yet/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
+    expect(onRefresh).toHaveBeenCalled();
+  });
+
+  it("purges the database after confirming, clears the catalog, and notifies the parent", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const purgeMock = vi.spyOn(client, "purgeDatabase").mockResolvedValue();
+    const onPurged = vi.fn();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} onPurged={onPurged} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /purge database/i }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    await waitFor(() => expect(purgeMock).toHaveBeenCalled());
+    expect(onPurged).toHaveBeenCalled();
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+  });
+
+  it("does not purge when the confirmation is declined", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const purgeMock = vi.spyOn(client, "purgeDatabase").mockResolvedValue();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} onPurged={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /purge database/i }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(purgeMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+  });
+
   it("shows a failure message if 'Refresh Faces' errors", async () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
     vi.spyOn(client, "refreshFaces").mockResolvedValue({

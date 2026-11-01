@@ -113,40 +113,62 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="app-header">
-        <Sidebar
-          open={sidebarOpen}
-          onToggle={() => setSidebarOpen((prev) => !prev)}
-          onClose={() => setSidebarOpen(false)}
-          photos={photos}
-          selectedDirectory={selectedDirectory}
-          onSelectDirectory={(directory) => {
-            setSelectedDirectory(directory);
-            setView("gallery");
-            setSidebarOpen(false);
-          }}
-          syncStatus={syncStatus}
-          onRefresh={handleRefresh}
-          onManage={() => {
-            setView("manage");
-            setSidebarOpen(false);
-          }}
-        />
-        <img className="app-logo" src={logo} alt="Luminary" />
-      </header>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      {view === "manage" ? (
-        <ManagementPage onBack={() => setView("gallery")} onNavigateToPhoto={handleNavigateToPhoto} />
-      ) : isLoading ? (
-        <p>Loading photos...</p>
-      ) : (
-        <PhotoGrid photos={visiblePhotos} onSelect={setSelectedPhoto} />
-      )}
-      <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
+      {/* A traditional sidebar: it's a column in this flex layout, not a
+          fixed overlay, so leaving it open never blocks the main view
+          beside it (see Sidebar.jsx/styles.css's ".sidebar" rules). It's
+          the first child here, flush against the window's left edge with
+          no gap, regardless of open/closed state. */}
+      <Sidebar
+        open={sidebarOpen}
+        photos={photos}
+        selectedDirectory={selectedDirectory}
+        onSelectDirectory={(directory) => {
+          setSelectedDirectory(directory);
+          setView("gallery");
+        }}
+        onManage={() => setView("manage")}
+      />
+      <div className="app-main">
+        <header className="app-header">
+          <button
+            type="button"
+            className="sidebar-toggle"
+            onClick={() => setSidebarOpen((prev) => !prev)}
+            aria-label="Toggle sidebar"
+            aria-expanded={sidebarOpen}
+          >
+            <span className="sidebar-toggle-icon" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </button>
+          <img className="app-logo" src={logo} alt="Luminary" />
+        </header>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        {view === "manage" ? (
+          <ManagementPage
+            syncStatus={syncStatus}
+            onRefresh={handleRefresh}
+            onBack={() => setView("gallery")}
+            onNavigateToPhoto={handleNavigateToPhoto}
+            onPurged={() => {
+              setSelectedDirectory(null);
+              setSelectedPhoto(null);
+              loadPhotos();
+            }}
+          />
+        ) : isLoading ? (
+          <p>Loading photos...</p>
+        ) : (
+          <PhotoGrid photos={visiblePhotos} onSelect={setSelectedPhoto} />
+        )}
+        <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
+      </div>
     </div>
   );
 }

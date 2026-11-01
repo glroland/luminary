@@ -31,6 +31,10 @@ export async function deletePhoto(photoId) {
   await request(`/photos/${photoId}`, { method: "DELETE" });
 }
 
+export async function purgeDatabase() {
+  await request("/purge", { method: "DELETE" });
+}
+
 export async function startSync() {
   return request("/sync", { method: "POST" });
 }
