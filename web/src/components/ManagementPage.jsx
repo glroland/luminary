@@ -42,8 +42,37 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     fetchIndividuals()
       .then(setIndividuals)
       .catch((err) => setPageError(err.message));
+    // A sync may already have auto-triggered "Refresh Faces" (see sync.py's
+    // _trigger_face_refresh) before this page was ever opened -- same
+    // "resume polling if it's already running" check App.jsx does for sync
+    // itself on mount.
+    fetchFaceRefreshStatus()
+      .then((status) => {
+        if (status.status === "running") {
+          setRefreshStatus(status);
+          pollRefreshStatus();
+        }
+      })
+      .catch(() => {});
     return () => clearInterval(refreshPollRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A successful sync auto-triggers "Refresh Faces" server-side (see
+  // sync.py's _trigger_face_refresh) -- pick up and display its progress
+  // here too, not just when the standalone button below is clicked
+  // directly, so "Refresh" alone shows the whole picture end to end.
+  useEffect(() => {
+    if (syncStatus?.status !== "completed") return;
+    fetchFaceRefreshStatus()
+      .then((status) => {
+        setRefreshStatus(status);
+        if (status.status === "running") pollRefreshStatus();
+        else if (status.status === "completed") reloadAfterRefresh();
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncStatus]);
 
   function sortByName(list) {
     return [...list].sort((a, b) => a.name.localeCompare(b.name));

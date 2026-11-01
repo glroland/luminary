@@ -14,7 +14,7 @@ if str(SRC_DIR) not in sys.path:
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LUMINARY_PHOTOS_URI", str(tmp_path / "photos"))
 
-    from app import chat
+    from app import chat, sync
     from app.database import get_connection
     from fastapi.testclient import TestClient
 
@@ -35,6 +35,15 @@ def client(tmp_path, monkeypatch):
         raise chat.ChatNotConfigured("Florence-2 not configured in tests")
 
     monkeypatch.setattr(chat, "_load_florence", _unconfigured)
+
+    # A successful sync now also auto-triggers recognition.py's "Refresh
+    # Faces" job (see sync.py's module docstring/_trigger_face_refresh).
+    # Left un-mocked, every sync-exercising test below would also spin up a
+    # real background face-matching run -- slow, and racy against this
+    # fixture's own per-test progress reset/table truncate just below.
+    # Defaulted to a no-op here; the dedicated test(s) that exercise the
+    # chaining itself (test_sync.py) restore/spy on the real call.
+    monkeypatch.setattr(sync, "_trigger_face_refresh", lambda: None)
 
     sync_progress.reset()
     refresh_progress.reset()

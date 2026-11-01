@@ -29,6 +29,16 @@ caption -- see _run_florence_pipeline for the ordering that makes that a
 reliable signal (faces are always written *before* `description`, never
 after), and _sync_one_file's docstring for how that combines with the
 backfill behavior above.
+
+A successful sync also chains straight into recognition.py's "Refresh
+Faces" job (_trigger_face_refresh, called at the end of _run_sync) --
+"Refresh" on the Manage page shouldn't need a second click to also
+auto-match any newly detected faces against already-tagged individuals.
+recognition.start_refresh()'s own try_start() guard makes this a no-op if
+a refresh is already running (e.g. someone just clicked the standalone
+"Refresh Faces" button, which still exists for on-demand re-matching --
+right after manually tagging someone, without waiting for/triggering a
+full resync).
 """
 
 import asyncio
@@ -44,7 +54,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, storage
+from . import chat, recognition, storage
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
@@ -400,6 +410,17 @@ def _delete_missing(existing: dict, seen: set) -> int:
     return len(missing_ids)
 
 
+def _trigger_face_refresh() -> None:
+    """Kicks off recognition.py's "Refresh Faces" job at the end of a
+    successful sync -- see this module's docstring. Isolated into its own
+    function (rather than calling recognition.start_refresh() directly from
+    _run_sync) purely so tests can monkeypatch *this* one call to a no-op
+    without having to stub out recognition.start_refresh() itself, which
+    test_recognition.py's own tests (and routers/faces.py's standalone
+    "Refresh Faces" endpoint) rely on behaving normally."""
+    recognition.start_refresh()
+
+
 async def _run_sync() -> None:
     loop = asyncio.get_running_loop()
     try:
@@ -435,6 +456,7 @@ async def _run_sync() -> None:
             summary["deleted"],
             summary["total"],
         )
+        _trigger_face_refresh()
     except Exception as exc:
         logger.exception("Sync failed")
         progress.fail(str(exc))

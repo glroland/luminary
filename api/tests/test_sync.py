@@ -126,6 +126,39 @@ def test_sync_logs_and_reports_an_error_on_failure(client, monkeypatch, caplog):
     assert any(record.levelno == logging.ERROR and record.exc_info for record in caplog.records)
 
 
+def test_sync_triggers_face_refresh_once_it_completes(client, tmp_path, monkeypatch):
+    # The `client` fixture stubs sync._trigger_face_refresh to a no-op by
+    # default (see conftest.py) so the rest of this file's tests don't also
+    # spin up a real background face-matching run. Override it here with a
+    # spy, just for this test, to confirm _run_sync actually calls it.
+    from app import sync
+
+    calls = []
+    monkeypatch.setattr(sync, "_trigger_face_refresh", lambda: calls.append(1))
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    status = sync_and_wait(client)
+
+    assert status["status"] == "completed"
+    assert calls == [1]
+
+
+def test_sync_does_not_trigger_face_refresh_on_failure(client, monkeypatch):
+    from app import sync
+
+    def boom():
+        raise RuntimeError("backend unreachable")
+
+    calls = []
+    monkeypatch.setattr(sync, "_trigger_face_refresh", lambda: calls.append(1))
+    monkeypatch.setattr(sync, "_fs_and_root", boom)
+
+    status = sync_and_wait(client)
+
+    assert status["status"] == "error"
+    assert calls == []
+
+
 def test_sync_applies_exif_orientation_so_portrait_photos_arent_indexed_as_landscape(client, tmp_path):
     # A phone held sideways: the sensor captures landscape pixels (wide x
     # short) and the EXIF Orientation tag says "rotate 90 CW to display" --

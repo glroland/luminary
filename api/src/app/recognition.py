@@ -6,6 +6,14 @@ the individuals a user has already manually tagged at least one face for
 confident enough. The goal is to need exactly one manual tag per person,
 not one per photo they appear in.
 
+start_refresh() has two callers: the standalone "Refresh Faces" button
+(routers/faces.py, for on-demand re-matching -- e.g. right after manually
+tagging someone, without waiting for/triggering a full resync) and, as of
+sync.py's _trigger_face_refresh, every successful "Refresh" (sync) too, so
+newly detected faces get matched without a second click. try_start()'s
+"already running" guard (below) makes the two mutually harmless -- whichever
+gets there first just gets polled to completion by the other.
+
 Embeddings come from facenet-pytorch's `InceptionResnetV1(pretrained=
 "vggface2")` -- a torch-native model, deliberately not DeepFace (which
 would additionally require TensorFlow, a second multi-GB ML framework,

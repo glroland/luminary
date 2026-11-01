@@ -156,6 +156,11 @@ describe("ManagementPage", () => {
       .mockResolvedValue({ status: "running", processed: 0, total: 10, matched: 0, error: null });
 
     const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
+    // First call is the mount-time "is a refresh already running?" check
+    // (see ManagementPage.jsx's mount effect) -- idle, so it doesn't
+    // preempt the click below. The next two are the poll loop started by
+    // that click.
+    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, error: null });
     statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, error: null });
     statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 3, error: null });
 
@@ -182,6 +187,47 @@ describe("ManagementPage", () => {
 
     await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(screen.getByRole("button", { name: /refresh faces/i })).toBeInTheDocument();
+  });
+
+  it("picks up and polls 'Refresh Faces' progress automatically once a sync completes, without a click", async () => {
+    // The backend auto-triggers "Refresh Faces" as soon as a sync finishes
+    // (sync.py's _trigger_face_refresh) -- this simulates App.jsx handing
+    // down a "completed" syncStatus and expects ManagementPage to notice
+    // and start polling on its own, exactly as if the standalone button
+    // had been clicked.
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+
+    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
+    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, error: null }); // mount check
+    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, error: null });
+    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 2, error: null });
+
+    const { rerender } = render(
+      <ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} syncStatus={null} onRefresh={() => {}} />
+    );
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /refresh faces/i })).toBeInTheDocument();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    await act(async () => {
+      rerender(
+        <ManagementPage
+          onBack={() => {}}
+          onNavigateToPhoto={() => {}}
+          syncStatus={{ status: "completed", processed: 10, total: 10, inserted: 10, updated: 0, deleted: 0 }}
+          onRefresh={() => {}}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument());
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/done -- 2 matched/i)).toBeInTheDocument();
+    // Initial mount's fetch, plus one more once the auto-triggered job completed.
+    expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
   });
 
   it("renders the library Refresh control (moved here from the sidebar) and calls onRefresh", async () => {
