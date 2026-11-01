@@ -639,7 +639,7 @@ body {
   padding: 0.75rem 0.5rem;
 }
 
-.sidebar-tree-root {
+.sidebar-all-images {
   display: block;
   width: 100%;
   text-align: left;
@@ -647,11 +647,80 @@ body {
   border: none;
   border-radius: 6px;
   padding: 0.4rem 0.6rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.75rem;
   font-size: 0.9rem;
   font-weight: 600;
   color: #163a6b;
   cursor: pointer;
+}
+
+.sidebar-all-images-active {
+  background: #e3edfb;
+}
+
+.sidebar-section + .sidebar-section {
+  margin-top: 0.75rem;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.3rem 0.6rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #4a6fa1;
+  cursor: pointer;
+}
+
+.sidebar-section-toggle {
+  width: 1.1rem;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.sidebar-individuals {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.9rem;
+}
+
+.sidebar-individuals-empty {
+  margin: 0;
+  padding: 0.3rem 0.6rem 0.3rem calc(0.9rem + 0.3rem);
+  font-size: 0.8rem;
+  color: #4a6fa1;
+}
+
+.sidebar-individual {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.3rem;
+  font-size: 0.85rem;
+  color: #163a6b;
+  cursor: pointer;
+}
+
+.sidebar-individual-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .sidebar-footer {

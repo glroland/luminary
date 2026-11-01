@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { individualThumbnailUrl } from "../api/client.js";
 import DirectoryTree from "./DirectoryTree.jsx";
 
 // Builds a nested {children: {name: node}} tree of every directory that
@@ -20,6 +21,29 @@ function buildTree(photos) {
   return root;
 }
 
+// A collapsible parent section ("Folders", "Individuals") -- separate from
+// each individual DirectoryTree node's own expand/collapse (also +/−
+// style, see DirectoryTree.jsx), this just shows/hides the section's whole
+// contents so a long individuals list doesn't dominate the sidebar.
+function Section({ title, expanded, onToggle, children }) {
+  return (
+    <div className="sidebar-section">
+      <button
+        type="button"
+        className="sidebar-section-header"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span className="sidebar-section-toggle" aria-hidden="true">
+          {expanded ? "−" : "+"}
+        </span>
+        {title}
+      </button>
+      {expanded && children}
+    </div>
+  );
+}
+
 // A traditional, non-overlaying sidebar: it occupies its own column in the
 // page's flex layout (see App.jsx/styles.css's ".app"/".sidebar" rules),
 // flush against the window's left edge, rather than floating a
@@ -29,25 +53,77 @@ function buildTree(photos) {
 // App.jsx's header, next to the logo, not here -- it has to stay visible
 // and clickable regardless of open/closed state, which it couldn't do as
 // part of this collapsing <aside>.
-export default function Sidebar({ open, photos, selectedDirectory, onSelectDirectory, onManage }) {
+//
+// Three parent sections narrow the photo grid, mutually exclusive with
+// each other (selecting one clears any other filter -- see App.jsx's
+// handleSelectDirectory/handleSelectIndividual/handleAllImages):
+// "All Images" clears every filter, "Folders" filters by directory (via
+// DirectoryTree, built from the photos' own paths), and "Individuals"
+// filters to photos containing a selected catalogued person.
+export default function Sidebar({
+  open,
+  photos,
+  selectedDirectory,
+  onSelectDirectory,
+  individuals,
+  selectedIndividual,
+  onSelectIndividual,
+  onAllImages,
+  onManage,
+}) {
   const tree = useMemo(() => buildTree(photos), [photos]);
+  const [foldersExpanded, setFoldersExpanded] = useState(true);
+  const [individualsExpanded, setIndividualsExpanded] = useState(true);
+  const noFilter = selectedDirectory === null && selectedIndividual === null;
 
   return (
     <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
       <nav className="sidebar-tree">
         <button
           type="button"
-          className={`sidebar-tree-root${selectedDirectory === null ? " directory-tree-item-active" : ""}`}
-          onClick={() => onSelectDirectory(null)}
+          className={`sidebar-all-images${noFilter ? " sidebar-all-images-active" : ""}`}
+          onClick={onAllImages}
         >
-          All Photos
+          All Images
         </button>
-        <DirectoryTree
-          node={tree}
-          path={null}
-          selectedDirectory={selectedDirectory}
-          onSelectDirectory={onSelectDirectory}
-        />
+
+        <Section title="Folders" expanded={foldersExpanded} onToggle={() => setFoldersExpanded((prev) => !prev)}>
+          <DirectoryTree
+            node={tree}
+            path={null}
+            selectedDirectory={selectedDirectory}
+            onSelectDirectory={onSelectDirectory}
+          />
+        </Section>
+
+        <Section
+          title="Individuals"
+          expanded={individualsExpanded}
+          onToggle={() => setIndividualsExpanded((prev) => !prev)}
+        >
+          {individuals.length === 0 ? (
+            <p className="sidebar-individuals-empty">No individuals catalogued yet.</p>
+          ) : (
+            <ul className="sidebar-individuals">
+              {individuals.map((individual) => (
+                <li key={individual.id}>
+                  <button
+                    type="button"
+                    className={`sidebar-individual${
+                      selectedIndividual === individual.id ? " directory-tree-item-active" : ""
+                    }`}
+                    onClick={() => onSelectIndividual(individual.id)}
+                  >
+                    {individual.has_representative_thumbnail && (
+                      <img className="sidebar-individual-avatar" src={individualThumbnailUrl(individual.id)} alt="" />
+                    )}
+                    {individual.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
       </nav>
 
       <div className="sidebar-footer">

@@ -43,7 +43,7 @@ function DirectoryNode({ name, node, path, selectedDirectory, onSelectDirectory 
             aria-label={expanded ? "Collapse" : "Expand"}
             aria-expanded={expanded}
           >
-            {expanded ? "▾" : "▸"}
+            {expanded ? "−" : "+"}
           </button>
         ) : (
           <span className="directory-tree-toggle-spacer" aria-hidden="true" />

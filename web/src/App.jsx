@@ -3,7 +3,7 @@ import ManagementPage from "./components/ManagementPage.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
 import Sidebar from "./components/Sidebar.jsx";
-import { fetchPhotos, fetchSyncStatus, startSync } from "./api/client.js";
+import { fetchIndividualFaces, fetchIndividuals, fetchPhotos, fetchSyncStatus, startSync } from "./api/client.js";
 import logo from "./assets/logo.svg";
 
 const POLL_INTERVAL_MS = 1000;
@@ -26,8 +26,20 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // null means no filter (all photos); otherwise a directory path as it
   // appears in photo.filename, matched by directoryOf() below including
-  // its subdirectories.
+  // its subdirectories. Mutually exclusive with selectedIndividual below --
+  // the sidebar's three parent sections (see Sidebar.jsx) are alternative
+  // ways to narrow the same grid, not combinable filters.
   const [selectedDirectory, setSelectedDirectory] = useState(null);
+  // The catalogued-individuals list for the sidebar's "Individuals"
+  // section; ManagementPage owns the full CRUD lifecycle for these, this
+  // is just a read-only copy kept here so Sidebar can render it without
+  // every page needing its own fetch.
+  const [individuals, setIndividuals] = useState([]);
+  // null means no individual filter; otherwise a person id, matched against
+  // individualPhotoIds below (that person's tagged photos, fetched
+  // whenever the selection changes).
+  const [selectedIndividual, setSelectedIndividual] = useState(null);
+  const [individualPhotoIds, setIndividualPhotoIds] = useState(null);
   const pollRef = useRef(null);
 
   const loadPhotos = useCallback(async () => {
@@ -41,6 +53,12 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
+  }, []);
+
+  const loadIndividuals = useCallback(() => {
+    fetchIndividuals()
+      .then(setIndividuals)
+      .catch((err) => setError(err.message));
   }, []);
 
   const pollSyncStatus = useCallback(() => {
@@ -69,6 +87,7 @@ export default function App() {
 
   useEffect(() => {
     loadPhotos();
+    loadIndividuals();
     fetchSyncStatus()
       .then((status) => {
         if (status.status === "running") {
@@ -78,7 +97,29 @@ export default function App() {
       })
       .catch(() => {});
     return () => clearInterval(pollRef.current);
-  }, [loadPhotos, pollSyncStatus]);
+  }, [loadPhotos, loadIndividuals, pollSyncStatus]);
+
+  // Fetches the selected individual's tagged photo ids whenever the
+  // selection changes -- the faces endpoint, not a bulk photos-by-person
+  // one, since that's what the API already exposes (ManagementPage's
+  // accordions use the same call for the same reason).
+  useEffect(() => {
+    if (selectedIndividual === null) {
+      setIndividualPhotoIds(null);
+      return;
+    }
+    let cancelled = false;
+    fetchIndividualFaces(selectedIndividual)
+      .then((faces) => {
+        if (!cancelled) setIndividualPhotoIds(new Set(faces.map((face) => face.photo_id)));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedIndividual]);
 
   async function handleRefresh() {
     try {
@@ -104,12 +145,14 @@ export default function App() {
   }
 
   const visiblePhotos =
-    selectedDirectory === null
-      ? photos
-      : photos.filter((photo) => {
-          const dir = directoryOf(photo.filename);
-          return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
-        });
+    selectedIndividual !== null
+      ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
+      : selectedDirectory === null
+        ? photos
+        : photos.filter((photo) => {
+            const dir = directoryOf(photo.filename);
+            return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
+          });
 
   return (
     <div className="app">
@@ -124,6 +167,19 @@ export default function App() {
         selectedDirectory={selectedDirectory}
         onSelectDirectory={(directory) => {
           setSelectedDirectory(directory);
+          setSelectedIndividual(null);
+          setView("gallery");
+        }}
+        individuals={individuals}
+        selectedIndividual={selectedIndividual}
+        onSelectIndividual={(personId) => {
+          setSelectedIndividual(personId);
+          setSelectedDirectory(null);
+          setView("gallery");
+        }}
+        onAllImages={() => {
+          setSelectedDirectory(null);
+          setSelectedIndividual(null);
           setView("gallery");
         }}
         onManage={() => setView("manage")}
@@ -154,10 +210,17 @@ export default function App() {
           <ManagementPage
             syncStatus={syncStatus}
             onRefresh={handleRefresh}
-            onBack={() => setView("gallery")}
+            onBack={() => {
+              setView("gallery");
+              // The individuals catalog may have changed (added/renamed/
+              // deleted) while on this page -- refresh the sidebar's copy.
+              loadIndividuals();
+            }}
             onNavigateToPhoto={handleNavigateToPhoto}
             onPurged={() => {
               setSelectedDirectory(null);
+              setSelectedIndividual(null);
+              setIndividuals([]);
               setSelectedPhoto(null);
               loadPhotos();
             }}
