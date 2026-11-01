@@ -115,6 +115,40 @@ def get_florence_device() -> str:
     return os.environ.get("LUMINARY_FLORENCE_DEVICE", "cpu")
 
 
+# --- Reverse geocoding (photos.location_name, geocode.py) -----------------
+
+
+def get_geocode_base_url() -> str:
+    """Nominatim-compatible reverse-geocoding endpoint. Defaults to the
+    public OpenStreetMap instance -- free, no API key, the same service
+    PhotoMap.jsx already depends on (for map tiles) elsewhere in this app.
+    Point this at a self-hosted Nominatim instance instead to avoid that
+    public instance's 1-request/second usage-policy cap (see geocode.py's
+    module docstring) on a large/GPS-heavy library."""
+    return os.environ.get("LUMINARY_GEOCODE_BASE_URL", "https://nominatim.openstreetmap.org/reverse")
+
+
+def get_geocode_user_agent() -> str:
+    """Nominatim's usage policy requires a descriptive User-Agent
+    identifying the calling application -- see
+    https://operations.osmfoundation.org/policies/nominatim/. Override this
+    (e.g. to add a contact URL/email) if the public instance ever
+    rejects/rate-limits the default."""
+    return os.environ.get("LUMINARY_GEOCODE_USER_AGENT", "luminary-photo-browser/1.0")
+
+
+def get_geocode_zoom() -> int:
+    """Nominatim's `zoom` parameter picks which OSM feature *layer* reverse
+    geocoding resolves to -- low values resolve to broad administrative
+    areas (city/county/state), high values (up to 18) resolve to individual
+    buildings. There's no single right value across very different photo
+    subjects (a building interior vs. a large state park) -- like
+    LUMINARY_FACE_MATCH_THRESHOLD below, this is a starting point to tune
+    against your own library's real photos, not a verified-correct
+    number."""
+    return int(os.environ.get("LUMINARY_GEOCODE_ZOOM", "17"))
+
+
 # --- Automatic face recognition ("Refresh Faces", recognition.py) --------
 
 

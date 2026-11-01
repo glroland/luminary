@@ -17,6 +17,19 @@ individual's `representative_thumbnail` (the most recently tagged face
 People list, not a gallery). `faces.thumbnail` is only ever non-NULL while
 `person_id` is also set -- untag_face/delete_individual clear both
 together, so that pairing is never violated.
+
+Every function here that changes "who's tagged in a photo" --
+tag_face/untag_face for one face, delete_individual for however many faces
+were tagged to the deleted individual -- also calls
+enrich.enrich_description(photo_id) for each affected photo afterward:
+`photos.description` (see enrich.py's module docstring) is partly composed
+from the names of individuals tagged in a photo, so a tagging change here
+is one of the things that has to invalidate/recompute it, same as a sync
+re-detecting faces does. That call is synchronous, inline, on the same
+request this module is already handling (an LLM call, same as
+POST /api/photos/{id}/chat already makes synchronously) -- and best-effort,
+so a failure there never turns a successful tag/untag/delete into an error
+response.
 """
 
 import io
@@ -27,7 +40,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import storage
+from . import enrich, storage
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -89,8 +102,22 @@ def delete_individual(person_id: str) -> bool:
     """Delete an individual and untag every face tagged to them, manual or
     auto (no FK cascade -- see db/create_tables.sql -- so that's done
     explicitly here, same pattern as storage.delete_photo clearing a
-    photo's faces). Returns whether the individual existed."""
+    photo's faces). Returns whether the individual existed.
+
+    Regenerates photos.description (enrich.py, see this module's
+    docstring) for every photo that had a face tagged to this individual --
+    read *before* the UPDATE below clears person_id, since that's the only
+    way to find them afterward. Once per affected photo, not once per
+    face: enrich_description already reads every tagged individual for a
+    photo in one query, so two faces in the same photo tagged to the
+    individual being deleted only need one regeneration."""
     with get_connection() as conn:
+        affected_photo_ids = [
+            row["photo_id"]
+            for row in conn.execute(
+                "SELECT DISTINCT photo_id FROM faces WHERE person_id = %s", (person_id,)
+            ).fetchall()
+        ]
         conn.execute(
             "UPDATE faces SET person_id = NULL, thumbnail = NULL, tag_source = NULL, match_confidence = NULL "
             "WHERE person_id = %s",
@@ -98,7 +125,12 @@ def delete_individual(person_id: str) -> bool:
         )
         cursor = conn.execute("DELETE FROM individuals WHERE id = %s", (person_id,))
         conn.commit()
-        return cursor.rowcount > 0
+
+    existed = cursor.rowcount > 0
+    if existed:
+        for photo_id in affected_photo_ids:
+            enrich.enrich_description(photo_id)
+    return existed
 
 
 def get_representative_thumbnail(person_id: str) -> Optional[bytes]:
@@ -132,15 +164,24 @@ def untag_face(face_id: str) -> bool:
     match_confidence together -- see this module's docstring) without
     deleting the face/detection itself -- works the same whether the tag
     was manual or recognition.py's auto-match. Returns whether the face
-    existed."""
+    existed.
+
+    Regenerates photos.description (enrich.py, see this module's
+    docstring) for the face's photo -- `RETURNING photo_id` so that's
+    available without a second query."""
     with get_connection() as conn:
         cursor = conn.execute(
             "UPDATE faces SET person_id = NULL, thumbnail = NULL, tag_source = NULL, match_confidence = NULL "
-            "WHERE id = %s",
+            "WHERE id = %s RETURNING photo_id",
             (face_id,),
         )
+        row = cursor.fetchone()
         conn.commit()
-        return cursor.rowcount > 0
+
+    if not row:
+        return False
+    enrich.enrich_description(row["photo_id"])
+    return True
 
 
 def crop_face_thumbnail(original_bytes: bytes, box: dict) -> Optional[bytes]:
@@ -188,7 +229,10 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
 
     Always sets `tag_source = 'manual'` (and clears `match_confidence`),
     even if the face was previously auto-tagged by recognition.py -- a
-    manual tag always wins over, and replaces, an auto one."""
+    manual tag always wins over, and replaces, an auto one.
+
+    Regenerates photos.description (enrich.py, see this module's
+    docstring) for the face's photo before returning."""
     with get_connection() as conn:
         face = conn.execute(
             "SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE id = %s", (face_id,)
@@ -222,6 +266,8 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
                 (thumbnail, person_id),
             )
         conn.commit()
+
+    enrich.enrich_description(face["photo_id"])
 
     return {
         "id": face["id"],

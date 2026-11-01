@@ -13,9 +13,24 @@ class Photo(BaseModel):
     created_at: str
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    # Florence-2's <MORE_DETAILED_CAPTION> description, generated during
-    # sync (see sync.py) -- null until a sync has run with Florence-2
-    # available, or if it couldn't be generated for this photo.
+    # Short, human-readable reverse-geocoded description of latitude/
+    # longitude (e.g. "Boone, North Carolina"), via geocode.py -- see
+    # sync.py's _describe_location. Null exactly when latitude/longitude
+    # are, or if the reverse-geocode lookup failed/wasn't configured.
+    location_name: Optional[str] = None
+    # Florence-2's raw <MORE_DETAILED_CAPTION> output, generated during
+    # sync (see sync.py's _generate_vlm_description) -- null until a sync
+    # has run with Florence-2 available, or if captioning failed for this
+    # photo. Feeds into `description` below as one of its inputs; not
+    # shown directly in the UI.
+    vlm_description: Optional[str] = None
+    # The description actually shown in the UI: an LLM-composed rewrite
+    # (enrich.py, any OpenAI-*compatible* chat endpoint) weaving together
+    # vlm_description, the names of any individuals tagged in the photo,
+    # location_name, and the filename/path. Null until that's run
+    # successfully at least once for this photo (see enrich.py's module
+    # docstring for every point that (re)triggers it) -- a stale-but-
+    # present value is kept on a later failure rather than cleared.
     description: Optional[str] = None
 
 

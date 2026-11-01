@@ -122,4 +122,34 @@ describe("App", () => {
     fireEvent.click(screen.getByText("All Images"));
     await waitFor(() => expect(screen.getByText("party.jpg")).toBeInTheDocument());
   });
+
+  it("paginates the grid and lets the user change the page size", async () => {
+    const photos = Array.from({ length: 30 }, (_, index) => ({
+      id: String(index),
+      filename: `photo-${String(index).padStart(2, "0")}.jpg`,
+      width: 100,
+      height: 100,
+      created_at: new Date().toISOString(),
+    }));
+    vi.spyOn(client, "fetchPhotos").mockResolvedValue(photos);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("photo-00.jpg")).toBeInTheDocument());
+
+    // Default page size (24) shows the first 24 photos and hides the rest.
+    expect(screen.getByText("photo-23.jpg")).toBeInTheDocument();
+    expect(screen.queryByText("photo-24.jpg")).not.toBeInTheDocument();
+    expect(screen.getByText(/page 1 of 2/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^next$/i }));
+    await waitFor(() => expect(screen.getByText("photo-24.jpg")).toBeInTheDocument());
+    expect(screen.queryByText("photo-00.jpg")).not.toBeInTheDocument();
+    expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument();
+
+    // Switching the page size recomputes the page count and jumps back to page 1.
+    fireEvent.change(screen.getByLabelText(/per page/i), { target: { value: "200" } });
+    await waitFor(() => expect(screen.getByText("photo-00.jpg")).toBeInTheDocument());
+    expect(screen.getByText("photo-29.jpg")).toBeInTheDocument();
+    expect(screen.getByText(/page 1 of 1/i)).toBeInTheDocument();
+  });
 });

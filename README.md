@@ -204,7 +204,7 @@ There are three databases, all on the same server and sharing the one
 | `db/create_tables.sql`        | the app role, against one app database | Creates `photos`/`faces` in that database (idempotent; also run automatically on every API startup by `database.init_db()`) |
 | `db/drop_database.sql`       | a Postgres superuser, against the `postgres` maintenance DB | Drops one database (destructive) — run once per database, **before** `drop_role.sql` |
 | `db/drop_role.sql`           | a Postgres superuser, against the `postgres` maintenance DB | Drops the shared role (destructive) — Postgres refuses this while the role still owns any database |
-| `db/update.sql`               | the app role, against one app database | Staging area for the next incremental schema change (`ALTER TABLE`/`CREATE TABLE IF NOT EXISTS`/etc.) — applied by `make db-update` without a full drop/rebuild, which empties this file once it succeeds against both `luminary-dev` and `luminary-unittest`; currently holds the `individuals`/`faces.person_id` change for manual face tagging, for any database (e.g. prod's own, provisioned separately — see below) that hasn't had the current `create_tables.sql` applied to it yet |
+| `db/update.sql`               | the app role, against one app database | Staging area for the next incremental schema change (`ALTER TABLE`/`CREATE TABLE IF NOT EXISTS`/etc.) — applied by `make db-update` without a full drop/rebuild, which empties this file once it succeeds against both `luminary-dev` and `luminary-unittest`; currently holds the `faces.tag_source` manual-tag backfill and the `photos.location_name` column addition, for any database (e.g. prod's own, provisioned separately — see below) that hasn't had the current `create_tables.sql` applied to it yet |
 
 See [`docs/database-schema.md`](docs/database-schema.md) for the `photos`/
 `faces` table/column reference.
@@ -288,6 +288,59 @@ memory footprint and image size (`torch`/`transformers`/`timm`/`einops`,
 plus the downloaded model weights) — bump `api.resources` accordingly if you
 turn it on. `api/requirements.txt` has a note on using the CPU-only `torch`
 wheel index to avoid pulling in CUDA libraries you don't need without a GPU.
+
+### Reverse geocoding
+
+Alongside the raw `latitude`/`longitude` decoded from a photo's EXIF GPS
+tags, sync also stores a short, human-readable description of the same
+coordinates in `photos.location_name` — e.g. `"Boone, North Carolina"` or
+`"Grandfather Mountain State Park, Blowing Rock, North Carolina"` — via
+[OpenStreetMap's Nominatim](https://nominatim.org/) reverse-geocoding API
+(free, no API key — the same OpenStreetMap service `PhotoMap.jsx` already
+depends on for map tiles). This is best-effort: a lookup failure (network
+error, timeout, or no GPS data on the photo at all) just leaves
+`location_name` `null`, the same as a missing thumbnail or description —
+it never fails a sync.
+
+| Variable                    | Default                                     | Purpose                              |
+|-------------------------------|------------------------------------------------|-----------------------------------------|
+| `LUMINARY_GEOCODE_BASE_URL`  | `https://nominatim.openstreetmap.org/reverse` | Nominatim-compatible reverse-geocoding endpoint |
+| `LUMINARY_GEOCODE_USER_AGENT`| `luminary-photo-browser/1.0`                | Sent as the `User-Agent` header — [Nominatim's usage policy](https://operations.osmfoundation.org/policies/nominatim/) requires one identifying the calling application |
+| `LUMINARY_GEOCODE_ZOOM`      | `17`                                         | Which OSM feature layer the lookup resolves to (low = broad administrative area, high up to `18` = individual building) — no single right value across very different photo subjects; tune against your own library |
+
+The public Nominatim instance's usage policy caps requests at **one per
+second**; `geocode.py` enforces that globally across sync's concurrent
+worker threads, so it becomes the long pole of a sync for a GPS-heavy
+library. Point `LUMINARY_GEOCODE_BASE_URL` at a self-hosted Nominatim
+instance to remove that cap (or avoid depending on the public instance at
+all, e.g. for an airgapped deployment).
+
+### Description enrichment
+
+The description shown in the UI (`photos.description`) isn't Florence-2's
+raw caption — that's stored separately, in `photos.vlm_description`, and
+never shown directly. Instead, `enrich.py` has a general-purpose LLM (any
+OpenAI-*compatible* chat endpoint — the **same** `LUMINARY_OPENAI_*`
+config the "openai" photo chat backend above uses, so no separate setup is
+needed if that's already configured) rewrite whichever facts are on hand
+for a photo — its `vlm_description`, the names of any individuals tagged
+in it, its `location_name`, and its filename — into one short,
+natural-language description.
+
+This is recomputed every time any of those facts can change for a photo,
+not just once at index time: a sync that (re)generates `vlm_description`,
+tagging or untagging a face, "Refresh Faces" auto-matching a face, or
+deleting a tagged individual. Each of those calls is synchronous (an LLM
+call over text only, no image — cheap enough to make inline, the same way
+`POST /api/photos/{id}/chat` already makes its own openai call
+synchronously) and best-effort: if the openai backend isn't configured, or
+a call fails, `description` is simply left as whatever it already was
+(`null` if it's never succeeded yet) rather than the tag/untag/sync/refresh
+failing.
+
+No separate configuration beyond `LUMINARY_OPENAI_API_KEY`/`_MODEL`/
+`_BASE_URL` (see "Photo chat" above) — if those aren't set, description
+enrichment just never runs, the same as the openai chat backend itself.
 
 ## Local development
 

@@ -45,6 +45,21 @@ def client(tmp_path, monkeypatch):
     # chaining itself (test_sync.py) restore/spy on the real call.
     monkeypatch.setattr(sync, "_trigger_face_refresh", lambda: None)
 
+    # people.tag_face/untag_face/delete_individual and sync's own Florence
+    # pipeline now all call enrich.enrich_description() (see enrich.py),
+    # which talks to the openai-compatible endpoint if LUMINARY_OPENAI_*
+    # happen to already be set in the shell this test process inherited
+    # from (e.g. a developer who also runs `make run-api` in the same
+    # shell). Clear them here so every test gets a deterministic,
+    # network-free "not configured" no-op by default, regardless of the
+    # ambient environment; tests that specifically exercise enrichment
+    # set these themselves via monkeypatch, which layers on top and
+    # unwinds correctly at teardown either way -- same pattern as
+    # chat._load_florence above.
+    monkeypatch.delenv("LUMINARY_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LUMINARY_OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("LUMINARY_OPENAI_BASE_URL", raising=False)
+
     sync_progress.reset()
     refresh_progress.reset()
 

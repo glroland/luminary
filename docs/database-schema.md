@@ -11,9 +11,10 @@ There are three tables, `photos`, `faces`, and `individuals`, all created by
 [`db/create_tables.sql`](../db/create_tables.sql) and mirrored by
 `database.py`'s `init_db()` (run on every API startup). **There is no
 migrations framework** — a schema change means updating both of those
-together, by hand (see `faces.person_id` below for the one example of that
-so far: a column added after `faces` already existed, via `ALTER TABLE ...
-ADD COLUMN IF NOT EXISTS` in both places), plus staging the same statements
+together, by hand (see `faces.person_id` and `photos.location_name` below
+for examples of that: a column added after its table already existed, via
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in both places), plus staging
+the same statements
 in [`db/update.sql`](../db/update.sql) so an already-provisioned database
 can be patched in place via `make db-update` instead of a full
 `make db-recreate` drop/rebuild — see the README's "Database" section.
@@ -30,13 +31,15 @@ One row per indexed photo. Rows are inserted/updated/deleted exclusively by
 | `filename`      | `TEXT`             | no       | Path of the file *relative to the photos root*, exactly as discovered (e.g. `vacation/2019/beach.jpg`). This is the correlation key sync uses to match a discovered file back to its row — not `id`. |
 | `content_type`  | `TEXT`             | no       | Guessed from the filename via `mimetypes.guess_type` (e.g. `image/jpeg`), not sniffed from file contents. |
 | `size_bytes`    | `BIGINT`           | no       | File size as reported by the photos backend (`fs.info`). Sync's primary "has this file changed?" signal — a size mismatch against this column triggers a full reprocess. |
-| `width`         | `INTEGER`          | yes      | Pixel width *after* EXIF orientation is applied (`ImageOps.exif_transpose`), so a portrait photo shot on a sideways-held sensor is recorded as portrait. `NULL` if the file couldn't be opened/decoded (see `description`). |
+| `width`         | `INTEGER`          | yes      | Pixel width *after* EXIF orientation is applied (`ImageOps.exif_transpose`), so a portrait photo shot on a sideways-held sensor is recorded as portrait. `NULL` if the file couldn't be opened/decoded (see `vlm_description`). |
 | `height`        | `INTEGER`          | yes      | Same as `width`, post-transpose. |
 | `created_at`    | `TEXT`             | no       | ISO 8601 timestamp string, **not** a native `TIMESTAMP` column. Prefers the photo's EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime` (treated as UTC — EXIF carries no timezone); falls back to the time it was indexed if EXIF is absent or unparseable. Stored as text so the API can pass it straight through to JSON without a conversion step. |
 | `latitude`      | `DOUBLE PRECISION` | yes      | Decimal degrees, decoded from the EXIF GPS IFD (`_extract_exif`). `NULL` if the photo has no GPS tags. |
 | `longitude`     | `DOUBLE PRECISION` | yes      | Same as `latitude`. |
+| `location_name` | `TEXT`             | yes      | Short, human-readable reverse-geocoded description of `latitude`/`longitude` (e.g. `"Boone, North Carolina"` or `"Grandfather Mountain State Park, Blowing Rock, North Carolina"`), via `geocode.reverse_geocode` (see the README's "Reverse geocoding" section). `NULL` exactly when `latitude`/`longitude` are (no GPS data), or if the lookup failed — best-effort, same as `thumbnail`/`vlm_description` below. Only (re)computed when `latitude`/`longitude` are themselves re-extracted from EXIF, i.e. on a genuine content change — no separate backfill pass for photos indexed before this column existed. |
 | `thumbnail`     | `BYTEA`            | yes      | A 320×320 (max) JPEG, generated at index time by `storage.THUMBNAIL_SIZE`/`sync._sync_one_file`. `NULL` until generated, or permanently if the source file couldn't be decoded — thumbnailing is best-effort and never fails the whole sync. Deliberately excluded from `storage.METADATA_COLUMNS`/`list_photos`/`get_photo` so listing photos never pulls thumbnail bytes off disk; only `get_thumbnail` (`GET /api/photos/{id}/thumbnail`) reads this column. |
-| `description`   | `TEXT`             | yes      | Florence-2-generated caption (`chat.caption_image`, run from `sync._run_florence_pipeline`). `NULL` if Florence-2 isn't configured, hasn't run yet, or failed. Doubles as the signal for "face detection has already run for this photo too" (see `faces` below) — there's no separate column for that. |
+| `vlm_description` | `TEXT`           | yes      | Florence-2-generated caption (`chat.caption_image`, run from `sync._run_florence_pipeline`). `NULL` if Florence-2 isn't configured, hasn't run yet, or failed. Doubles as the signal for "face detection has already run for this photo too" (see `faces` below) — there's no separate column for that. Not shown directly in the UI — it's one of the inputs `description` below is composed from, not the user-facing text itself. Used to be the column named `description`; see "Write ordering" below for the rename. |
+| `description`   | `TEXT`             | yes      | The description actually shown in the UI (`PhotoModal.jsx`) — an LLM-composed rewrite (`enrich.enrich_description`, any OpenAI-*compatible* chat endpoint, same `LUMINARY_OPENAI_*` config `chat.py`'s `"openai"` backend uses) weaving together `vlm_description`, the names of any individuals currently tagged in the photo (via `faces.person_id`/`individuals.name`), `location_name`, and `filename`. `NULL` until that's succeeded at least once for this photo; a later failure leaves whatever value was already there rather than clearing it. Regenerated every time any of those inputs can change — a sync that (re)writes `vlm_description`, a manual tag/untag (`people.py`), an auto-match (`recognition.py`), or deleting a tagged individual (`people.delete_individual`) — see `enrich.py`'s module docstring for the exact list. |
 
 No indexes beyond the primary key — the API's only queries are by `id` or
 an unfiltered `ORDER BY created_at DESC` scan (`list_photos`), which doesn't
@@ -118,16 +121,37 @@ database-enforced" rationale applies — adding either constraint wouldn't
 change application behavior; keep both in mind as *documentation* of the
 relationship rather than database-enforced.
 
-### Write ordering: faces before `description`
+### Write ordering: faces before `vlm_description`
 
 `sync._run_florence_pipeline` always clears and (re)writes a photo's faces
-*before* writing its `description`, never after. That ordering is what
-lets `photos.description IS NOT NULL` double as "face detection has already
-run (and succeeded) for this photo", without a separate boolean column. If
-the pipeline is interrupted or fails partway, `description` stays `NULL`
-and the next sync retries captioning *and* face detection from scratch —
-there's no state where a half-written face set is mistaken for "done".
-Don't reorder those two writes.
+*before* writing its `vlm_description`, never after. That ordering is what
+lets `photos.vlm_description IS NOT NULL` double as "face detection has
+already run (and succeeded) for this photo", without a separate boolean
+column. If the pipeline is interrupted or fails partway, `vlm_description`
+stays `NULL` and the next sync retries captioning *and* face detection from
+scratch — there's no state where a half-written face set is mistaken for
+"done". Don't reorder those two writes. Once `vlm_description` is written,
+the pipeline also calls `enrich.enrich_description` to (re)compose
+`description` from it (see that column's row above) — that call is
+best-effort and never raises, so it can't turn an enrichment failure into a
+sync failure, and it doesn't affect the `vlm_description IS NOT NULL`
+signal either way.
+
+**The `description`/`vlm_description` split, and the rename behind it**:
+this column used to be named `description` and held Florence-2's raw
+caption directly. `enrich.py`'s LLM-composed rewrite needed its own place
+to live without losing "has Florence-2 run" as a free side effect of a
+single column, so the original column was renamed to `vlm_description` and
+a fresh `description` added in its place. `database.py`'s `init_db()` and
+`db/create_tables.sql` both run a guarded `DO $$ ... $$` block that renames
+a pre-existing `description` column to `vlm_description` (preserving its
+data) only if `vlm_description` doesn't already exist — a no-op against a
+database that's already past this point, or one created fresh after it
+(which gets both columns directly from `CREATE TABLE`). Unlike the
+`tag_source`/`thumbnail` backfills below, there's nothing to backfill into
+the new `description` column itself — it's simply `NULL` until
+`enrich.enrich_description` runs for that photo, same as a column added for
+the first time ever.
 
 **Re-detection also wipes tags**: because `replace_faces` deletes and
 reinserts with fresh `id`s, a photo whose content changes (triggering a

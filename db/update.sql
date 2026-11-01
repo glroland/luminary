@@ -10,16 +10,51 @@
 --
 --   psql "postgresql://luminary:<password>@<host>:<port>/luminary" -v ON_ERROR_STOP=1 -f db/update.sql
 --
--- Current contents: backfills faces.tag_source = 'manual' for any face
--- that already had person_id set before tag_source existed (necessarily
--- tagged via the manual tag_face endpoint -- recognition.py's "Refresh
--- Faces" auto-tagging didn't exist yet to have done it). Without this,
--- recognition._reference_embeddings() (which only considers tag_source =
--- 'manual' faces) finds nothing to build reference embeddings from, so
--- "Refresh Faces" silently reports "no individuals have a manually
--- tagged face yet -- nothing to match against" even on a database with
--- plenty of manually tagged faces. A no-op once backfilled -- safe to
--- re-run, and already a no-op against a database created via a
--- create_tables.sql that already includes this statement.
+-- Current contents: three independent, idempotent changes, safe to apply
+-- together even if one or more were already applied via a current
+-- create_tables.sql:
+--
+-- 1. Backfills faces.tag_source = 'manual' for any face that already had
+--    person_id set before tag_source existed (necessarily tagged via the
+--    manual tag_face endpoint -- recognition.py's "Refresh Faces"
+--    auto-tagging didn't exist yet to have done it). Without this,
+--    recognition._reference_embeddings() (which only considers
+--    tag_source = 'manual' faces) finds nothing to build reference
+--    embeddings from, so "Refresh Faces" silently reports "no individuals
+--    have a manually tagged face yet -- nothing to match against" even on
+--    a database with plenty of manually tagged faces.
+-- 2. Adds photos.location_name: a short, human-readable reverse-geocoded
+--    description of a photo's GPS coordinates (e.g. "Boone, North
+--    Carolina"), alongside the existing raw latitude/longitude -- see
+--    geocode.py and sync.py's _describe_location. Only populated going
+--    forward, on the next sync of each photo that has GPS data (same as
+--    latitude/longitude themselves -- there's no backfill pass for
+--    photos already indexed before this column existed).
+-- 3. Renames photos.description (Florence-2's raw caption) to
+--    vlm_description, preserving its data, then re-adds a fresh
+--    `description` column -- now the LLM-composed rewrite enrich.py
+--    builds from vlm_description + tagged individuals + location_name +
+--    filename. The rename only fires if `description` exists and
+--    `vlm_description` doesn't (a database that's already past this
+--    point is untouched); see enrich.py's module docstring for when
+--    `description` gets (re)computed going forward.
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
+
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'photos' AND column_name = 'description'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'photos' AND column_name = 'vlm_description'
+    ) THEN
+        ALTER TABLE photos RENAME COLUMN description TO vlm_description;
+    END IF;
+END $$;
+
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS vlm_description TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS description TEXT;

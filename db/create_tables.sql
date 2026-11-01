@@ -24,8 +24,59 @@ CREATE TABLE IF NOT EXISTS photos (
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     thumbnail BYTEA,
-    description TEXT
+    -- Florence-2's raw <MORE_DETAILED_CAPTION> output (sync.py's
+    -- _generate_vlm_description) -- a single automated vision-model
+    -- caption of the image itself. Feeds into `description` below as one
+    -- of its inputs; not shown directly in the UI.
+    vlm_description TEXT,
+    -- The description actually shown in the UI: an LLM-composed rewrite
+    -- (enrich.py, any OpenAI-*compatible* chat endpoint) that weaves
+    -- together vlm_description, the names of any individuals tagged in
+    -- the photo, location_name, and the filename/path -- see enrich.py's
+    -- module docstring for exactly when this gets (re)computed (sync, a
+    -- manual tag/untag, auto-tagging, or deleting an individual -- every
+    -- place the facts it's built from can change).
+    description TEXT,
+    -- Short, human-readable reverse-geocoded description of latitude/
+    -- longitude (e.g. "Boone, North Carolina" or "Grandfather Mountain
+    -- State Park, Blowing Rock, North Carolina"), via geocode.py --
+    -- see sync.py's _describe_location. TEXT (unbounded), same as every
+    -- other free-text column here -- there's no reasonable length cap to
+    -- apply to a place description. NULL exactly when latitude/longitude
+    -- are (no GPS data), or if the reverse-geocode lookup failed.
+    location_name TEXT
 );
+
+-- Added after photos already existed in deployed databases -- IF NOT
+-- EXISTS makes this a no-op against a database created after the column
+-- was already part of the CREATE TABLE above.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
+
+-- `description` used to hold Florence-2's raw caption directly; that's now
+-- `vlm_description`, freeing `description` for enrich.py's LLM-composed
+-- rewrite (see the CREATE TABLE's own comments above). A database created
+-- before this split has a `description` column full of real captions and
+-- no `vlm_description` at all -- rename the former to the latter
+-- (preserving that data) before re-adding a fresh `description` below,
+-- rather than silently losing every caption already indexed. The
+-- IF/AND NOT EXISTS guard makes this a no-op on a database that's already
+-- past this point (including one created fresh by the CREATE TABLE above,
+-- which already has both columns).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'photos' AND column_name = 'description'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'photos' AND column_name = 'vlm_description'
+    ) THEN
+        ALTER TABLE photos RENAME COLUMN description TO vlm_description;
+    END IF;
+END $$;
+
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS vlm_description TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS description TEXT;
 
 -- Catalog of named individuals faces can be manually tagged as (see
 -- `faces.person_id` below) -- people.py / routers/individuals.py.

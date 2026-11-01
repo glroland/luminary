@@ -74,6 +74,13 @@ same-person similarity scores across the board, not just for one unlucky
 photo -- if real same-person pairs are consistently scoring lower than
 expected, this is as likely an explanation as the threshold itself being
 wrong.
+
+Whenever _process_photo_faces auto-tags at least one face in a photo, it
+also calls enrich.enrich_description(photo_id) once for that photo (not
+once per face matched) -- `photos.description` (see enrich.py's module
+docstring) is partly composed from the names of individuals tagged in a
+photo, so an auto-match here is one of the things that invalidates/
+recomputes it, same as people.py's manual tag_face/untag_face.
 """
 
 import asyncio
@@ -85,7 +92,7 @@ from typing import Optional
 
 from PIL import Image
 
-from . import people, storage
+from . import enrich, people, storage
 from .config import get_face_match_threshold
 from .database import get_connection
 
@@ -352,6 +359,13 @@ def _process_photo_faces(
                 )
                 matched += 1
             conn.commit()
+
+    if matched:
+        # "Who's in this photo" changed -- regenerate photos.description
+        # (enrich.py), same as a manual tag_face does, once per photo
+        # rather than once per face matched in it (enrich_description
+        # already reads every tagged individual for a photo in one query).
+        enrich.enrich_description(photo_id)
 
     return matched, best_unmatched
 

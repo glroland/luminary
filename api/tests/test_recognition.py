@@ -116,6 +116,24 @@ def test_refresh_auto_tags_a_similar_untagged_face(client, tmp_path, monkeypatch
     assert client.get(f"/api/faces/{face_b['id']}/thumbnail").status_code == 200
 
 
+def test_refresh_triggers_description_enrichment_only_for_photos_it_auto_tagged(client, tmp_path, monkeypatch):
+    from app import enrich
+
+    photos, face_a, face_b = _sync_two_photos(client, tmp_path, monkeypatch, "red", "red")
+    person_id = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+    client.post(f"/api/faces/{face_a['id']}/tag", json={"person_id": person_id})
+
+    calls = []
+    monkeypatch.setattr(enrich, "enrich_description", lambda pid: calls.append(pid))
+
+    status = refresh_and_wait(client)
+    assert status["matched"] == 1
+
+    # Only b.jpg had a face auto-tagged by this run -- a.jpg's manual tag
+    # (above, before the spy was installed) must not show up here.
+    assert calls == [photos["b.jpg"]]
+
+
 def test_refresh_backfills_a_missing_thumbnail_on_a_pre_existing_manual_tag(client, tmp_path, monkeypatch):
     """A face tagged before faces.thumbnail existed has person_id/
     tag_source='manual' set but thumbnail still NULL -- simulated here by

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ManagementPage from "./components/ManagementPage.jsx";
+import Pagination from "./components/Pagination.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
 import Sidebar from "./components/Sidebar.jsx";
@@ -8,6 +9,7 @@ import logo from "./assets/logo.svg";
 
 const POLL_INTERVAL_MS = 1000;
 const DONE_DISPLAY_MS = 2000;
+const PAGE_SIZE_OPTIONS = [24, 48, 96, 200];
 
 // A photo's directory is everything in its (root-relative) filename
 // before the last "/" -- "" for one directly under the photos root.
@@ -40,6 +42,14 @@ export default function App() {
   // whenever the selection changes).
   const [selectedIndividual, setSelectedIndividual] = useState(null);
   const [individualPhotoIds, setIndividualPhotoIds] = useState(null);
+  // Pagination over visiblePhotos below (client-side -- the full list is
+  // already loaded into `photos`, same as the directory/individual
+  // filters). `page` is 1-based and clamped against the current
+  // pageSize/filter combination at render time rather than via an effect,
+  // so switching filters or page size never briefly shows a stale,
+  // out-of-range page.
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [page, setPage] = useState(1);
   const pollRef = useRef(null);
 
   const loadPhotos = useCallback(async () => {
@@ -154,6 +164,10 @@ export default function App() {
             return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
           });
 
+  const totalPages = Math.max(1, Math.ceil(visiblePhotos.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const paginatedPhotos = visiblePhotos.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   return (
     <div className="app">
       {/* A traditional sidebar: it's a column in this flex layout, not a
@@ -169,6 +183,7 @@ export default function App() {
           setSelectedDirectory(directory);
           setSelectedIndividual(null);
           setView("gallery");
+          setPage(1);
         }}
         individuals={individuals}
         selectedIndividual={selectedIndividual}
@@ -176,11 +191,13 @@ export default function App() {
           setSelectedIndividual(personId);
           setSelectedDirectory(null);
           setView("gallery");
+          setPage(1);
         }}
         onAllImages={() => {
           setSelectedDirectory(null);
           setSelectedIndividual(null);
           setView("gallery");
+          setPage(1);
         }}
         onManage={() => setView("manage")}
       />
@@ -222,13 +239,29 @@ export default function App() {
               setSelectedIndividual(null);
               setIndividuals([]);
               setSelectedPhoto(null);
+              setPage(1);
               loadPhotos();
             }}
           />
         ) : isLoading ? (
           <p>Loading photos...</p>
         ) : (
-          <PhotoGrid photos={visiblePhotos} onSelect={setSelectedPhoto} />
+          <>
+            <PhotoGrid photos={paginatedPhotos} onSelect={setSelectedPhoto} />
+            {visiblePhotos.length > 0 && (
+              <Pagination
+                page={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            )}
+          </>
         )}
         <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
       </div>

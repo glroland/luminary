@@ -137,7 +137,11 @@ Postgres) lives in `storage.py`/`sync.py`:
   `DateTimeOriginal`/`DateTimeDigitized`/`DateTime` (falling back to index
   time if absent or unparseable), and `latitude`/`longitude` come from the
   EXIF GPS IFD when present (`_extract_exif`) — both are best-effort and
-  null when EXIF is missing. `delete_photo` only ever issues a `DELETE FROM
+  null when EXIF is missing. `location_name` — a short, human-readable
+  reverse-geocoded place description derived from that same latitude/
+  longitude — is a separate module, `geocode.py` (see its own entry
+  below), called from `sync.py`, not `storage.py`/`_extract_exif` itself.
+  `delete_photo` only ever issues a `DELETE FROM
   photos` — there is deliberately no filesystem call anywhere near it.
   Because the backend may not be a real filesystem, `routers/photos.py`
   serves originals via `StreamingResponse` over `storage.stream_original`
@@ -185,6 +189,14 @@ Postgres) lives in `storage.py`/`sync.py`:
   landscape regardless of the orientation tag. Don't read `image.size` or
   thumbnail straight off the `Image.open()` result again without
   transposing first.
+
+  Whenever GPS coordinates are (re)extracted (`content_changed`, same
+  condition as `latitude`/`longitude` themselves), `_sync_one_file` also
+  reverse-geocodes them into `location_name` via `_describe_location` —
+  but only *after* the `with fs.open(...)` block has closed, deliberately:
+  that's a network call to a third-party service (`geocode.py`), not file
+  I/O, and shouldn't hold a backend file handle/connection (e.g. an SMB
+  session) open while it runs.
 
   The reconciliation runs in its **own thread with its own `asyncio.run()`
   event loop** (`sync.start_sync()`), not as a bare `asyncio.create_task()`
@@ -236,6 +248,82 @@ don't add code that assumes otherwise without also addressing that.
 Florence-2's loaded model (`chat.py`'s
 module-level `_florence_model`/`_florence_processor`, lazily populated and
 cached) is also per-pod, in-memory state — same caveat.
+
+- `geocode.py` reverse-geocodes a photo's EXIF GPS coordinates into
+  `photos.location_name`, a short human-readable place description (e.g.
+  "Boone, North Carolina" or "Grandfather Mountain State Park, Blowing
+  Rock, North Carolina") stored alongside the raw `latitude`/`longitude` —
+  called from `sync.py`'s `_describe_location`, only when those
+  coordinates are themselves (re)extracted (i.e. `content_changed`, same
+  as `latitude`/`longitude` — no separate backfill pass for this field,
+  deliberately, same reasoning those two already have). Uses OpenStreetMap's
+  Nominatim reverse-geocoding API — free, no API key, the same OSM service
+  `PhotoMap.jsx` already depends on for map tiles — rather than a
+  commercial geocoder requiring an account/billing.
+  `LUMINARY_GEOCODE_BASE_URL` can point this at a self-hosted Nominatim
+  instance instead (`config.get_geocode_base_url`); the public instance's
+  usage policy caps requests at **one per second**, enforced globally
+  (not per-thread) by `geocode._rate_limit()` — since `sync.py` fans files
+  out across `MAX_CONCURRENCY` worker threads, this rate limit, not the
+  network call itself, becomes the long pole of a sync for a GPS-heavy
+  library against the public instance. Nominatim's policy also requires a
+  descriptive `User-Agent` (`LUMINARY_GEOCODE_USER_AGENT`,
+  `config.get_geocode_user_agent`) identifying the calling application.
+  Deliberately uses only `urllib` (stdlib) rather than adding a new HTTP
+  client dependency for what's a small, optional, best-effort feature —
+  `geocode.reverse_geocode` raises on any failure (network, timeout,
+  malformed JSON, Nominatim's own `{"error": ...}` "nothing here"
+  response), and it's `sync._describe_location`'s job to catch that and
+  log it, never `sync`'s own failure. `LUMINARY_GEOCODE_ZOOM`
+  (`config.get_geocode_zoom`, default `17`) picks which OSM feature layer
+  the lookup resolves to (low = broad administrative area, high = up to
+  building-level) — like `LUMINARY_FACE_MATCH_THRESHOLD` elsewhere, this
+  has no single verified-correct value across very different photo
+  subjects; treat it as a starting point to tune against your own
+  library's real photos.
+
+- `enrich.py` composes `photos.description` — the description actually
+  shown in the UI — by having a general-purpose LLM (any
+  OpenAI-*compatible* chat endpoint, the same `LUMINARY_OPENAI_*` config
+  `chat.py`'s `"openai"` backend already uses) rewrite whichever facts are
+  already on hand for a photo into one short, natural-language
+  description: its Florence-2 caption (`vlm_description` — see below, this
+  is the column that used to be called `description` and held that raw
+  caption directly), the names of any individuals currently tagged in the
+  photo, `location_name`, and the filename/path. `enrich_description`
+  never looks at the image again — only at text already in the database —
+  which is what makes it cheap enough to call synchronously, inline, from
+  several different request/job code paths (same reasoning
+  `POST /api/photos/{id}/chat` already makes its own openai call
+  synchronously as part of handling a request).
+
+  `enrich_description(photo_id)` is called everywhere the facts it
+  composes from can change for a photo: `sync.py`'s
+  `_run_florence_pipeline` right after a fresh `vlm_description`/face set
+  is written (even before anyone is tagged — `individuals` is just empty
+  at that point); `people.py`'s `tag_face`/`untag_face`, since a face's
+  identity changed; `recognition.py`'s auto-tagging, once per *photo* (not
+  once per face matched — `enrich_description` already reads every tagged
+  individual for a photo in one query) after a "Refresh Faces" run
+  auto-matches at least one of a photo's faces; and `people.py`'s
+  `delete_individual`, for every photo that had a face tagged to the
+  individual being deleted (photo ids collected *before* the bulk
+  `UPDATE ... SET person_id = NULL` that would otherwise make them
+  unfindable). Best-effort throughout, same shape as `geocode.py`/
+  `chat.py`'s own derived fields: a failure (missing config, network
+  error, malformed response) is logged and leaves `description` as
+  whatever it already was — not cleared to `NULL` — never raised to any
+  of those callers. None of them treat this as something whose failure
+  should fail the tag/untag/sync/refresh it's attached to.
+
+  The split into `vlm_description` (Florence-2's raw caption, not shown in
+  the UI) and `description` (this module's rewrite, what's actually
+  displayed) is itself a schema change on an existing column — see
+  `database.py`'s `init_db()` and `db/create_tables.sql`'s `DO $$ ... $$`
+  block, which renames a pre-existing `description` column to
+  `vlm_description` (preserving its data) before re-adding a fresh
+  `description`, guarded so it only fires once per database (a database
+  already past this point, or created fresh after it, is untouched).
 
 - `chat.py` backs `POST /api/photos/{photo_id}/chat`
   (`routers/photos.py:chat_about_photo`), which reads the full original via
@@ -386,6 +474,11 @@ cached) is also per-pod, in-memory state — same caveat.
   `DELETE /api/individuals/{id}`/`delete_individual`, both of which clear
   `person_id`/`thumbnail`/`tag_source`/`match_confidence` together.)
 
+  (As of `enrich.py` above, `tag_face`/`untag_face`/`delete_individual` all
+  also call `enrich.enrich_description` for every photo they affect —
+  "who's in this photo" changing is one of the facts `photos.description`
+  is composed from.)
+
 - `recognition.py` (`routers/faces.py`'s `POST /api/faces/refresh`,
   `GET /api/faces/refresh/status`) is *automatic* face tagging — "Refresh
   Faces" matches every still-untagged detected face against individuals a
@@ -401,7 +494,11 @@ cached) is also per-pod, in-memory state — same caveat.
   tag, manual or auto), and reference embeddings
   (`_reference_embeddings()`) are built *only* from `tag_source = 'manual'`
   faces, never from previously auto-matched ones — an incorrect auto-match
-  must never become a future reference that reinforces itself.
+  must never become a future reference that reinforces itself. Whenever
+  `_process_photo_faces` auto-tags at least one face in a photo, it also
+  calls `enrich.enrich_description(photo_id)` once for that photo (not
+  once per face) — same reasoning as `people.py`'s manual tag/untag, see
+  `enrich.py`'s entry above.
 
   Uses facenet-pytorch's `InceptionResnetV1(pretrained="vggface2")` for
   embeddings, deliberately not DeepFace (which would need TensorFlow, a

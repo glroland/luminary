@@ -96,6 +96,18 @@ describe("PhotoModal", () => {
     expect(document.querySelector(".photo-modal-description")).not.toBeInTheDocument();
   });
 
+  it("renders the reverse-geocoded location name when present", async () => {
+    render(<PhotoModal photo={{ ...PHOTO, location_name: "Boone, North Carolina" }} onClose={() => {}} />);
+    await flush();
+    expect(screen.getByText("Boone, North Carolina")).toBeInTheDocument();
+  });
+
+  it("renders no location paragraph when absent", async () => {
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    await flush();
+    expect(document.querySelector(".photo-modal-location")).not.toBeInTheDocument();
+  });
+
   it("positions a box overlay in pixels from the image's measured visible rect, accounting for object-fit: contain letterboxing", async () => {
     render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
     await flush();

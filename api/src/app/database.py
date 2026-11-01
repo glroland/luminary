@@ -64,10 +64,46 @@ def init_db() -> None:
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 thumbnail BYTEA,
-                description TEXT
+                vlm_description TEXT,
+                description TEXT,
+                location_name TEXT
             )
             """
         )
+        # Guards a database created before location_name existed -- see
+        # db/create_tables.sql's matching ALTER TABLE.
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT")
+
+        # `description` used to hold Florence-2's raw caption directly;
+        # that's now `vlm_description`, freeing `description` for
+        # enrich.py's LLM-composed description (built from
+        # vlm_description + individuals + location + filename -- see
+        # enrich.py's module docstring). A database created before this
+        # split has a `description` column full of real captions and no
+        # `vlm_description` at all -- rename the former to the latter
+        # (preserving that data) before re-adding a fresh `description`
+        # below, rather than silently losing every caption already
+        # indexed. The IF/AND NOT EXISTS guard makes this a no-op on a
+        # database that's already past this point, same shape as every
+        # other self-healing ALTER in this function.
+        conn.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'photos' AND column_name = 'description'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'photos' AND column_name = 'vlm_description'
+                ) THEN
+                    ALTER TABLE photos RENAME COLUMN description TO vlm_description;
+                END IF;
+            END $$
+            """
+        )
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS vlm_description TEXT")
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS description TEXT")
 
         # Catalog of named individuals faces can be manually tagged as --
         # see people.py / routers/individuals.py.

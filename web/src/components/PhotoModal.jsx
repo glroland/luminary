@@ -320,6 +320,7 @@ export default function PhotoModal({ photo, onClose }) {
               {photo.width} &times; {photo.height}
             </p>
             <p>{new Date(photo.created_at).toLocaleString()}</p>
+            {photo.location_name && <p className="photo-modal-location">{photo.location_name}</p>}
             {photo.description && <p className="photo-modal-description">{photo.description}</p>}
           </div>
 

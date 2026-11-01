@@ -111,6 +111,20 @@ def test_tag_face_also_stores_a_per_face_thumbnail(client, tmp_path, monkeypatch
     assert len(response.content) > 0
 
 
+def test_tag_face_triggers_description_enrichment_for_its_photo(client, tmp_path, monkeypatch):
+    from app import enrich
+
+    photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
+    person_id = client.post("/api/individuals", json={"name": "Quinn"}).json()["id"]
+
+    calls = []
+    monkeypatch.setattr(enrich, "enrich_description", lambda pid: calls.append(pid))
+
+    client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+
+    assert calls == [photo_id]
+
+
 def test_list_faces_for_individual(client, tmp_path, monkeypatch):
     photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
     person_id = client.post("/api/individuals", json={"name": "Ivan"}).json()["id"]
@@ -142,6 +156,21 @@ def test_untag_face_clears_person_id_and_thumbnail(client, tmp_path, monkeypatch
     assert faces[0]["tag_source"] is None
     assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
     assert client.get(f"/api/individuals/{person_id}/faces").json() == {"faces": []}
+
+
+def test_untag_face_triggers_description_enrichment_for_its_photo(client, tmp_path, monkeypatch):
+    from app import enrich
+
+    photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
+    person_id = client.post("/api/individuals", json={"name": "Ray"}).json()["id"]
+    client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+
+    calls = []
+    monkeypatch.setattr(enrich, "enrich_description", lambda pid: calls.append(pid))
+
+    client.delete(f"/api/faces/{face['id']}/tag")
+
+    assert calls == [photo_id]
 
 
 def test_untag_face_for_unknown_face_returns_404(client):
@@ -192,6 +221,34 @@ def test_delete_individual_untags_their_faces(client, tmp_path, monkeypatch):
     assert faces[0]["person_id"] is None
     assert faces[0]["tag_source"] is None
     assert client.get(f"/api/faces/{face['id']}/thumbnail").status_code == 404
+
+
+def test_delete_individual_triggers_description_enrichment_once_per_affected_photo(client, tmp_path, monkeypatch):
+    # Two faces in the *same* photo, both tagged to the individual being
+    # deleted -- enrich_description must be called once for that photo,
+    # not once per face (it already reads every tagged individual for a
+    # photo in one query, see enrich.py's module docstring).
+    from app import chat, enrich
+
+    box_a = {"x1": 1.0, "y1": 1.0, "x2": 5.0, "y2": 5.0}
+    box_b = {"x1": 6.0, "y1": 6.0, "x2": 9.0, "y2": 9.0}
+    monkeypatch.setattr(chat, "caption_image", lambda image: "two people")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [box_a, box_b])
+    write_image(tmp_path / "photos" / "sample.jpg", size=(20, 20))
+    sync_and_wait(client)
+
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    faces = client.get(f"/api/photos/{photo_id}/faces").json()["faces"]
+    person_id = client.post("/api/individuals", json={"name": "Sybil"}).json()["id"]
+    client.post(f"/api/faces/{faces[0]['id']}/tag", json={"person_id": person_id})
+    client.post(f"/api/faces/{faces[1]['id']}/tag", json={"person_id": person_id})
+
+    calls = []
+    monkeypatch.setattr(enrich, "enrich_description", lambda pid: calls.append(pid))
+
+    client.delete(f"/api/individuals/{person_id}")
+
+    assert calls == [photo_id]
 
 
 def test_delete_unknown_individual_returns_404(client):

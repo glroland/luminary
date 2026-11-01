@@ -77,7 +77,10 @@ def test_sync_updates_rows_for_files_changed_in_place(client, tmp_path):
     assert photo["height"] == 40
 
 
-def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path):
+def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path, monkeypatch):
+    from app import geocode
+
+    monkeypatch.setattr(geocode, "reverse_geocode", lambda lat, lon: "Pittsburgh, Pennsylvania")
     write_image(tmp_path / "photos" / "geo.jpg", exif=_exif_with_gps_and_datetime())
 
     sync_and_wait(client)
@@ -86,6 +89,40 @@ def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path):
     assert photo["created_at"].startswith("2023-05-17T14:22:10")
     assert photo["latitude"] == pytest.approx(40.446194, abs=1e-5)
     assert photo["longitude"] == pytest.approx(-79.948611, abs=1e-5)
+    assert photo["location_name"] == "Pittsburgh, Pennsylvania"
+
+
+def test_sync_leaves_location_name_null_without_gps_data(client, tmp_path, monkeypatch):
+    from app import geocode
+
+    calls = []
+    monkeypatch.setattr(geocode, "reverse_geocode", lambda lat, lon: calls.append((lat, lon)))
+    write_image(tmp_path / "photos" / "no-gps.jpg")
+
+    sync_and_wait(client)
+    photo = client.get("/api/photos").json()["photos"][0]
+
+    assert photo["location_name"] is None
+    assert calls == []
+
+
+def test_sync_logs_but_does_not_fail_when_reverse_geocoding_raises(client, tmp_path, monkeypatch, caplog):
+    from app import geocode
+
+    def boom(lat, lon):
+        raise RuntimeError("Nominatim unreachable")
+
+    monkeypatch.setattr(geocode, "reverse_geocode", boom)
+    write_image(tmp_path / "photos" / "geo.jpg", exif=_exif_with_gps_and_datetime())
+
+    with caplog.at_level(logging.WARNING, logger="app.sync"):
+        status = sync_and_wait(client)
+
+    assert status["status"] == "completed"
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["latitude"] is not None  # the rest of the row still indexed fine
+    assert photo["location_name"] is None
+    assert any("reverse-geocode" in record.message for record in caplog.records)
 
 
 def test_sync_logs_a_warning_for_an_unreadable_file_but_still_indexes_it(client, tmp_path, caplog):
@@ -183,7 +220,7 @@ def test_sync_applies_exif_orientation_so_portrait_photos_arent_indexed_as_lands
     assert thumbnail.width < thumbnail.height
 
 
-def test_sync_generates_description_via_florence_for_new_photos(client, tmp_path, monkeypatch):
+def test_sync_generates_vlm_description_via_florence_for_new_photos(client, tmp_path, monkeypatch):
     from app import chat
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a red square on a plain background")
@@ -193,10 +230,40 @@ def test_sync_generates_description_via_florence_for_new_photos(client, tmp_path
     sync_and_wait(client)
 
     photo = client.get("/api/photos").json()["photos"][0]
-    assert photo["description"] == "a red square on a plain background"
+    assert photo["vlm_description"] == "a red square on a plain background"
 
 
-def test_sync_leaves_description_null_when_florence_isnt_configured(client, tmp_path):
+def test_sync_triggers_description_enrichment_once_vlm_description_is_written(client, tmp_path, monkeypatch):
+    from app import chat, enrich
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a red square on a plain background")
+    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+    calls = []
+    monkeypatch.setattr(enrich, "enrich_description", lambda photo_id: calls.append(photo_id))
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)
+
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    assert calls == [photo_id]
+
+
+def test_sync_does_not_trigger_description_enrichment_when_captioning_is_not_configured(client, tmp_path, monkeypatch):
+    # Default fixture behavior: Florence unconfigured, so _run_florence_pipeline
+    # returns before ever writing vlm_description -- enrich_description must
+    # not be called over a photo that still has nothing to enrich from.
+    from app import enrich
+
+    calls = []
+    monkeypatch.setattr(enrich, "enrich_description", lambda photo_id: calls.append(photo_id))
+
+    write_image(tmp_path / "photos" / "sample.jpg")
+    sync_and_wait(client)
+
+    assert calls == []
+
+
+def test_sync_leaves_vlm_description_null_when_florence_isnt_configured(client, tmp_path):
     # Default fixture behavior (see conftest.py's `client` fixture): sync
     # must still complete normally, just without a description.
     write_image(tmp_path / "photos" / "sample.jpg")
@@ -205,7 +272,7 @@ def test_sync_leaves_description_null_when_florence_isnt_configured(client, tmp_
     assert status["status"] == "completed"
 
     photo = client.get("/api/photos").json()["photos"][0]
-    assert photo["description"] is None
+    assert photo["vlm_description"] is None
 
 
 def test_sync_logs_but_does_not_fail_when_florence_raises_unexpectedly(client, tmp_path, monkeypatch, caplog):
@@ -223,14 +290,14 @@ def test_sync_logs_but_does_not_fail_when_florence_raises_unexpectedly(client, t
 
     assert status["status"] == "completed"
     photo = client.get("/api/photos").json()["photos"][0]
-    assert photo["description"] is None
+    assert photo["vlm_description"] is None
     assert any(
         record.levelno == logging.WARNING and "sample.jpg" in record.message
         for record in caplog.records
     )
 
 
-def test_sync_backfills_missing_description_without_touching_an_existing_thumbnail(client, tmp_path, monkeypatch):
+def test_sync_backfills_missing_vlm_description_without_touching_an_existing_thumbnail(client, tmp_path, monkeypatch):
     # Simulates a library indexed before Florence-2 chat was configured:
     # the thumbnail is already there, only the description is missing.
     # The repeat sync below must add the description without burning the
@@ -239,7 +306,7 @@ def test_sync_backfills_missing_description_without_touching_an_existing_thumbna
     sync_and_wait(client)  # florence unconfigured by default -- no description yet
     photo_id = client.get("/api/photos").json()["photos"][0]["id"]
     thumbnail_before = client.get(f"/api/photos/{photo_id}/thumbnail").content
-    assert client.get(f"/api/photos/{photo_id}").json()["description"] is None
+    assert client.get(f"/api/photos/{photo_id}").json()["vlm_description"] is None
 
     from app import chat
 
@@ -252,7 +319,7 @@ def test_sync_backfills_missing_description_without_touching_an_existing_thumbna
     assert status["inserted"] == 0
 
     photo = client.get(f"/api/photos/{photo_id}").json()
-    assert photo["description"] == "a backfilled description"
+    assert photo["vlm_description"] == "a backfilled description"
     assert photo["id"] == photo_id  # same row, not a new insert
     assert client.get(f"/api/photos/{photo_id}/thumbnail").content == thumbnail_before
 
@@ -281,7 +348,7 @@ def test_sync_skips_reprocessing_a_fully_populated_unchanged_file(client, tmp_pa
     assert len(face_calls) == 1
 
 
-def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_description(client, tmp_path, monkeypatch):
+def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_vlm_description(client, tmp_path, monkeypatch):
     # Simulates a thumbnail that failed to generate on a previous sync (a
     # transient read error) while a description somehow already exists --
     # the backfill must regenerate just the thumbnail and leave the
@@ -302,24 +369,24 @@ def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_descri
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE photos SET thumbnail = NULL, description = 'a pre-existing description' WHERE id = %s",
+            "UPDATE photos SET thumbnail = NULL, vlm_description = 'a pre-existing description' WHERE id = %s",
             (photo_id,),
         )
         conn.commit()
     assert client.get(f"/api/photos/{photo_id}/thumbnail").status_code == 404
-    assert client.get(f"/api/photos/{photo_id}").json()["description"] == "a pre-existing description"
+    assert client.get(f"/api/photos/{photo_id}").json()["vlm_description"] == "a pre-existing description"
 
     status = sync_and_wait(client)
     assert status["status"] == "completed"
     assert status["updated"] == 1
 
     photo = client.get(f"/api/photos/{photo_id}").json()
-    assert photo["description"] == "a pre-existing description"
+    assert photo["vlm_description"] == "a pre-existing description"
     thumbnail_response = client.get(f"/api/photos/{photo_id}/thumbnail")
     assert len(thumbnail_response.content) > 0
 
 
-def test_sync_regenerates_description_when_a_file_changes_in_place(client, tmp_path, monkeypatch):
+def test_sync_regenerates_vlm_description_when_a_file_changes_in_place(client, tmp_path, monkeypatch):
     from app import chat
 
     captions = iter(["first caption", "second caption"])
@@ -330,11 +397,11 @@ def test_sync_regenerates_description_when_a_file_changes_in_place(client, tmp_p
     write_image(image_path)
     sync_and_wait(client)
     photo_id = client.get("/api/photos").json()["photos"][0]["id"]
-    assert client.get(f"/api/photos/{photo_id}").json()["description"] == "first caption"
+    assert client.get(f"/api/photos/{photo_id}").json()["vlm_description"] == "first caption"
 
     write_image(image_path, size=(40, 40))
     sync_and_wait(client)
-    assert client.get(f"/api/photos/{photo_id}").json()["description"] == "second caption"
+    assert client.get(f"/api/photos/{photo_id}").json()["vlm_description"] == "second caption"
 
 
 def test_sync_stores_detected_faces_for_new_photos(client, tmp_path, monkeypatch):
@@ -372,11 +439,11 @@ def test_sync_treats_zero_detected_faces_as_a_successful_result(client, tmp_path
 
     assert status["status"] == "completed"
     photo = client.get("/api/photos").json()["photos"][0]
-    assert photo["description"] == "an empty room"  # not left null just because there were no faces
+    assert photo["vlm_description"] == "an empty room"  # not left null just because there were no faces
     assert get_faces(photo["id"]) == []
 
 
-def test_sync_does_not_store_description_or_faces_when_face_detection_fails(client, tmp_path, monkeypatch, caplog):
+def test_sync_does_not_store_vlm_description_or_faces_when_face_detection_fails(client, tmp_path, monkeypatch, caplog):
     from app import chat
     from app.storage import get_faces
 
@@ -398,7 +465,7 @@ def test_sync_does_not_store_description_or_faces_when_face_detection_fails(clie
     # IS NOT NULL and wrongly skip retrying face detection.
     assert status["status"] == "completed"
     photo = client.get("/api/photos").json()["photos"][0]
-    assert photo["description"] is None
+    assert photo["vlm_description"] is None
     assert get_faces(photo["id"]) == []
     assert any(
         record.levelno == logging.WARNING and "sample.jpg" in record.message
@@ -436,7 +503,7 @@ def test_sync_replaces_faces_rather_than_accumulating_when_a_file_changes_in_pla
     }
 
 
-def test_sync_backfills_faces_alongside_a_missing_description(client, tmp_path, monkeypatch):
+def test_sync_backfills_faces_alongside_a_missing_vlm_description(client, tmp_path, monkeypatch):
     # Same scenario as the description-only backfill test, but checking
     # that faces -- which never got a chance to run at all the first time,
     # since florence was unconfigured -- get populated by the backfill too.

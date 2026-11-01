@@ -11,24 +11,47 @@ time.
 A full reprocess of every file (re-reading, re-thumbnailing, re-captioning)
 only happens for a file that's new or whose size changed. A file whose
 content is unchanged but is missing a derived field -- most commonly
-`description`, on a library that was indexed before Florence-2 chat was
+`vlm_description`, on a library that was indexed before Florence-2 chat was
 configured -- gets that field backfilled without redoing the rest; see
 _sync_one_file's docstring. This is what makes a repeat "Refresh" cheap:
 there's no separate "full" vs. "incremental" sync, just this single
 reconciliation, which degrades gracefully to doing only as much work as a
 given file actually needs.
 
-Each inserted/updated file also gets a `description` (chat.caption_image)
-and its faces detected (chat.detect_faces, general object detection
+Each inserted/updated file also gets a `vlm_description` (chat.caption_image
+-- Florence-2's raw caption, not the description shown in the UI, see
+below) and its faces detected (chat.detect_faces, general object detection
 filtered to "face" labels -- see chat.py's module docstring for why that,
 not phrase grounding, is what finds *every* face rather than just one --
 stored one-to-many in the `faces` table via storage.replace_faces) via
-Florence-2. `description` doubles as the signal for "has Florence-2 already
-run on this photo at all", covering face detection too, not just the
-caption -- see _run_florence_pipeline for the ordering that makes that a
-reliable signal (faces are always written *before* `description`, never
-after), and _sync_one_file's docstring for how that combines with the
-backfill behavior above.
+Florence-2. `vlm_description` doubles as the signal for "has Florence-2
+already run on this photo at all", covering face detection too, not just
+the caption -- see _run_florence_pipeline for the ordering that makes that
+a reliable signal (faces are always written *before* `vlm_description`,
+never after), and _sync_one_file's docstring for how that combines with
+the backfill behavior above.
+
+Once `vlm_description` is written, _run_florence_pipeline also calls
+enrich.enrich_description(photo_id) -- `photos.description`, the text
+actually shown in the UI, is a *separate*, LLM-composed rewrite of
+`vlm_description` plus whatever individuals/location/filename facts are
+available, not Florence-2's raw caption. See enrich.py's module docstring
+for the full list of places that call it (a sync here is only one of
+several -- tagging/untagging/deleting an individual elsewhere also
+changes "who's in this photo" and re-triggers it).
+
+Whenever a file's GPS coordinates are (re)extracted from EXIF (i.e.
+whenever `content_changed`, same as latitude/longitude themselves --
+_describe_location, geocode.py), they're also reverse-geocoded into
+`location_name`, a short human-readable place description (e.g. "Boone,
+North Carolina" or "Grandfather Mountain State Park, Blowing Rock, North
+Carolina") stored alongside the raw coordinates. Best-effort like
+vlm_description/face detection above: a lookup failure (network, timeout,
+unconfigured) is logged and leaves `location_name` NULL rather than
+failing the sync. There's no backfill pass for this one, unlike
+vlm_description/thumbnail -- it piggybacks on latitude/longitude's own
+re-extraction, which itself only happens on a genuine content change, not
+on every sync of an unchanged file.
 
 A successful sync also chains straight into recognition.py's "Refresh
 Faces" job (_trigger_face_refresh, called at the end of _run_sync) --
@@ -54,7 +77,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, recognition, storage
+from . import chat, enrich, geocode, recognition, storage
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
@@ -180,17 +203,17 @@ def start_sync() -> dict:
 
 
 def _load_existing() -> dict:
-    # has_thumbnail/has_description are booleans derived in SQL rather than
-    # pulling the actual thumbnail BLOB (which can be tens of KB each) into
-    # memory for every row up front just to check presence -- this dict is
-    # held for the whole sync, so across a large library that blob weight
-    # would add up fast for no reason.
+    # has_thumbnail/has_vlm_description are booleans derived in SQL rather
+    # than pulling the actual thumbnail BLOB (which can be tens of KB each)
+    # into memory for every row up front just to check presence -- this
+    # dict is held for the whole sync, so across a large library that blob
+    # weight would add up fast for no reason.
     with get_connection() as conn:
         rows = conn.execute(
             """
             SELECT id, filename, size_bytes,
                    (thumbnail IS NOT NULL) AS has_thumbnail,
-                   (description IS NOT NULL) AS has_description
+                   (vlm_description IS NOT NULL) AS has_vlm_description
             FROM photos
             """
         ).fetchall()
@@ -205,31 +228,31 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     work -- is the fast path a repeat sync of a large, mostly-static
     library should hit for nearly every file: it requires both that size
     matches the DB row (the file's content presumably hasn't changed)
-    *and* that its thumbnail/description are already populated. A full
+    *and* that its thumbnail/vlm_description are already populated. A full
     reprocess (clearing and recomputing everything) only happens for a
     genuinely new or changed file. A file whose content is unchanged but
-    is missing a derived field -- e.g. indexed before `description`
+    is missing a derived field -- e.g. indexed before `vlm_description`
     existed, or before Florence-2 chat was configured, or the thumbnail
     failed on a transient read error -- gets a narrower "backfill": the
     image is opened once, but each piece of work (thumbnailing,
     captioning+face-detection) only runs for the field that's actually
-    missing, so e.g. adding descriptions to an already-thumbnailed library
+    missing, so e.g. adding captions to an already-thumbnailed library
     doesn't redundantly re-thumbnail every photo, and a library sync
     without Florence-2 configured doesn't re-open every file every time
-    just to confirm there's still no description.
+    just to confirm there's still no caption.
 
-    `description` is also the signal for "has face detection already run"
-    (there's no separate column for it) -- see _run_florence_pipeline,
+    `vlm_description` is also the signal for "has face detection already
+    run" (there's no separate column for it) -- see _run_florence_pipeline,
     which is what this function defers to for the caption+faces work, for
-    why that's safe: faces are always stored before `description` is set,
-    never after.
+    why that's safe: faces are always stored before `vlm_description` is
+    set, never after.
     """
     info = fs.info(path)
     size = info.get("size") or 0
 
     content_changed = not existing_row or existing_row["size_bytes"] != size
     needs_thumbnail = content_changed or not existing_row["has_thumbnail"]
-    needs_florence = content_changed or not existing_row["has_description"]
+    needs_florence = content_changed or not existing_row["has_vlm_description"]
 
     if existing_row and not content_changed and not needs_thumbnail and not needs_florence:
         return "unchanged"
@@ -240,19 +263,24 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
         # was computed from the *old* content (or doesn't exist yet), so it
         # must be cleared up front and only kept if recomputing it below
         # actually succeeds, rather than left pointing at stale content.
-        # `description` cleared here is what makes `needs_florence` above
-        # correctly re-trigger on the *next* sync if the pipeline below
-        # doesn't get to run or doesn't finish (its own faces-before-
-        # description ordering is what keeps that promise even when it
-        # does run) -- old faces for this photo get cleared by that
-        # pipeline itself, not here.
+        # `vlm_description` cleared here is what makes `needs_florence`
+        # above correctly re-trigger on the *next* sync if the pipeline
+        # below doesn't get to run or doesn't finish (its own
+        # faces-before-vlm_description ordering is what keeps that promise
+        # even when it does run) -- old faces for this photo get cleared
+        # by that pipeline itself, not here. `description` (the separate,
+        # LLM-composed rewrite -- see enrich.py) is cleared alongside it
+        # for the same reason: it was built from the *old* vlm_description/
+        # faces, which no longer apply to this changed content either.
         fields.update(
             width=None,
             height=None,
             created_at=datetime.now(timezone.utc).isoformat(),
             latitude=None,
             longitude=None,
+            location_name=None,
             thumbnail=None,
+            vlm_description=None,
             description=None,
         )
 
@@ -293,6 +321,16 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
         )
         rgb_image = None  # don't run florence below against a half-decoded image
 
+    # Reverse-geocoding is a network call to a third-party service (see
+    # geocode.py) -- deliberately done here, after the `with fs.open(...)`
+    # block above has already closed, rather than while that file handle
+    # (and the photos backend connection it may represent, e.g. SMB) is
+    # still open. Only attempted when this sync actually (re)extracted GPS
+    # coordinates above; independent of whether the thumbnail/image-decode
+    # step succeeded, since it only needs the coordinates, not the image.
+    if content_changed and fields.get("latitude") is not None and fields.get("longitude") is not None:
+        fields["location_name"] = _describe_location(fields["latitude"], fields["longitude"], relative_path)
+
     fields["content_type"] = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
     fields["size_bytes"] = size
 
@@ -313,10 +351,10 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             conn.execute(f"INSERT INTO photos ({columns}) VALUES ({placeholders})", tuple(fields.values()))
         conn.commit()
 
-    # Only now, with the photo row safely in place (description still
+    # Only now, with the photo row safely in place (vlm_description still
     # NULL/stale-cleared) and a usable decoded image in hand, attempt the
     # caption+face-detection pipeline -- see its docstring for why it
-    # writes `description` last.
+    # writes `vlm_description` last.
     if rgb_image is not None and needs_florence:
         _run_florence_pipeline(photo_id, rgb_image, relative_path)
 
@@ -326,28 +364,38 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
 def _run_florence_pipeline(photo_id: str, image, relative_path: str) -> None:
     """The "quasi-transactional" Florence-2 step for one photo: caption,
     then detect faces, then store the faces, then -- only once faces are
-    safely stored -- store the caption as `description`. That order, with
-    `description` written last, is deliberate: it's what lets
-    `description IS NOT NULL` double as "face detection has already run
-    (and succeeded) for this photo" (see _sync_one_file), without a
+    safely stored -- store the caption as `vlm_description`. That order,
+    with `vlm_description` written last, is deliberate: it's what lets
+    `vlm_description IS NOT NULL` double as "face detection has already
+    run (and succeeded) for this photo" (see _sync_one_file), without a
     separate "faces done" column. If this gets interrupted or fails at any
-    point, `description` is simply never written, so the next sync retries
-    captioning *and* face detection from scratch -- there's no state where
-    a stale caption or half-updated face set is mistaken for "done".
+    point, `vlm_description` is simply never written, so the next sync
+    retries captioning *and* face detection from scratch -- there's no
+    state where a stale caption or half-updated face set is mistaken for
+    "done".
 
     Faces for this photo are always cleared before (re)detecting, win or
     lose: either this is a genuine content change superseding old faces
     that no longer apply, or it's a retry of a previous attempt that didn't
     reach this point last time, which might have left faces stored without
-    ever setting `description` -- either way, old boxes must not survive
-    alongside (or instead of) this attempt's result.
+    ever setting `vlm_description` -- either way, old boxes must not
+    survive alongside (or instead of) this attempt's result.
 
     `image` must already be RGB and EXIF-transposed, same precondition as
-    chat.caption_image/detect_faces."""
+    chat.caption_image/detect_faces.
+
+    Once `vlm_description` (and faces) are safely committed, also calls
+    enrich.enrich_description(photo_id) -- `photos.description`, the text
+    actually shown in the UI, is a separate LLM-composed rewrite built
+    from vlm_description plus whatever individuals/location/filename facts
+    are available (see enrich.py's module docstring). Runs synchronously,
+    inline, on this same executor-thread call -- enrich_description is
+    itself best-effort and never raises, so this can't turn an enrichment
+    failure into a sync failure."""
     storage.replace_faces(photo_id, [])
 
-    description = _generate_description(image, relative_path)
-    if description is None:
+    vlm_description = _generate_vlm_description(image, relative_path)
+    if vlm_description is None:
         return  # captioning failed/unconfigured -- retry everything next sync
 
     boxes = _detect_faces(image, relative_path)
@@ -357,11 +405,13 @@ def _run_florence_pipeline(photo_id: str, image, relative_path: str) -> None:
     storage.replace_faces(photo_id, boxes)
 
     with get_connection() as conn:
-        conn.execute("UPDATE photos SET description = %s WHERE id = %s", (description, photo_id))
+        conn.execute("UPDATE photos SET vlm_description = %s WHERE id = %s", (vlm_description, photo_id))
         conn.commit()
 
+    enrich.enrich_description(photo_id)
 
-def _generate_description(image, relative_path: str) -> Optional[str]:
+
+def _generate_vlm_description(image, relative_path: str) -> Optional[str]:
     """Best-effort Florence-2 caption step of _run_florence_pipeline.
     `image` must already be RGB and EXIF-transposed. Mirrors the
     EXIF/thumbnail handling in _sync_one_file: missing torch/transformers
@@ -374,10 +424,10 @@ def _generate_description(image, relative_path: str) -> Optional[str]:
         # Common and expected when torch/transformers aren't installed --
         # debug, not info/warning, so it doesn't spam the log once per
         # photo across an entire library.
-        logger.debug("Florence-2 not configured; skipping description for %r", relative_path)
+        logger.debug("Florence-2 not configured; skipping vlm_description for %r", relative_path)
         return None
     except Exception:
-        logger.warning("Could not generate description for %r", relative_path, exc_info=True)
+        logger.warning("Could not generate vlm_description for %r", relative_path, exc_info=True)
         return None
 
 
@@ -386,7 +436,7 @@ def _detect_faces(image, relative_path: str) -> Optional[list[dict]]:
     `image` must already be RGB and EXIF-transposed. Returns the detected
     boxes (possibly an empty list -- "no faces found" is a valid,
     successful result, not a failure), or None if detection itself
-    couldn't run/complete. Error handling mirrors _generate_description."""
+    couldn't run/complete. Error handling mirrors _generate_vlm_description."""
     try:
         return chat.detect_faces(image)
     except chat.ChatNotConfigured:
@@ -394,6 +444,19 @@ def _detect_faces(image, relative_path: str) -> Optional[list[dict]]:
         return None
     except Exception:
         logger.warning("Could not detect faces for %r", relative_path, exc_info=True)
+        return None
+
+
+def _describe_location(latitude: float, longitude: float, relative_path: str) -> Optional[str]:
+    """Best-effort reverse-geocode of a photo's GPS coordinates into a
+    short, human-readable place description (geocode.reverse_geocode) --
+    same error-handling shape as _generate_vlm_description/_detect_faces
+    above: any failure (network, timeout, malformed response) is logged
+    and swallowed, never fails the sync."""
+    try:
+        return geocode.reverse_geocode(latitude, longitude)
+    except Exception:
+        logger.warning("Could not reverse-geocode %r's GPS coordinates", relative_path, exc_info=True)
         return None
 
 
