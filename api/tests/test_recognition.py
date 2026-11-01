@@ -116,6 +116,72 @@ def test_refresh_auto_tags_a_similar_untagged_face(client, tmp_path, monkeypatch
     assert client.get(f"/api/faces/{face_b['id']}/thumbnail").status_code == 200
 
 
+def test_refresh_backfills_a_missing_thumbnail_on_a_pre_existing_manual_tag(client, tmp_path, monkeypatch):
+    """A face tagged before faces.thumbnail existed has person_id/
+    tag_source='manual' set but thumbnail still NULL -- simulated here by
+    inserting that row directly rather than going through tag_face (which
+    always sets thumbnail today). Refresh must backfill it before it can
+    be used as a reference, or this individual could never be auto-matched
+    against no matter the threshold."""
+    monkeypatch.setattr(recognition, "_embed", _solid_color_embed)
+
+    write_image(tmp_path / "photos" / "a.jpg", size=(20, 20), color="red")
+    write_image(tmp_path / "photos" / "b.jpg", size=(20, 20), color="red")
+    sync_and_wait(client)  # metadata only -- florence unconfigured by default, no faces detected via sync
+
+    photos = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+    person_id = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO faces (id, photo_id, x1, y1, x2, y2, person_id, tag_source) "
+            "VALUES (%s, %s, 1, 1, 9, 9, %s, 'manual')",
+            ("face-a", photos["a.jpg"], person_id),
+        )
+        conn.execute(
+            "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (%s, %s, 1, 1, 9, 9)",
+            ("face-b", photos["b.jpg"]),
+        )
+        conn.commit()
+
+    assert client.get("/api/faces/face-a/thumbnail").status_code == 404  # pre-existing-tag style: no thumbnail yet
+
+    status = refresh_and_wait(client)
+    assert status["matched"] == 1
+
+    assert client.get("/api/faces/face-a/thumbnail").status_code == 200  # backfilled
+    updated_b = client.get(f"/api/photos/{photos['b.jpg']}/faces").json()["faces"][0]
+    assert updated_b["person_id"] == person_id
+    assert updated_b["tag_source"] == "auto"
+
+
+def test_refresh_logs_the_closest_unmatched_candidate_when_nothing_matches(client, tmp_path, monkeypatch, caplog):
+    import logging
+
+    # Not orthogonal (unlike the "does not match a dissimilar face" test
+    # below) -- a middling cosine similarity, deliberately below the
+    # default threshold but not near zero, so there's an actual near-miss
+    # to report rather than a clean non-match.
+    photos, face_a, face_b = _sync_two_photos(client, tmp_path, monkeypatch, "red", (50, 240, 10))
+    person_id = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+    client.post(f"/api/faces/{face_a['id']}/tag", json={"person_id": person_id})
+
+    with caplog.at_level(logging.INFO, logger="app.recognition"):
+        status = refresh_and_wait(client)
+
+    assert status["matched"] == 0
+    # Names the photo *filename* and individual *name* -- not just
+    # face_id/person_id UUIDs an operator would otherwise have to go
+    # resolve by hand to know what to actually go look at.
+    assert any(
+        "closest unmatched candidate" in record.message
+        and face_b["id"] in record.message
+        and "b.jpg" in record.message
+        and "Alice" in record.message
+        for record in caplog.records
+    )
+
+
 def test_refresh_does_not_match_a_dissimilar_face(client, tmp_path, monkeypatch):
     photos, face_a, face_b = _sync_two_photos(client, tmp_path, monkeypatch, "red", "blue")
 

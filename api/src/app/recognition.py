@@ -35,6 +35,37 @@ every still-untagged face (simplest correct behavior: a face that didn't
 match last run might match this run if someone tagged more reference faces
 for that person since). Revisit only if a real library size makes that
 full rescan too slow.
+
+Matching is cosine similarity against `config.get_face_match_threshold()`
+(`LUMINARY_FACE_MATCH_THRESHOLD`). Confirmed empirically (not just assumed)
+that `InceptionResnetV1`'s output is L2-normalized -- `model(tensor)[0]
+.norm()` comes back ~1.0 -- so cosine similarity is a mathematically valid
+choice of metric here, as opposed to e.g. raw (non-normalized) Euclidean
+distance. That said, there's no reliable published "same person" cosine
+cutoff for this exact model/weights combination (unlike the original
+FaceNet paper's well-known L2-distance threshold on *its* embeddings) --
+the right value is something to tune against your own library's real
+photos, not a number to trust blindly. If a run matches nothing,
+`_run_refresh` logs the single closest unmatched candidate's actual score
+at INFO (so it's visible without changing `LUMINARY_LOG_LEVEL`) -- that's
+the number to look at before assuming the threshold, not the code, is
+wrong. Setting `LUMINARY_LOG_LEVEL=DEBUG` additionally logs every
+candidate's best-match score in `_process_photo_faces`. Both log lines
+name the photo's *filename* and the individual's *name* (via
+`_individual_names()`), not just `face_id`/`person_id` UUIDs -- an
+operator debugging "why didn't this match" needs to go look at the actual
+photo and person, not resolve two ids by hand first.
+
+Candidate crops come straight from Florence-2's generic object-detection
+box (`sync.py`/`chat.detect_faces`), with no face *alignment* step (no
+eye/landmark-based rotation/scaling) before embedding -- we deliberately
+don't use facenet-pytorch's own `MTCNN` (see above), which normally
+provides that alignment as part of detecting+cropping. A loose or
+off-center box, or the lack of alignment, can suppress genuine
+same-person similarity scores across the board, not just for one unlucky
+photo -- if real same-person pairs are consistently scoring lower than
+expected, this is as likely an explanation as the threshold itself being
+wrong.
 """
 
 import asyncio
@@ -120,6 +151,65 @@ def _mean_embedding(embeddings: list[list[float]]) -> list[float]:
     return [sum(embedding[i] for embedding in embeddings) / len(embeddings) for i in range(length)]
 
 
+def _backfill_missing_reference_thumbnails() -> None:
+    """A face manually tagged *before* `faces.thumbnail` existed has
+    `person_id`/`tag_source = 'manual'` set but `thumbnail` still NULL
+    forever -- a plain `ALTER TABLE ... ADD COLUMN` never backfills
+    existing rows (same gap `database.init_db()`'s `tag_source` backfill
+    closes for that column), but unlike that one, fixing this needs real
+    I/O (re-reading the photo's original and re-cropping it), not just a
+    SQL `UPDATE`, so it can't live in `init_db()` without that module
+    importing `storage`/`people` and creating a circular import. Run once
+    per refresh, lazily, right before `_reference_embeddings()` needs
+    those thumbnails -- a no-op (one cheap query, zero rows) once
+    everything's backfilled, so there's no reason to gate this behind a
+    separate one-time migration step.
+
+    Without this, `_reference_embeddings()`'s `thumbnail IS NOT NULL`
+    filter silently excludes every face tagged this way, so that
+    individual has *no* reference embedding at all and can never be
+    auto-matched against, no matter what `LUMINARY_FACE_MATCH_THRESHOLD`
+    is set to."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, photo_id, x1, y1, x2, y2 FROM faces "
+            "WHERE tag_source = 'manual' AND person_id IS NOT NULL AND thumbnail IS NULL"
+        ).fetchall()
+    if not rows:
+        return
+
+    by_photo: dict[str, list[dict]] = {}
+    for row in rows:
+        by_photo.setdefault(row["photo_id"], []).append(dict(row))
+
+    backfilled = 0
+    for photo_id, faces in by_photo.items():
+        with get_connection() as conn:
+            photo = conn.execute("SELECT filename FROM photos WHERE id = %s", (photo_id,)).fetchone()
+        if not photo:
+            continue
+        try:
+            original_bytes = storage.read_original_bytes(dict(photo))
+        except Exception:
+            logger.warning(
+                "Could not read original for photo %s while backfilling face thumbnails", photo_id, exc_info=True
+            )
+            continue
+        if not original_bytes:
+            continue
+        for face in faces:
+            thumbnail = people.crop_face_thumbnail(original_bytes, face)
+            if not thumbnail:
+                continue
+            with get_connection() as conn:
+                conn.execute("UPDATE faces SET thumbnail = %s WHERE id = %s", (thumbnail, face["id"]))
+                conn.commit()
+            backfilled += 1
+
+    if backfilled:
+        logger.info("Backfilled missing thumbnails for %d pre-existing manually tagged face(s)", backfilled)
+
+
 def _reference_embeddings() -> dict[str, list[float]]:
     """One mean-pooled embedding per individual, from their manually
     tagged faces' already-stored thumbnails only (see this module's
@@ -154,12 +244,35 @@ def _candidate_faces() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def _individual_names() -> dict[str, str]:
+    """id -> name for every catalogued individual -- purely for making log
+    lines human-readable (filenames/names, not UUIDs an operator would
+    have to go look up by hand to debug a "why didn't this match"
+    question). Never used for matching itself, only logging."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT id, name FROM individuals").fetchall()
+        return {row["id"]: row["name"] for row in rows}
+
+
 def _process_photo_faces(
-    photo_id: str, faces: list[dict], references: dict[str, list[float]], threshold: float
-) -> int:
+    photo_id: str,
+    faces: list[dict],
+    references: dict[str, list[float]],
+    threshold: float,
+    individual_names: dict[str, str],
+) -> tuple[int, Optional[tuple[float, str, str, str]]]:
     """Runs on the executor thread: reads `photo_id`'s original once (even
     if it has several candidate faces), then embeds+matches each face in
-    `faces` against `references`. Returns how many got auto-tagged.
+    `faces` against `references`. Returns (how many got auto-tagged, the
+    best-scoring *unmatched* candidate seen here as (score, person_id,
+    face_id, photo_filename), or None if every face here matched or had no
+    reference to compare against) -- _run_refresh aggregates the latter
+    across every photo so it can log the single closest near-miss when a
+    whole run matches nothing, which is the only real diagnostic for "is
+    the threshold wrong, or is nothing even close". `photo_filename` (and
+    `individual_names`, used only for the debug line below) are there so
+    that log line names things an operator can actually go look at --
+    filenames and individual names, not photo_id/person_id/face_id UUIDs.
 
     Best-effort like sync.py's own thumbnailing/captioning: a photo whose
     original can't be read, or a face whose crop can't be decoded, is
@@ -167,17 +280,19 @@ def _process_photo_faces(
     with get_connection() as conn:
         photo = conn.execute("SELECT filename FROM photos WHERE id = %s", (photo_id,)).fetchone()
     if not photo:
-        return 0  # deleted since the candidate list was built
+        return 0, None  # deleted since the candidate list was built
+    photo_filename = photo["filename"]
 
     try:
         original_bytes = storage.read_original_bytes(dict(photo))
     except Exception:
         logger.warning("Could not read original for photo %s from the photos backend", photo_id, exc_info=True)
-        return 0
+        return 0, None
     if not original_bytes:
-        return 0
+        return 0, None
 
     matched = 0
+    best_unmatched: Optional[tuple[float, str, str, str]] = None
     for face in faces:
         thumbnail = people.crop_face_thumbnail(original_bytes, face)
         if not thumbnail:
@@ -196,7 +311,19 @@ def _process_photo_faces(
             if score > best_score:
                 best_person_id, best_score = person_id, score
 
+        best_name = individual_names.get(best_person_id, best_person_id) if best_person_id else None
+        logger.debug(
+            "Candidate face %s in %s: best match %s scored %.4f (threshold %.4f)",
+            face["id"],
+            photo_filename,
+            best_name,
+            best_score,
+            threshold,
+        )
+
         if best_person_id is None or best_score < threshold:
+            if best_person_id is not None and (best_unmatched is None or best_score > best_unmatched[0]):
+                best_unmatched = (best_score, best_person_id, face["id"], photo_filename)
             continue
 
         # The `AND person_id IS NULL` guard (and checking rowcount rather
@@ -218,7 +345,7 @@ def _process_photo_faces(
                 matched += 1
             conn.commit()
 
-    return matched
+    return matched, best_unmatched
 
 
 class _RefreshProgress:
@@ -315,6 +442,7 @@ async def _run_refresh() -> None:
     loop = asyncio.get_running_loop()
 
     try:
+        await loop.run_in_executor(_executor, _backfill_missing_reference_thumbnails)
         references = await loop.run_in_executor(_executor, _reference_embeddings)
     except FaceRecognitionNotConfigured as exc:
         progress.fail(str(exc))
@@ -331,6 +459,7 @@ async def _run_refresh() -> None:
 
     try:
         candidates = await loop.run_in_executor(_executor, _candidate_faces)
+        individual_names = await loop.run_in_executor(_executor, _individual_names)
         progress.set_total(len(candidates))
 
         by_photo: dict[str, list[dict]] = {}
@@ -339,21 +468,50 @@ async def _run_refresh() -> None:
 
         threshold = get_face_match_threshold()
         total_matched = 0
+        global_best_unmatched: Optional[tuple[float, str, str, str]] = None
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
         async def handle(photo_id: str, faces: list[dict]) -> None:
-            nonlocal total_matched
+            nonlocal total_matched, global_best_unmatched
             async with semaphore:
-                matched = await loop.run_in_executor(
-                    _executor, _process_photo_faces, photo_id, faces, references, threshold
+                matched, best_unmatched = await loop.run_in_executor(
+                    _executor, _process_photo_faces, photo_id, faces, references, threshold, individual_names
                 )
             total_matched += matched
+            is_new_best = global_best_unmatched is None or (
+                best_unmatched is not None and best_unmatched[0] > global_best_unmatched[0]
+            )
+            if best_unmatched is not None and is_new_best:
+                global_best_unmatched = best_unmatched
             progress.record(len(faces))
 
         await asyncio.gather(*(handle(photo_id, faces) for photo_id, faces in by_photo.items()))
 
         progress.finish(total_matched)
         logger.info("Refresh faces completed: %d matched of %d candidate face(s)", total_matched, len(candidates))
+        # The single most actionable diagnostic when a run matches
+        # nothing: whether the closest candidate was "close but just under
+        # threshold" (tune LUMINARY_FACE_MATCH_THRESHOLD down) or nowhere
+        # close (a real non-match, or something else is wrong) -- logged
+        # at INFO, same level as the completion line above, so it's visible
+        # without needing to flip LUMINARY_LOG_LEVEL to DEBUG for the
+        # per-face scores logged inside _process_photo_faces. Names the
+        # photo filename and individual *name*, not just UUIDs -- an
+        # operator debugging "why didn't this match" needs to actually go
+        # look at the photo and the person, not resolve two ids by hand
+        # first.
+        if total_matched == 0 and global_best_unmatched is not None:
+            score, person_id, face_id, photo_filename = global_best_unmatched
+            individual_name = individual_names.get(person_id, person_id)
+            logger.info(
+                "Refresh faces: closest unmatched candidate (face %s in %s) scored %.4f against individual "
+                "%s (threshold %.4f) -- if that's really the same person, lower LUMINARY_FACE_MATCH_THRESHOLD",
+                face_id,
+                photo_filename,
+                score,
+                individual_name,
+                threshold,
+            )
     except Exception as exc:
         logger.exception("Refresh faces failed")
         progress.fail(str(exc))

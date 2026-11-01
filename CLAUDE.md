@@ -425,6 +425,55 @@ cached) is also per-pod, in-memory state — same caveat.
   its original read) together as one executor unit, not one face at a
   time, so progress advances in per-photo batches.
 
+  `LUMINARY_FACE_MATCH_THRESHOLD` (`config.get_face_match_threshold()`,
+  default `0.4`) has no verified-correct value — confirmed empirically
+  that `InceptionResnetV1`'s output is L2-normalized (`.norm()` ≈ 1.0, so
+  cosine similarity is at least a valid metric for it), but there's no
+  published "same person" cosine cutoff for this exact model/weights the
+  way there is an L2-distance threshold for the original FaceNet paper's
+  own embeddings. An earlier default of `0.6` was confirmed too strict in
+  practice — real same-person matches scored below it and were silently
+  skipped, so a whole run completed having matched nothing. Don't just
+  pick another number if this comes up again: `_run_refresh` logs the
+  single closest unmatched candidate's actual score at `INFO` whenever a
+  run matches 0 faces (`LUMINARY_LOG_LEVEL=DEBUG` logs every candidate's
+  score, inside `_process_photo_faces`) specifically so the real number
+  from the user's own library drives the threshold, not another guess.
+  Both log lines resolve `_individual_names()` and the photo's `filename`
+  rather than logging bare `face_id`/`person_id` UUIDs -- there has to be
+  something an operator can actually go look at to answer "is this really
+  the same person" (the real original ask that exposed the `tag_source`/
+  `thumbnail` backfill bugs above in the first place).
+
+  If real same-person pairs keep scoring low even after raising/lowering
+  the threshold, suspect the crop before the number: candidates are
+  Florence-2's generic object-detection box, with no face-*alignment* step
+  (no eye/landmark-based rotation/scaling) before embedding --
+  deliberately not using facenet-pytorch's own `MTCNN`, which normally
+  provides that alignment as part of detecting+cropping (see this
+  module's own docstring on why we skip it). A loose/off-center box can
+  suppress genuine similarity scores across the board, not just for one
+  photo.
+
+  `_backfill_missing_reference_thumbnails()` (called at the top of
+  `_run_refresh`, before `_reference_embeddings()`) exists because of a
+  second instance of the exact "`ALTER TABLE ADD COLUMN` never backfills
+  existing rows" bug `database.init_db()`'s `tag_source` backfill fixes —
+  but one column earlier (`faces.thumbnail`) and one migration earlier, so
+  a face manually tagged before *that* column existed has `person_id` set
+  but `thumbnail` still `NULL`. This one can't be a bare SQL `UPDATE` like
+  the `tag_source` fix (there's nothing to copy it from — it has to be
+  re-cropped from the photo's original bytes, real I/O), so it can't live
+  in `init_db()` without that module importing `storage`/`people` and
+  creating a circular import; it runs lazily instead, once per refresh,
+  right before the thumbnails it backfills get read. Without it, such a
+  face is invisible to `_reference_embeddings()`'s `thumbnail IS NOT NULL`
+  filter, so that individual has *no* reference embedding and can never
+  be auto-matched against regardless of the threshold — if a "Refresh
+  Faces" run reports "no individuals have a manually tagged face yet"
+  despite faces clearly being tagged, check for *this* gap (missing
+  thumbnails) before suspecting `tag_source` again.
+
 ## Web architecture (`web/src/`)
 
 - `api/client.js` is the only place that talks to the backend — all

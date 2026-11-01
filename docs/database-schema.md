@@ -78,6 +78,22 @@ tag_source IS NULL` backfill, now in both `database.py`'s `init_db()`
 no-op once applied, so it's left in permanently rather than removed after
 one use.
 
+**Backfill for faces tagged before `thumbnail` existed**: same gap, one
+column earlier — a face tagged before `faces.thumbnail` existed has
+`person_id` set but `thumbnail` still `NULL` forever. Unlike `tag_source`
+above, this one can't be fixed with a bare SQL `UPDATE` (there's no value
+to copy from another column — it has to be re-cropped from the photo's
+original bytes, real I/O), so it doesn't live in `init_db()`. Instead,
+`recognition._backfill_missing_reference_thumbnails()` runs it lazily,
+once per "Refresh Faces" run, right before `_reference_embeddings()` reads
+`faces.thumbnail` — a no-op (one cheap query, zero rows) once everything's
+backfilled. Without this, such a face is invisible to `_reference_embeddings()`'s
+`thumbnail IS NOT NULL` filter, so that individual has *no* reference
+embedding at all and can never be auto-matched against no matter what
+`LUMINARY_FACE_MATCH_THRESHOLD` is set to — a stricter failure than the
+`tag_source` gap above (that one at least left the row visible once
+`tag_source` was backfilled; this one hides it regardless).
+
 ### Indexes
 
 - `idx_faces_photo_id` on `(photo_id)` — every read of this table
@@ -175,5 +191,30 @@ No embeddings are persisted anywhere — every run recomputes reference
 embeddings (from `faces.thumbnail` rows already in the database, no need
 to re-fetch originals for those) and re-embeds/re-compares every
 currently-untagged face from scratch. The match threshold
-(`LUMINARY_FACE_MATCH_THRESHOLD`, default `0.6`, a cosine similarity) is
+(`LUMINARY_FACE_MATCH_THRESHOLD`, default `0.4`, a cosine similarity) is
 read via `config.get_face_match_threshold()`.
+
+**Tuning the threshold**: `InceptionResnetV1`'s output is confirmed
+L2-normalized (`.norm()` ≈ 1.0), so cosine similarity is a valid metric
+here, but there's no reliable published "same person" cosine cutoff for
+this specific model/weights the way there is an L2-distance threshold for
+the original FaceNet paper's own embeddings — `0.4` is a starting point,
+not a verified-correct value (an earlier default of `0.6` turned out too
+strict in practice: real same-person matches scored below it and were
+silently skipped, so a run completed having matched nothing despite
+plenty of eligible photos). If a run matches 0 faces, `_run_refresh` logs
+the single closest unmatched candidate's actual score at `INFO` — naming
+the photo's *filename* and the individual's *name* (via
+`_individual_names()`), not `face_id`/`person_id` UUIDs, so there's
+actually something to go look at — that number, from your own library, is
+what to tune `LUMINARY_FACE_MATCH_THRESHOLD` against, not a value to
+guess. `LUMINARY_LOG_LEVEL=DEBUG` additionally logs every candidate's
+best-match score the same way.
+
+If real same-person pairs keep scoring low even after tuning, suspect the
+crop itself before the threshold: candidates are Florence-2's generic
+object-detection box with no face-alignment step (no eye/landmark-based
+rotation/scaling) before embedding — `recognition.py` deliberately skips
+facenet-pytorch's own `MTCNN`, which normally provides that alignment as
+part of detecting+cropping (see its module docstring). A loose or
+off-center box can suppress genuine similarity scores across the board.

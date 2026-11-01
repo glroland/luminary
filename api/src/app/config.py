@@ -122,8 +122,16 @@ def get_face_match_threshold() -> float:
     """Minimum cosine similarity between a candidate face's embedding and
     an individual's reference embedding (recognition.py's
     _reference_embeddings(), built from their manually tagged faces only)
-    for recognition.py to auto-tag a match. FaceNet-style cosine
-    thresholds for "same person" are commonly cited in the 0.5-0.7 range
-    depending on the exact pretrained weights -- 0.6 is a reasonable
-    starting point, tune empirically against your own library."""
-    return float(os.environ.get("LUMINARY_FACE_MATCH_THRESHOLD", "0.6"))
+    for recognition.py to auto-tag a match. facenet-pytorch's
+    InceptionResnetV1 L2-normalizes its output (confirmed empirically,
+    not just assumed -- see recognition.py's module docstring), so cosine
+    similarity is a valid metric for it, but there's no reliable published
+    "same person" cutoff for this exact model/weights combination the way
+    there is for e.g. the original FaceNet L2-distance threshold -- 0.6
+    turned out too strict in practice (real matches scored below it and
+    were silently skipped). 0.4 is a looser starting point, not a
+    verified-correct one either -- if a refresh run matches nothing,
+    check its log line naming the closest unmatched candidate's actual
+    score (or set LUMINARY_LOG_LEVEL=DEBUG for every candidate's score)
+    and tune this against those real numbers rather than guessing again."""
+    return float(os.environ.get("LUMINARY_FACE_MATCH_THRESHOLD", "0.4"))
