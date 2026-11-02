@@ -144,6 +144,7 @@ help:
 	@echo "  db-drop         Drop them"
 	@echo "  db-update       Apply db/update.sql's schema changes in place (no drop/rebuild), then clear it"
 	@echo "  db-create       Create one ad-hoc database+role (e.g. prod's), via LUMINARY_CREATE_DB_NAME/_USER/_PASSWORD"
+	@echo "                  (destructive drop+recreate of one: deploy/db-rebuild-prod.sh, prompts interactively)"
 	@echo "  helm-lint       Lint the Helm chart"
 	@echo "  helm-template   Render the Helm chart"
 	@echo "  clean           Remove local build/test artifacts"

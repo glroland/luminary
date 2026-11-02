@@ -245,6 +245,32 @@ Whatever name/user/password you pick must then go into the `database`/
 prompts for all three) for the Helm deployment to actually connect with
 them.
 
+`deploy/db-rebuild-prod.sh` is the **destructive** sibling of `db-create`
+above — a drop+recreate from scratch, for when you want to rebuild prod's
+database rather than just provision it the first time. Lives alongside
+`deploy/create-secrets.sh` rather than under `db/` since, like that
+script, it's an interactive OpenShift-deployment-adjacent operational
+tool rather than raw SQL meant to be run/read directly — it drives the
+same files under `db/` (`../db/*.sql` relative to its own location) via
+plain `psql` instead. Run it directly (no Makefile variables to export up
+front):
+
+```bash
+deploy/db-rebuild-prod.sh
+```
+
+It prompts for the Postgres host/port/admin credentials and the target
+database name/username/password, defaulting the name and username both to
+`luminary-prod` (press enter to accept) — the same name used throughout
+this section and in `deploy/create-secrets.sh`'s own defaults. It requires
+typing the database name back as a confirmation before dropping anything,
+then runs `drop_database.sql`/`drop_role.sql` followed by
+`create_db_and_user.sql`/`create_extensions.sql`/`create_tables.sql`
+against it — same three provisioning files `db-create` runs, just driven
+directly instead of via Makefile variables. Update
+`luminary-db-credentials` (`deploy/create-secrets.sh`) afterward if the
+name/username/password changed from what's currently deployed.
+
 `LUMINARY_DATABASE_ADMIN_USER`/`_PASSWORD` (default user `postgres`, no
 default password) authenticate only for `db`/`db-recreate`/`db-drop`/
 `db-create` — the running API never uses them, and neither does `db-update`, which connects
