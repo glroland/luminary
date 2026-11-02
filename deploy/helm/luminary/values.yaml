@@ -50,14 +50,18 @@ api:
     database:
       host: db.home.glroland.com
       port: 5432
-      name: luminary
+      # The database name itself comes from databaseCredentialsSecret's
+      # "database" key below, not a plain value here -- see that key's
+      # comment.
+    # Created by deploy/create-secrets.sh. Keys: database, username,
+    # password -- keep all three in sync with that script's prompts.
     databaseCredentialsSecret: luminary-db-credentials
-    # Created by deploy/scripts/create-secrets.sh -- keep this name in sync
+    # Created by deploy/create-secrets.sh -- keep this name in sync
     # with that script's PHOTOS_SECRET_NAME.
     photosCredentialsSecret: luminary-photos-credentials
     openaiBaseUrl: "https://maas.apps.ocp.home.glroland.com/sandbox/gemma-4/v1"
     openaiModel: "gemma-4"
-    # Created by deploy/scripts/create-secrets.sh -- keep this name in sync
+    # Created by deploy/create-secrets.sh -- keep this name in sync
     # with that script's OPENAI_SECRET_NAME.
     openaiApiKeySecret: luminary-openai-credentials
     openaiStreaming: false

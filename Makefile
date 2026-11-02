@@ -19,9 +19,10 @@ LUMINARY_PHOTOS_URI ?= "smb://data.home.glroland.com/photo/2019 Spring Break in 
 # that already exists outside this repo's Helm chart/ArgoCD app (see
 # CLAUDE.md); `make db`/`make db-recreate` provision databases+role on it,
 # they don't stand up Postgres itself. The same `luminary` role is shared
-# across every database (dev, unittest, and prod's own "luminary" -- see
-# values.yaml's api.env.database.name, used by the Helm deployment); only
-# the database *name* differs per purpose. Override individually, e.g.
+# across every database (dev, unittest, and prod's own -- see the
+# database/username/password keys of values.yaml's
+# api.env.databaseCredentialsSecret Secret, used by the Helm deployment);
+# only the database *name* differs per purpose. Override individually, e.g.
 # `make run-api LUMINARY_DATABASE_HOST=otherhost`.
 LUMINARY_DATABASE_HOST     ?= db.home.glroland.com
 LUMINARY_DATABASE_PORT     ?= 5432
@@ -30,8 +31,9 @@ LUMINARY_DATABASE_PASSWORD ?= luminary
 
 # Database name run-api/db/db-recreate/db-drop use -- local development's
 # own database, distinct from the one `make test-api` uses (below) and from
-# prod's "luminary" (the Helm deployment's database.name, never this repo's
-# to create/drop -- see the README's "Database" section).
+# prod's own (the Helm deployment's database name, stored in the
+# databaseCredentialsSecret Secret, never this repo's to create/drop --
+# see the README's "Database" section).
 LUMINARY_DATABASE_NAME ?= luminary-dev
 
 # Database name test-api uses -- kept separate from LUMINARY_DATABASE_NAME
@@ -59,8 +61,9 @@ LUMINARY_DATABASE_ADMIN_PASSWORD ?=
 # No default LUMINARY_CREATE_DB_NAME -- `make db-create` refuses to run
 # without one, same reasoning as LUMINARY_DATABASE_ADMIN_PASSWORD having no
 # default (there's nothing safe to guess for a destructive-adjacent,
-# prod-facing target). Whatever name/role you pick here must match
-# values.yaml's api.env.database.name/databaseCredentialsSecret for the
+# prod-facing target). Whatever name/role you pick here must match the
+# database/username/password keys of the Secret named by values.yaml's
+# api.env.databaseCredentialsSecret (see deploy/create-secrets.sh) for the
 # Helm deployment to actually connect to it.
 LUMINARY_CREATE_DB_NAME     ?=
 LUMINARY_CREATE_DB_USER     ?=
@@ -192,8 +195,9 @@ push-web:
 # luminary-unittest) and the shared `luminary` role on the server
 # LUMINARY_DATABASE_HOST points at (see db/) -- a separate, already-existing
 # Postgres server, not something this repo's Helm chart/ArgoCD app stands
-# up. Prod's own "luminary" database (values.yaml's api.env.database.name)
-# is provisioned the same way but separately, against prod's own Postgres
+# up. Prod's own database (named in the Secret values.yaml's
+# api.env.databaseCredentialsSecret points at) is provisioned the same way
+# but separately, by `make db-create` below, against prod's own Postgres
 # host -- not by these targets. LUMINARY_DATABASE_ADMIN_PASSWORD must be
 # supplied for db/db-recreate/db-drop (not db-update, below -- that one
 # only needs the app role's own credentials).

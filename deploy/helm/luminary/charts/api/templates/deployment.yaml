@@ -45,7 +45,10 @@ spec:
             - name: LUMINARY_DATABASE_PORT
               value: {{ .Values.env.database.port | quote }}
             - name: LUMINARY_DATABASE_NAME
-              value: {{ .Values.env.database.name | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.databaseCredentialsSecret }}
+                  key: database
             - name: LUMINARY_DATABASE_USER
               valueFrom:
                 secretKeyRef:

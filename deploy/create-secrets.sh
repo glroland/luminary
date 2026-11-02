@@ -4,18 +4,23 @@
 # OpenAI-compatible chat endpoint, in the "luminary" namespace of whatever
 # OpenShift cluster `oc` is currently logged into.
 #
-# The secret names and key names here (DB_SECRET_NAME/username+password,
-# PHOTOS_SECRET_NAME/username+password, OPENAI_SECRET_NAME/apiKey) must
-# match deploy/helm/luminary/values.yaml's api.env.databaseCredentialsSecret
-# / api.env.photosCredentialsSecret / api.env.openaiApiKeySecret and the
-# secretKeyRef keys in charts/api/templates/deployment.yaml -- if you rename
-# one, rename the other. The database role itself (matching username/
-# password) is provisioned separately via `make db`/`db/` -- see the
-# README's "Database" section.
+# The secret names and key names here (DB_SECRET_NAME/database+username+
+# password, PHOTOS_SECRET_NAME/username+password, OPENAI_SECRET_NAME/
+# apiKey) must match deploy/helm/luminary/values.yaml's
+# api.env.databaseCredentialsSecret / api.env.photosCredentialsSecret /
+# api.env.openaiApiKeySecret and the secretKeyRef keys in
+# charts/api/templates/deployment.yaml -- if you rename one, rename the
+# other. The database+role themselves are provisioned separately via
+# `make db`/`make db-create`/`db/` -- see the README's "Database" section.
 #
-# The database secret is always required, and its prompts default to the
-# username/password `make db`/`make db-recreate` themselves default to
-# (Makefile's LUMINARY_DATABASE_USER/_PASSWORD) -- press enter to accept.
+# The database secret is always required. Its name/username/password
+# prompts default to LUMINARY_DATABASE_NAME/_USER/_PASSWORD from the
+# environment if set, else the "luminary" placeholder Makefile's
+# LUMINARY_DATABASE_USER/_PASSWORD themselves default to (the database
+# *name* has no single Makefile default worth reusing here -- make db
+# creates luminary-dev/luminary-unittest, make db-create takes a name
+# explicitly -- so it falls back to the same "luminary" placeholder
+# instead) -- press enter to accept.
 #
 # The photos-backend and OpenAI secrets are skipped (left blank, nothing
 # created/touched) if you leave their first prompt empty -- e.g. a
@@ -35,8 +40,16 @@ OPENAI_SECRET_NAME="luminary-openai-credentials"
 
 # Matches Makefile's LUMINARY_DATABASE_USER/_PASSWORD defaults (what
 # `make db`/`make db-recreate` themselves provision when not overridden).
-DB_DEFAULT_USERNAME="luminary"
-DB_DEFAULT_PASSWORD="luminary"
+# Name/username aren't secrets, so these fall back to LUMINARY_DATABASE_
+# NAME/_USER from the environment (e.g. already exported for `make
+# db-create`) and are always echoed literally at the prompt.
+DB_DEFAULT_NAME="${LUMINARY_DATABASE_NAME:-luminary}"
+DB_DEFAULT_USERNAME="${LUMINARY_DATABASE_USER:-luminary}"
+# The password default is handled separately below: LUMINARY_DATABASE_
+# PASSWORD from the environment *is* a real secret, so unlike the two
+# above it must never be echoed, only the hardcoded "luminary" placeholder
+# (when there's no environment override) is safe to show literally.
+DB_PASSWORD_DEFAULT="${LUMINARY_DATABASE_PASSWORD:-}"
 
 # Defaults for the photos-backend/OpenAI prompts below, pulled from the
 # environment if the caller already has them set (e.g. sourced the same
@@ -124,8 +137,13 @@ prompt_secret() {
 }
 
 echo "--- Database credentials (${DB_SECRET_NAME}, always required) ---"
+prompt_with_default "Database name" DB_NAME "${DB_DEFAULT_NAME}" 0
 prompt_with_default "Database username" DB_USERNAME "${DB_DEFAULT_USERNAME}" 0
-prompt_with_default "Database password" DB_PASSWORD "${DB_DEFAULT_PASSWORD}" 1
+if [ -n "${DB_PASSWORD_DEFAULT}" ]; then
+  prompt_secret "Database password" DB_PASSWORD "${DB_PASSWORD_DEFAULT}" 1
+else
+  prompt_with_default "Database password" DB_PASSWORD "luminary" 1
+fi
 echo
 
 echo "--- Photos backend credentials (${PHOTOS_SECRET_NAME}, blank to skip) ---"
@@ -141,6 +159,7 @@ echo
 
 oc create secret generic "${DB_SECRET_NAME}" \
   --namespace "${NAMESPACE}" \
+  --from-literal=database="${DB_NAME}" \
   --from-literal=username="${DB_USERNAME}" \
   --from-literal=password="${DB_PASSWORD}" \
   --dry-run=client -o yaml | oc apply -f -
@@ -167,11 +186,11 @@ else
   echo "Skipped ${OPENAI_SECRET_NAME} (no API key given)"
 fi
 
-unset DB_USERNAME DB_PASSWORD PHOTOS_USERNAME PHOTOS_PASSWORD OPENAI_API_KEY
+unset DB_NAME DB_USERNAME DB_PASSWORD PHOTOS_USERNAME PHOTOS_PASSWORD OPENAI_API_KEY
 
 echo
 echo "Done. These secret names match deploy/helm/luminary/values.yaml's"
 echo "api.env.databaseCredentialsSecret, api.env.photosCredentialsSecret, and"
 echo "api.env.openaiApiKeySecret -- no further values.yaml changes needed."
-echo "Note the database username/password must also match whatever role"
-echo "'make db'/db/create_db_and_user.sql actually provisioned."
+echo "Note the database name/username/password must also match whatever"
+echo "'make db'/'make db-create'/db/create_db_and_user.sql actually provisioned."

@@ -40,11 +40,13 @@ env:
   database:
     host: db.example.com
     port: 5432
-    name: luminary
-  # Name of a Secret (same namespace, keys `username`/`password`) holding
-  # the credentials `make db` provisioned above. Required -- unlike
-  # photosCredentialsSecret, Postgres always needs something to
-  # authenticate with. Never put these directly in this values file.
+  # Name of a Secret (same namespace, keys `database`/`username`/
+  # `password`) holding the database name and credentials `make db`/`make
+  # db-create` provisioned. Required -- unlike photosCredentialsSecret,
+  # Postgres always needs something to authenticate with, and the database
+  # name itself lives here too rather than as a plain value, since it's as
+  # deployment-specific as the credentials are. Never put these directly in
+  # this values file.
   databaseCredentialsSecret: luminary-db-credentials
   # Name of a Secret (same namespace, keys `username`/`password`) used to
   # authenticate to photosUri -- e.g. an smb:// share. Leave empty if the

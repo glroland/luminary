@@ -196,7 +196,7 @@ db-create` below):
 |-----------------------|-------------------------------------------|
 | `luminary-dev`        | `make run-api` (local development)       |
 | `luminary-unittest`   | `make test-api` (truncated between every test — see "Testing" below) |
-| `luminary`            | Prod — `values.yaml`'s `api.env.database.name`, used by the Helm deployment |
+| *(whatever you pick)* | Prod — named in the `database` key of the Secret `values.yaml`'s `api.env.databaseCredentialsSecret` points at, used by the Helm deployment |
 
 `db/` holds the SQL to provision and tear them down:
 
@@ -220,10 +220,9 @@ make db-update                                                      # apply db/u
 
 `db`/`db-recreate`/`db-drop`/`db-update` only ever touch `luminary-dev`/
 `luminary-unittest` (`LUMINARY_DATABASE_NAME`/`LUMINARY_TEST_DATABASE_NAME`).
-Prod's own database — whatever `values.yaml`'s `api.env.database.name`/
-`databaseCredentialsSecret` are set to — is provisioned separately, once,
-with `make db-create`, which takes the database name/role as input instead
-of assuming the shared dev `luminary` role:
+Prod's own database is provisioned separately, once, with `make db-create`,
+which takes the database name/role as input instead of assuming the
+shared dev `luminary` role:
 
 ```bash
 make db-create \
@@ -239,10 +238,11 @@ refuses to run without all three, same reasoning as
 `LUMINARY_DATABASE_ADMIN_PASSWORD` having none. It's the Makefile wrapper
 around directly invoking `db/create_db_and_user.sql`/`db/create_tables.sql`
 (see their own header comments for the equivalent raw `psql` invocations).
-Whatever name/user/password you pick must then be set in `values.yaml`'s
-`api.env.database.name` and in the Secret named by
-`api.env.databaseCredentialsSecret` (see `deploy/create-secrets.sh`) for
-the Helm deployment to actually connect with them.
+Whatever name/user/password you pick must then go into the `database`/
+`username`/`password` keys of the Secret named by `values.yaml`'s
+`api.env.databaseCredentialsSecret` (see `deploy/create-secrets.sh`, which
+prompts for all three) for the Helm deployment to actually connect with
+them.
 
 `LUMINARY_DATABASE_ADMIN_USER`/`_PASSWORD` (default user `postgres`, no
 default password) authenticate only for `db`/`db-recreate`/`db-drop`/
@@ -250,7 +250,7 @@ default password) authenticate only for `db`/`db-recreate`/`db-drop`/
 as the app role instead (it only ever alters objects inside a database
 that role already owns, never roles/database ownership itself).
 `db-update` also only touches `luminary-dev`/`luminary-unittest` — apply
-`db/update.sql` to prod's `luminary` by hand (see that file's own header
+`db/update.sql` to prod's own database by hand (see that file's own header
 comment for the `psql` invocation), the same "separately, not by these
 targets" split as provisioning. There's no migrations framework (see
 `database.py`'s module docs): a schema change means updating
