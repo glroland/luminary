@@ -1,8 +1,8 @@
 import PhotoCard from "./PhotoCard.jsx";
 
-export default function PhotoGrid({ photos, onSelect }) {
+export default function PhotoGrid({ photos, onSelect, emptyMessage = "No photos yet." }) {
   if (photos.length === 0) {
-    return <p className="empty-state">No photos yet.</p>;
+    return <p className="empty-state">{emptyMessage}</p>;
   }
 
   return (

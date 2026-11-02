@@ -23,6 +23,15 @@ function renderSidebar(overrides = {}) {
     onSelectIndividual: vi.fn(),
     onAllImages: vi.fn(),
     onManage: vi.fn(),
+    searchQuery: "",
+    onSearchQueryChange: vi.fn(),
+    searchThreshold: 0.5,
+    onSearchThresholdChange: vi.fn(),
+    onSearch: vi.fn(),
+    onClearSearch: vi.fn(),
+    searchActive: false,
+    searchLoading: false,
+    searchError: null,
     ...overrides,
   };
   render(<Sidebar {...props} />);
@@ -117,6 +126,68 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByText("Manage"));
     expect(props.onManage).toHaveBeenCalled();
   });
+
+  // The search section's own submit button is also named "Search", same
+  // as the collapsible section header above it -- query it by its
+  // distinguishing type="submit" rather than getByRole("button", {name})
+  // to avoid matching both.
+  function searchSubmitButton() {
+    return document.querySelector(".sidebar-search-actions button[type='submit']");
+  }
+
+  it("renders a Search section under Individuals", () => {
+    renderSidebar({ open: true });
+    expect(searchSubmitButton()).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/search photo descriptions/i)).toBeInTheDocument();
+  });
+
+  it("disables the Search button until a query is typed", () => {
+    // Sidebar is fully controlled -- searchQuery/onQueryChange are the
+    // parent's (App.jsx's) state, not local -- so simulating "typing" here
+    // means rerendering with a new searchQuery prop, the same way a real
+    // onChange round-trip through the parent would.
+    const { rerender } = render(<Sidebar {...propsFor({ searchQuery: "" })} />);
+    expect(searchSubmitButton()).toBeDisabled();
+
+    rerender(<Sidebar {...propsFor({ searchQuery: "a cat" })} />);
+    expect(searchSubmitButton()).not.toBeDisabled();
+  });
+
+  it("notifies onSearchQueryChange when the query textarea is edited", () => {
+    const props = renderSidebar({ open: true });
+    fireEvent.change(screen.getByPlaceholderText(/search photo descriptions/i), {
+      target: { value: "a cat" },
+    });
+    expect(props.onSearchQueryChange).toHaveBeenCalledWith("a cat");
+  });
+
+  it("submits the typed query and threshold via onSearch/onQueryChange/onThresholdChange", () => {
+    const props = renderSidebar({ open: true, searchQuery: "a cat", searchThreshold: 0.7 });
+
+    expect(screen.getByDisplayValue("a cat")).toBeInTheDocument();
+    expect(screen.getByLabelText(/similarity threshold/i)).toHaveValue("0.7");
+
+    fireEvent.click(searchSubmitButton());
+    expect(props.onSearch).toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/similarity threshold/i), { target: { value: "0.85" } });
+    expect(props.onSearchThresholdChange).toHaveBeenCalledWith(0.85);
+  });
+
+  it("only shows the clear ('x') button once a search is active", () => {
+    renderSidebar({ open: true, searchActive: false });
+    expect(screen.queryByRole("button", { name: /clear search/i })).not.toBeInTheDocument();
+
+    const props = renderSidebar({ open: true, searchActive: true });
+    const clearButton = screen.getByRole("button", { name: /clear search/i });
+    fireEvent.click(clearButton);
+    expect(props.onClearSearch).toHaveBeenCalled();
+  });
+
+  it("shows a search error when provided", () => {
+    renderSidebar({ open: true, searchError: "Search backend failed" });
+    expect(screen.getByRole("alert")).toHaveTextContent("Search backend failed");
+  });
 });
 
 function propsFor(overrides) {
@@ -130,6 +201,15 @@ function propsFor(overrides) {
     onSelectIndividual: vi.fn(),
     onAllImages: vi.fn(),
     onManage: vi.fn(),
+    searchQuery: "",
+    onSearchQueryChange: vi.fn(),
+    searchThreshold: 0.5,
+    onSearchThresholdChange: vi.fn(),
+    onSearch: vi.fn(),
+    onClearSearch: vi.fn(),
+    searchActive: false,
+    searchLoading: false,
+    searchError: null,
     ...overrides,
   };
 }

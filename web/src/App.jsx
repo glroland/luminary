@@ -3,8 +3,15 @@ import ManagementPage from "./components/ManagementPage.jsx";
 import Pagination from "./components/Pagination.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
-import Sidebar from "./components/Sidebar.jsx";
-import { fetchIndividualFaces, fetchIndividuals, fetchPhotos, fetchSyncStatus, startSync } from "./api/client.js";
+import Sidebar, { SEARCH_THRESHOLD_OPTIONS } from "./components/Sidebar.jsx";
+import {
+  fetchIndividualFaces,
+  fetchIndividuals,
+  fetchPhotos,
+  fetchSyncStatus,
+  searchPhotos,
+  startSync,
+} from "./api/client.js";
 import logo from "./assets/logo.svg";
 
 const POLL_INTERVAL_MS = 1000;
@@ -28,9 +35,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // null means no filter (all photos); otherwise a directory path as it
   // appears in photo.filename, matched by directoryOf() below including
-  // its subdirectories. Mutually exclusive with selectedIndividual below --
-  // the sidebar's three parent sections (see Sidebar.jsx) are alternative
-  // ways to narrow the same grid, not combinable filters.
+  // its subdirectories. Mutually exclusive with selectedIndividual/
+  // searchResults below -- the sidebar's four parent sections (see
+  // Sidebar.jsx) are alternative ways to narrow the same grid, not
+  // combinable filters.
   const [selectedDirectory, setSelectedDirectory] = useState(null);
   // The catalogued-individuals list for the sidebar's "Individuals"
   // section; ManagementPage owns the full CRUD lifecycle for these, this
@@ -42,6 +50,19 @@ export default function App() {
   // whenever the selection changes).
   const [selectedIndividual, setSelectedIndividual] = useState(null);
   const [individualPhotoIds, setIndividualPhotoIds] = useState(null);
+  // The sidebar's "Search" section (free-text similarity search over
+  // photos.description, see enrich.py/embeddings.py). searchQuery/
+  // searchThreshold are just the controlled form fields; searchResults is
+  // what actually narrows the grid -- null means no search is active
+  // (same "null = no filter" convention as selectedDirectory/
+  // selectedIndividual above), an array (possibly empty, meaning "no
+  // matches") means one is. Already sorted most-similar-first by the API
+  // itself (GET /api/photos/search) -- never re-sorted here.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchThreshold, setSearchThreshold] = useState(SEARCH_THRESHOLD_OPTIONS[1].value);
+  const [searchResults, setSearchResults] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState(null);
   // Pagination over visiblePhotos below (client-side -- the full list is
   // already loaded into `photos`, same as the directory/individual
   // filters). `page` is 1-based and clamped against the current
@@ -154,15 +175,49 @@ export default function App() {
     setSelectedPhoto(photo);
   }
 
+  async function handleSearch() {
+    const query = searchQuery.trim();
+    if (!query) return;
+    setSearchLoading(true);
+    setSearchError(null);
+    try {
+      const results = await searchPhotos(query, searchThreshold);
+      setSearchResults(results);
+      // Same "selecting one filter clears the others" rule the other
+      // three sidebar sections already follow (see onSelectDirectory/
+      // onSelectIndividual/onAllImages below).
+      setSelectedDirectory(null);
+      setSelectedIndividual(null);
+      setView("gallery");
+      setPage(1);
+    } catch (err) {
+      setSearchError(err.message);
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  // Cancels an active search (the sidebar's small "x") -- resets the form
+  // fields too, not just the results, so re-opening "Search" starts clean
+  // rather than showing a stale query for a filter that's no longer applied.
+  function handleClearSearch() {
+    setSearchResults(null);
+    setSearchQuery("");
+    setSearchThreshold(SEARCH_THRESHOLD_OPTIONS[1].value);
+    setSearchError(null);
+  }
+
   const visiblePhotos =
-    selectedIndividual !== null
-      ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
-      : selectedDirectory === null
-        ? photos
-        : photos.filter((photo) => {
-            const dir = directoryOf(photo.filename);
-            return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
-          });
+    searchResults !== null
+      ? searchResults
+      : selectedIndividual !== null
+        ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
+        : selectedDirectory === null
+          ? photos
+          : photos.filter((photo) => {
+              const dir = directoryOf(photo.filename);
+              return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
+            });
 
   const totalPages = Math.max(1, Math.ceil(visiblePhotos.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -182,6 +237,7 @@ export default function App() {
         onSelectDirectory={(directory) => {
           setSelectedDirectory(directory);
           setSelectedIndividual(null);
+          setSearchResults(null);
           setView("gallery");
           setPage(1);
         }}
@@ -190,16 +246,27 @@ export default function App() {
         onSelectIndividual={(personId) => {
           setSelectedIndividual(personId);
           setSelectedDirectory(null);
+          setSearchResults(null);
           setView("gallery");
           setPage(1);
         }}
         onAllImages={() => {
           setSelectedDirectory(null);
           setSelectedIndividual(null);
+          setSearchResults(null);
           setView("gallery");
           setPage(1);
         }}
         onManage={() => setView("manage")}
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        searchThreshold={searchThreshold}
+        onSearchThresholdChange={setSearchThreshold}
+        onSearch={handleSearch}
+        onClearSearch={handleClearSearch}
+        searchActive={searchResults !== null}
+        searchLoading={searchLoading}
+        searchError={searchError}
       />
       <div className="app-main">
         <header className="app-header">
@@ -237,6 +304,7 @@ export default function App() {
             onPurged={() => {
               setSelectedDirectory(null);
               setSelectedIndividual(null);
+              setSearchResults(null);
               setIndividuals([]);
               setSelectedPhoto(null);
               setPage(1);
@@ -247,7 +315,11 @@ export default function App() {
           <p>Loading photos...</p>
         ) : (
           <>
-            <PhotoGrid photos={paginatedPhotos} onSelect={setSelectedPhoto} />
+            <PhotoGrid
+              photos={paginatedPhotos}
+              onSelect={setSelectedPhoto}
+              emptyMessage={searchResults !== null ? "No photos match your search." : "No photos yet."}
+            />
             {visiblePhotos.length > 0 && (
               <Pagination
                 page={currentPage}

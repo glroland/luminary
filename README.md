@@ -382,6 +382,19 @@ it was available. Same background-job shape as "Refresh Faces"
 pgvector's cosine-distance operator — unrelated to "Refresh Faces" above,
 which matches *faces* by image embedding, not photos by description text.
 
+The sidebar's **Search** section (under Individuals) is the free-text
+equivalent — type a query, pick a similarity threshold from the dropdown
+(a few preset cutoffs, loose to strict), and the grid narrows to matching
+photos, most-similar first; the small "×" that appears once a search is
+active clears it and restores whatever filter (or no filter) was showing
+before. Backed by `GET /api/photos/search?q=...&threshold=...`
+(`storage.search_photos`), which embeds the query text with the same
+model/endpoint as `description_embedding` itself, so the two are
+comparable. Selecting "All Images", a folder, or an individual clears an
+active search the same way starting a search clears those — the four
+sidebar sections are mutually exclusive ways to narrow the same grid, not
+combinable filters.
+
 `embeddings.py` embeds with OpenAI's `text-embedding-3-large`
 (`LUMINARY_EMBEDDING_MODEL`, same `LUMINARY_OPENAI_*` endpoint/credentials
 "Description enrichment" above already uses) at its full native 3072

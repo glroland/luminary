@@ -152,4 +152,72 @@ describe("App", () => {
     expect(screen.getByText("photo-29.jpg")).toBeInTheDocument();
     expect(screen.getByText(/page 1 of 1/i)).toBeInTheDocument();
   });
+
+  it("searches, narrows the grid by similarity, then clears via the sidebar's x button", async () => {
+    const createdAt = new Date().toISOString();
+    vi.spyOn(client, "fetchPhotos").mockResolvedValue([
+      { id: "1", filename: "beach.jpg", width: 100, height: 100, created_at: createdAt },
+      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt },
+    ]);
+    const searchMock = vi.spyOn(client, "searchPhotos").mockResolvedValue([
+      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt, similarity: 0.9 },
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("beach.jpg")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+    fireEvent.change(screen.getByPlaceholderText(/search photo descriptions/i), {
+      target: { value: "a party" },
+    });
+
+    // The search section's own submit button shares its accessible name
+    // ("Search") with the collapsible section header above it -- find it
+    // by its distinguishing type="submit" instead of by role+name, same
+    // disambiguation Sidebar.test.jsx uses.
+    const submitButton = document.querySelector(".sidebar-search-actions button[type='submit']");
+    await act(async () => {
+      fireEvent.click(submitButton);
+      await Promise.resolve();
+    });
+
+    expect(searchMock).toHaveBeenCalledWith("a party", 0.5); // 0.5 = the default ("Moderate match") threshold
+    await waitFor(() => expect(screen.queryByText("beach.jpg")).not.toBeInTheDocument());
+    expect(screen.getByText("party.jpg")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /clear search/i }));
+    await waitFor(() => expect(screen.getByText("beach.jpg")).toBeInTheDocument());
+    expect(screen.getByText("party.jpg")).toBeInTheDocument();
+  });
+
+  it("clears an active search when a different sidebar filter is selected", async () => {
+    const createdAt = new Date().toISOString();
+    vi.spyOn(client, "fetchPhotos").mockResolvedValue([
+      { id: "1", filename: "beach.jpg", width: 100, height: 100, created_at: createdAt },
+      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt },
+    ]);
+    vi.spyOn(client, "searchPhotos").mockResolvedValue([
+      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt, similarity: 0.9 },
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("beach.jpg")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+    fireEvent.change(screen.getByPlaceholderText(/search photo descriptions/i), {
+      target: { value: "a party" },
+    });
+    const submitButton = document.querySelector(".sidebar-search-actions button[type='submit']");
+    await act(async () => {
+      fireEvent.click(submitButton);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("beach.jpg")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("All Images"));
+    await waitFor(() => expect(screen.getByText("beach.jpg")).toBeInTheDocument());
+    expect(screen.getByText("party.jpg")).toBeInTheDocument();
+    // The clear ("x") button only shows while a search is active.
+    expect(screen.queryByRole("button", { name: /clear search/i })).not.toBeInTheDocument();
+  });
 });

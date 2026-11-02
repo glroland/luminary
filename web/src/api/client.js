@@ -27,6 +27,15 @@ export async function fetchPhotos() {
   return data.photos;
 }
 
+// Free-text similarity search over photos.description (see enrich.py/
+// embeddings.py) -- results already come back ordered most-similar
+// first (GET /api/photos/search), so no client-side sorting is needed.
+export async function searchPhotos(query, threshold) {
+  const params = new URLSearchParams({ q: query, threshold: String(threshold) });
+  const data = await request(`/photos/search?${params}`);
+  return data.results;
+}
+
 export async function deletePhoto(photoId) {
   await request(`/photos/${photoId}`, { method: "DELETE" });
 }

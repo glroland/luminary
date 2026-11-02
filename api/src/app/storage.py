@@ -8,6 +8,7 @@ import psycopg
 from PIL import Image
 from PIL.ExifTags import IFD
 
+from . import embeddings
 from .config import get_photos_password, get_photos_uri, get_photos_username
 from .database import get_connection
 
@@ -165,6 +166,56 @@ def find_similar_photos(photo_id: str, limit: int = SIMILAR_PHOTOS_LIMIT) -> lis
         # (every psycopg.Error is, regardless of caller) -- just add the
         # pointer to what's actually missing and degrade to an empty
         # result instead of a 500.
+        logger.warning(
+            "photos.description_embedding doesn't exist -- is the pgvector extension installed? "
+            'See db/create_extensions.sql and the README\'s "Database" section.'
+        )
+        return []
+
+
+# Default cap on search_photos' result list below -- a safety net against
+# returning the whole library for a very loose threshold, not a real
+# pagination limit (the sidebar search narrows the grid to however many of
+# these actually come back, however many that is).
+SEARCH_RESULTS_LIMIT = 500
+
+
+def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
+    """Free-text search over `description` via `description_embedding`
+    similarity (the sidebar's "Search" section, GET /api/photos/search) --
+    embeds `query` with the same model as photos' own descriptions
+    (embeddings.embed_text) and returns every photo whose cosine
+    similarity to it is at least `threshold` (0-1, higher = more similar),
+    ordered most-similar first. Each result dict carries all of
+    METADATA_COLUMNS plus a `similarity` key.
+
+    Unlike find_similar_photos, a missing/misconfigured embeddings backend
+    is **not** swallowed here -- embeddings.embed_text raises
+    EmbeddingNotConfigured (or whatever the openai SDK itself raises) and
+    this lets it propagate, since a user-initiated search should surface a
+    real error (the router maps it to a 503/502) rather than silently
+    returning no results. A missing `description_embedding` column (the
+    pgvector extension was never installed) still degrades to [] the same
+    way find_similar_photos does, though -- that's a server-side gap, not
+    something a 503 would help the user act on."""
+    embedding = embeddings.embed_text(query)
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM (
+                    SELECT {METADATA_COLUMNS}, 1 - (description_embedding <=> %s) AS similarity
+                    FROM photos
+                    WHERE description_embedding IS NOT NULL
+                ) scored
+                WHERE similarity >= %s
+                ORDER BY similarity DESC
+                LIMIT %s
+                """,
+                (embedding, threshold, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except psycopg.errors.UndefinedColumn:
         logger.warning(
             "photos.description_embedding doesn't exist -- is the pgvector extension installed? "
             'See db/create_extensions.sql and the README\'s "Database" section.'

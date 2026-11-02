@@ -38,6 +38,18 @@ class PhotoList(BaseModel):
     photos: list[Photo]
 
 
+class PhotoSearchResult(Photo):
+    # Cosine similarity (0-1, higher = more similar) between the search
+    # query's embedding and this photo's description_embedding -- see
+    # storage.search_photos. Absent from the plain Photo model above since
+    # it's only meaningful in the context of one particular search.
+    similarity: float
+
+
+class PhotoSearchResults(BaseModel):
+    results: list[PhotoSearchResult]
+
+
 class SyncStatus(BaseModel):
     status: str  # "idle" | "running" | "completed" | "error"
     processed: int = 0

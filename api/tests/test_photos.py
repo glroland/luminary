@@ -1,5 +1,6 @@
 import logging
 
+import pytest
 from conftest import sync_and_wait, write_image
 
 
@@ -129,3 +130,48 @@ def test_get_faces_returns_empty_list_when_no_faces_were_detected(client, tmp_pa
 def test_get_faces_for_missing_photo_returns_404(client):
     response = client.get("/api/photos/does-not-exist/faces")
     assert response.status_code == 404
+
+
+def test_search_photos_rejects_an_empty_query(client):
+    response = client.get("/api/photos/search", params={"q": "   "})
+    assert response.status_code == 400
+
+
+def test_search_photos_returns_503_when_not_configured(client, monkeypatch):
+    monkeypatch.delenv("LUMINARY_OPENAI_API_KEY", raising=False)
+
+    response = client.get("/api/photos/search", params={"q": "a cat"})
+
+    assert response.status_code == 503
+
+
+def test_search_photos_returns_results_ordered_by_similarity(client, monkeypatch):
+    from app import embeddings, storage
+    from app.database import get_connection
+    from pgvector import HalfVector
+
+    monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
+
+    def dims(*leading):
+        return list(leading) + [0.0] * (embeddings.EMBEDDING_DIMENSIONS - len(leading))
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description, "
+            "description_embedding) VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s, %s)",
+            ("photo-identical", "a.jpg", "a cat on a sofa", HalfVector(dims(1.0, 0.0))),
+        )
+        conn.execute(
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description, "
+            "description_embedding) VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s, %s)",
+            ("photo-orthogonal", "b.jpg", "a mountain at dusk", HalfVector(dims(0.0, 1.0))),
+        )
+        conn.commit()
+    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text: HalfVector(dims(1.0, 0.0)))
+
+    response = client.get("/api/photos/search", params={"q": "a cat", "threshold": 0.5})
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert [r["id"] for r in results] == ["photo-identical"]
+    assert results[0]["similarity"] == pytest.approx(1.0, abs=1e-3)

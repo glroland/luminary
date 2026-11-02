@@ -14,14 +14,14 @@ def _insert_photo(photo_id, filename="sample.jpg", description=None):
         conn.commit()
 
 
-# --- _embed ------------------------------------------------------------
+# --- embed_text ----------------------------------------------------------
 
 
 def test_embed_raises_not_configured_without_api_key(monkeypatch):
     monkeypatch.delenv("LUMINARY_OPENAI_API_KEY", raising=False)
 
     with pytest.raises(embeddings.EmbeddingNotConfigured):
-        embeddings._embed("a description")
+        embeddings.embed_text("a description")
 
 
 def test_embed_sends_the_configured_model_and_text(monkeypatch):
@@ -51,7 +51,7 @@ def test_embed_sends_the_configured_model_and_text(monkeypatch):
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
 
-    result = embeddings._embed("a description")
+    result = embeddings.embed_text("a description")
 
     assert result.to_list() == pytest.approx([0.1, 0.2, 0.3], abs=1e-3)
     assert captured["api_key"] == "test-key"
@@ -78,7 +78,7 @@ def test_embed_description_is_a_noop_when_description_is_null(client, monkeypatc
     _insert_photo("photo-1", description=None)
 
     calls = []
-    monkeypatch.setattr(embeddings, "_embed", lambda text: calls.append(text))
+    monkeypatch.setattr(embeddings, "embed_text", lambda text: calls.append(text))
 
     assert embeddings.embed_description("photo-1") is False
     assert calls == []
@@ -89,7 +89,7 @@ def test_embed_description_stores_the_embedding(client, monkeypatch):
 
     monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
     _insert_photo("photo-1", description="a cat on a sofa")
-    monkeypatch.setattr(embeddings, "_embed", lambda text: HalfVector([0.1, 0.2, 0.3]))
+    monkeypatch.setattr(embeddings, "embed_text", lambda text: HalfVector([0.1, 0.2, 0.3]))
 
     assert embeddings.embed_description("photo-1") is True
 
@@ -109,7 +109,7 @@ def test_embed_description_leaves_embedding_untouched_on_failure(client, monkeyp
     def boom(text):
         raise RuntimeError("upstream exploded")
 
-    monkeypatch.setattr(embeddings, "_embed", boom)
+    monkeypatch.setattr(embeddings, "embed_text", boom)
 
     with caplog.at_level(logging.WARNING, logger="app.embeddings"):
         assert embeddings.embed_description("photo-1") is False

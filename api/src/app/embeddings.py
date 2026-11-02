@@ -77,7 +77,16 @@ class EmbeddingNotConfigured(Exception):
     mirrors enrich.EnrichmentNotConfigured/chat.ChatNotConfigured."""
 
 
-def _embed(text: str):
+def embed_text(text: str):
+    """Embeds arbitrary text with the same model/endpoint as
+    embed_description below -- shared by that function (embedding a
+    photo's `description`) and storage.search_photos (embedding a user's
+    free-text search query), since both need the exact same embedding
+    space to be comparable via pgvector's `<=>` operator. Raises
+    EmbeddingNotConfigured/whatever the openai SDK itself raises; unlike
+    embed_description, this is not best-effort -- both callers want a real
+    error to surface (a 503/502 to the API client), not a silently
+    skipped embedding."""
     from openai import OpenAI  # lazy: keep this an optional dependency at import time, like chat.py/enrich.py
     from pgvector import HalfVector
 
@@ -116,7 +125,7 @@ def embed_description(photo_id: str) -> bool:
         return False
 
     try:
-        embedding = _embed(photo["description"])
+        embedding = embed_text(photo["description"])
     except EmbeddingNotConfigured as exc:
         logger.debug("Skipping description embedding for photo %s: %s", photo_id, exc)
         return False

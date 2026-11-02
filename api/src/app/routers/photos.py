@@ -3,8 +3,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from .. import chat, storage
-from ..models import ChatRequest, ChatResponse, FaceList, Photo, PhotoList
+from .. import chat, embeddings, storage
+from ..models import ChatRequest, ChatResponse, FaceList, Photo, PhotoList, PhotoSearchResults
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,26 @@ router = APIRouter()
 @router.get("/photos", response_model=PhotoList)
 def get_photos() -> dict:
     return {"photos": storage.list_photos()}
+
+
+@router.get("/photos/search", response_model=PhotoSearchResults)
+def search_photos(q: str, threshold: float = 0.5) -> dict:
+    # Registered *before* "/photos/{photo_id}" below -- Starlette matches
+    # routes in registration order, and both shapes are "/photos/<one
+    # segment>", so this must come first or a request for literally
+    # "/photos/search" would instead match get_photo(photo_id="search")
+    # (same reasoning routers/photos.py's "/purge" endpoint's own comment
+    # already documents for a different collision).
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query must not be empty")
+    try:
+        results = storage.search_photos(q, threshold)
+    except embeddings.EmbeddingNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception:
+        logger.exception("Description search failed for query %r", q)
+        raise HTTPException(status_code=502, detail="Search backend failed")
+    return {"results": results}
 
 
 @router.post("/photos")
