@@ -394,7 +394,7 @@ database, the photos backend, and the OpenAI-compatible chat endpoint
 (`oc login` first):
 
 ```bash
-deploy/scripts/create-secrets.sh
+deploy/create-secrets.sh
 ```
 
 This prompts for the database username/password, the photos-backend
