@@ -390,19 +390,24 @@ The Helm chart in `deploy/helm/luminary` deploys both components:
   the API's in-cluster Service
 
 Before the first install, create the Secrets the chart expects for the
-photos backend and the OpenAI-compatible chat endpoint (`oc login` first):
+database, the photos backend, and the OpenAI-compatible chat endpoint
+(`oc login` first):
 
 ```bash
 deploy/scripts/create-secrets.sh
 ```
 
-This prompts for the photos-backend username/password and the OpenAI API
-key, then creates `luminary-photos-credentials` and
+This prompts for the database username/password, the photos-backend
+username/password, and the OpenAI API key, then creates
+`luminary-db-credentials`, `luminary-photos-credentials`, and
 `luminary-openai-credentials` in the `luminary` namespace — the exact names
-`deploy/helm/luminary/values.yaml`'s `api.env.photosCredentialsSecret` /
-`api.env.openaiApiKeySecret` already point at. Skip it if your photos
-backend needs no credentials (local/NFS, S3 via IAM role) and you're not
-using the `openai` chat backend.
+`deploy/helm/luminary/values.yaml`'s `api.env.databaseCredentialsSecret` /
+`api.env.photosCredentialsSecret` / `api.env.openaiApiKeySecret` already
+point at. The database username/password must match whatever role
+`make db` (see "Database" below) actually provisioned. Skip the photos
+and/or OpenAI prompts' secrets only if your photos backend needs no
+credentials (local/NFS, S3 via IAM role) and you're not using the `openai`
+chat backend — the database secret is always required.
 
 ```bash
 helm lint deploy/helm/luminary

@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 # Creates/updates the Secrets the luminary Helm chart expects for the
-# photos backend (SMB/CIFS, etc.) and the OpenAI-compatible chat endpoint,
-# in the "luminary" namespace of whatever OpenShift cluster `oc` is
-# currently logged into.
+# Postgres database, the photos backend (SMB/CIFS, etc.), and the
+# OpenAI-compatible chat endpoint, in the "luminary" namespace of whatever
+# OpenShift cluster `oc` is currently logged into.
 #
-# The secret names and key names here (PHOTOS_SECRET_NAME/username+password,
-# OPENAI_SECRET_NAME/apiKey) must match deploy/helm/luminary/values.yaml's
-# api.env.photosCredentialsSecret / api.env.openaiApiKeySecret and the
+# The secret names and key names here (DB_SECRET_NAME/username+password,
+# PHOTOS_SECRET_NAME/username+password, OPENAI_SECRET_NAME/apiKey) must
+# match deploy/helm/luminary/values.yaml's api.env.databaseCredentialsSecret
+# / api.env.photosCredentialsSecret / api.env.openaiApiKeySecret and the
 # secretKeyRef keys in charts/api/templates/deployment.yaml -- if you rename
-# one, rename the other.
+# one, rename the other. The database role itself (matching username/
+# password) is provisioned separately via `make db`/`db/` -- see the
+# README's "Database" section.
+#
+# The database secret is always required. The photos-backend and OpenAI
+# secrets are skipped (left blank, nothing created/touched) if you leave
+# their first prompt empty -- e.g. a local/NFS photos backend or S3 via IAM
+# role needs no credentials, and you may not be using the openai chat
+# backend at all.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-luminary}"
+DB_SECRET_NAME="luminary-db-credentials"
 PHOTOS_SECRET_NAME="luminary-photos-credentials"
 OPENAI_SECRET_NAME="luminary-openai-credentials"
 
@@ -51,32 +61,67 @@ prompt_required() {
   printf -v "${var_name}" '%s' "${value}"
 }
 
-echo "--- Photos backend credentials (${PHOTOS_SECRET_NAME}) ---"
-prompt_required "Photos backend username" PHOTOS_USERNAME 0
-prompt_required "Photos backend password" PHOTOS_PASSWORD 1
+prompt_optional() {
+  # $1=prompt label $2=var name $3=silent(1/0) -- allows an empty value
+  local label="$1" var_name="$2" silent="$3" value=""
+  if [ "${silent}" = "1" ]; then
+    read -r -s -p "${label}: " value
+    echo
+  else
+    read -r -p "${label}: " value
+  fi
+  printf -v "${var_name}" '%s' "${value}"
+}
+
+echo "--- Database credentials (${DB_SECRET_NAME}, always required) ---"
+prompt_required "Database username" DB_USERNAME 0
+prompt_required "Database password" DB_PASSWORD 1
 echo
 
-echo "--- OpenAI-compatible chat endpoint credentials (${OPENAI_SECRET_NAME}) ---"
-prompt_required "OpenAI-compatible endpoint API key" OPENAI_API_KEY 1
+echo "--- Photos backend credentials (${PHOTOS_SECRET_NAME}, blank to skip) ---"
+prompt_optional "Photos backend username (blank to skip)" PHOTOS_USERNAME 0
+if [ -n "${PHOTOS_USERNAME}" ]; then
+  prompt_required "Photos backend password" PHOTOS_PASSWORD 1
+fi
 echo
 
-oc create secret generic "${PHOTOS_SECRET_NAME}" \
+echo "--- OpenAI-compatible chat endpoint credentials (${OPENAI_SECRET_NAME}, blank to skip) ---"
+prompt_optional "OpenAI-compatible endpoint API key (blank to skip)" OPENAI_API_KEY 1
+echo
+
+oc create secret generic "${DB_SECRET_NAME}" \
   --namespace "${NAMESPACE}" \
-  --from-literal=username="${PHOTOS_USERNAME}" \
-  --from-literal=password="${PHOTOS_PASSWORD}" \
+  --from-literal=username="${DB_USERNAME}" \
+  --from-literal=password="${DB_PASSWORD}" \
   --dry-run=client -o yaml | oc apply -f -
+echo "Created/updated ${DB_SECRET_NAME}"
 
-oc create secret generic "${OPENAI_SECRET_NAME}" \
-  --namespace "${NAMESPACE}" \
-  --from-literal=apiKey="${OPENAI_API_KEY}" \
-  --dry-run=client -o yaml | oc apply -f -
+if [ -n "${PHOTOS_USERNAME}" ]; then
+  oc create secret generic "${PHOTOS_SECRET_NAME}" \
+    --namespace "${NAMESPACE}" \
+    --from-literal=username="${PHOTOS_USERNAME}" \
+    --from-literal=password="${PHOTOS_PASSWORD}" \
+    --dry-run=client -o yaml | oc apply -f -
+  echo "Created/updated ${PHOTOS_SECRET_NAME}"
+else
+  echo "Skipped ${PHOTOS_SECRET_NAME} (no username given)"
+fi
 
-unset PHOTOS_USERNAME PHOTOS_PASSWORD OPENAI_API_KEY
+if [ -n "${OPENAI_API_KEY}" ]; then
+  oc create secret generic "${OPENAI_SECRET_NAME}" \
+    --namespace "${NAMESPACE}" \
+    --from-literal=apiKey="${OPENAI_API_KEY}" \
+    --dry-run=client -o yaml | oc apply -f -
+  echo "Created/updated ${OPENAI_SECRET_NAME}"
+else
+  echo "Skipped ${OPENAI_SECRET_NAME} (no API key given)"
+fi
+
+unset DB_USERNAME DB_PASSWORD PHOTOS_USERNAME PHOTOS_PASSWORD OPENAI_API_KEY
 
 echo
-echo "Done. Created/updated in namespace '${NAMESPACE}':"
-echo "  ${PHOTOS_SECRET_NAME}  (keys: username, password)"
-echo "  ${OPENAI_SECRET_NAME}  (key: apiKey)"
-echo
-echo "These match deploy/helm/luminary/values.yaml's api.env.photosCredentialsSecret"
-echo "and api.env.openaiApiKeySecret -- no further values.yaml changes needed."
+echo "Done. These secret names match deploy/helm/luminary/values.yaml's"
+echo "api.env.databaseCredentialsSecret, api.env.photosCredentialsSecret, and"
+echo "api.env.openaiApiKeySecret -- no further values.yaml changes needed."
+echo "Note the database username/password must also match whatever role"
+echo "'make db'/db/create_db_and_user.sql actually provisioned."
