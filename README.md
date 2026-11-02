@@ -187,8 +187,10 @@ there's no PVC for it). Point `LUMINARY_DATABASE_HOST`/`_PORT`/`_NAME`/
 `_USER`/`_PASSWORD` at it; the API connects with those on every request (no
 connection pooling), same as it does to the photos backend.
 
-There are three databases, all on the same server and sharing the one
-`luminary` role, distinguished only by name:
+There are three databases, typically all on the same server. `luminary-dev`
+and `luminary-unittest` always share the one `luminary` role; prod's own
+database can share it too, or use its own distinct role (see `make
+db-create` below):
 
 | Database            | Used by                                  |
 |-----------------------|-------------------------------------------|
@@ -216,16 +218,35 @@ make db-drop LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>  # drop only
 make db-update                                                      # apply db/update.sql in place, no drop/rebuild
 ```
 
-The first three targets only ever touch `luminary-dev`/`luminary-unittest`
-(`LUMINARY_DATABASE_NAME`/`LUMINARY_TEST_DATABASE_NAME`) — prod's
-`luminary` database is provisioned the same way, but separately and once,
-against prod's own Postgres host, by invoking `db/create_db_and_user.sql`/
-`db/create_tables.sql` directly with `db_name=luminary` (see their own
-header comments for the exact `psql` invocations).
+`db`/`db-recreate`/`db-drop`/`db-update` only ever touch `luminary-dev`/
+`luminary-unittest` (`LUMINARY_DATABASE_NAME`/`LUMINARY_TEST_DATABASE_NAME`).
+Prod's own database — whatever `values.yaml`'s `api.env.database.name`/
+`databaseCredentialsSecret` are set to — is provisioned separately, once,
+with `make db-create`, which takes the database name/role as input instead
+of assuming the shared dev `luminary` role:
+
+```bash
+make db-create \
+  LUMINARY_CREATE_DB_NAME=luminary-prod \
+  LUMINARY_CREATE_DB_USER=luminary-prod \
+  LUMINARY_CREATE_DB_PASSWORD=<password> \
+  LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password> \
+  LUMINARY_DATABASE_HOST=<prod postgres host>   # defaults to LUMINARY_DATABASE_HOST
+```
+
+`LUMINARY_CREATE_DB_NAME`/`_USER`/`_PASSWORD` have no defaults — `db-create`
+refuses to run without all three, same reasoning as
+`LUMINARY_DATABASE_ADMIN_PASSWORD` having none. It's the Makefile wrapper
+around directly invoking `db/create_db_and_user.sql`/`db/create_tables.sql`
+(see their own header comments for the equivalent raw `psql` invocations).
+Whatever name/user/password you pick must then be set in `values.yaml`'s
+`api.env.database.name` and in the Secret named by
+`api.env.databaseCredentialsSecret` (see `deploy/create-secrets.sh`) for
+the Helm deployment to actually connect with them.
 
 `LUMINARY_DATABASE_ADMIN_USER`/`_PASSWORD` (default user `postgres`, no
-default password) authenticate only for `db`/`db-recreate`/`db-drop` — the
-running API never uses them, and neither does `db-update`, which connects
+default password) authenticate only for `db`/`db-recreate`/`db-drop`/
+`db-create` — the running API never uses them, and neither does `db-update`, which connects
 as the app role instead (it only ever alters objects inside a database
 that role already owns, never roles/database ownership itself).
 `db-update` also only touches `luminary-dev`/`luminary-unittest` — apply

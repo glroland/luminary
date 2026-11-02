@@ -47,6 +47,25 @@ LUMINARY_TEST_DATABASE_NAME ?= luminary-unittest
 LUMINARY_DATABASE_ADMIN_USER     ?= postgres
 LUMINARY_DATABASE_ADMIN_PASSWORD ?=
 
+# Inputs for `make db-create` -- provisions one ad-hoc database + its own
+# role on LUMINARY_DATABASE_HOST (override that too if it's a different
+# server, e.g. prod's), for anything other than the fixed luminary-dev/
+# luminary-unittest pair `make db` always creates. Typically prod's own
+# database, with its own role rather than the shared dev "luminary" one --
+# e.g.:
+#   make db-create LUMINARY_CREATE_DB_NAME=luminary-prod \
+#     LUMINARY_CREATE_DB_USER=luminary-prod LUMINARY_CREATE_DB_PASSWORD=<password> \
+#     LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>
+# No default LUMINARY_CREATE_DB_NAME -- `make db-create` refuses to run
+# without one, same reasoning as LUMINARY_DATABASE_ADMIN_PASSWORD having no
+# default (there's nothing safe to guess for a destructive-adjacent,
+# prod-facing target). Whatever name/role you pick here must match
+# values.yaml's api.env.database.name/databaseCredentialsSecret for the
+# Helm deployment to actually connect to it.
+LUMINARY_CREATE_DB_NAME     ?=
+LUMINARY_CREATE_DB_USER     ?=
+LUMINARY_CREATE_DB_PASSWORD ?=
+
 # Base URL of the OpenAI-*compatible* endpoint run-api's photo chat uses --
 # never assumed to be api.openai.com. Empty means "use the openai SDK's own
 # default" (api.openai.com), which is only right if that's really the
@@ -87,7 +106,7 @@ LUMINARY_TEST_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
         build build-api build-web \
         push push-api push-web \
         images \
-        db db-recreate db-drop db-update \
+        db db-recreate db-drop db-update db-create \
         helm-lint helm-template \
         clean
 
@@ -104,6 +123,7 @@ help:
 	@echo "  db-recreate     Drop and recreate them"
 	@echo "  db-drop         Drop them"
 	@echo "  db-update       Apply db/update.sql's schema changes in place (no drop/rebuild), then clear it"
+	@echo "  db-create       Create one ad-hoc database+role (e.g. prod's), via LUMINARY_CREATE_DB_NAME/_USER/_PASSWORD"
 	@echo "  helm-lint       Lint the Helm chart"
 	@echo "  helm-template   Render the Helm chart"
 	@echo "  clean           Remove local build/test artifacts"
@@ -229,6 +249,26 @@ db-update:
 	$(call DB_UPDATE,$(LUMINARY_DATABASE_NAME))
 	$(call DB_UPDATE,$(LUMINARY_TEST_DATABASE_NAME))
 	: > db/update.sql
+
+# Ad-hoc equivalent of `db` above for one database by name/role, e.g.
+# prod's -- see LUMINARY_CREATE_DB_NAME/_USER/_PASSWORD's own comment.
+db-create:
+ifndef LUMINARY_CREATE_DB_NAME
+	$(error LUMINARY_CREATE_DB_NAME is required, e.g. make db-create LUMINARY_CREATE_DB_NAME=luminary-prod LUMINARY_CREATE_DB_USER=luminary-prod LUMINARY_CREATE_DB_PASSWORD=<password> LUMINARY_DATABASE_ADMIN_PASSWORD=<superuser password>)
+endif
+ifndef LUMINARY_CREATE_DB_USER
+	$(error LUMINARY_CREATE_DB_USER is required)
+endif
+ifndef LUMINARY_CREATE_DB_PASSWORD
+	$(error LUMINARY_CREATE_DB_PASSWORD is required)
+endif
+	PGPASSWORD=$(LUMINARY_DATABASE_ADMIN_PASSWORD) psql \
+		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_ADMIN_USER) -d postgres \
+		-v db_name=$(LUMINARY_CREATE_DB_NAME) -v db_user=$(LUMINARY_CREATE_DB_USER) -v db_password=$(LUMINARY_CREATE_DB_PASSWORD) \
+		-f db/create_db_and_user.sql
+	PGPASSWORD=$(LUMINARY_CREATE_DB_PASSWORD) psql \
+		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_CREATE_DB_USER) -d $(LUMINARY_CREATE_DB_NAME) \
+		-f db/create_tables.sql
 
 ## --- Helm -----------------------------------------------------------------
 
