@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app import enrich
@@ -67,10 +69,12 @@ def test_compose_raises_not_configured_without_api_key_or_model(monkeypatch):
     monkeypatch.delenv("LUMINARY_OPENAI_MODEL", raising=False)
 
     with pytest.raises(enrich.EnrichmentNotConfigured):
-        enrich._compose({"filename": "x.jpg", "vlm_description": None, "location_name": None, "individuals": []})
+        enrich._compose(
+            "photo-1", {"filename": "x.jpg", "vlm_description": None, "location_name": None, "individuals": []}
+        )
 
 
-def test_compose_sends_the_prompt_and_returns_the_stripped_reply(monkeypatch):
+def test_compose_sends_the_prompt_and_returns_the_stripped_reply(monkeypatch, caplog):
     monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("LUMINARY_OPENAI_MODEL", "my-text-model")
 
@@ -103,16 +107,20 @@ def test_compose_sends_the_prompt_and_returns_the_stripped_reply(monkeypatch):
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
 
-    result = enrich._compose(
-        {"filename": "beach.jpg", "vlm_description": "a beach", "location_name": None, "individuals": []}
-    )
+    facts = {"filename": "beach.jpg", "vlm_description": "a beach", "location_name": None, "individuals": []}
+    with caplog.at_level(logging.INFO, logger="app.enrich"):
+        result = enrich._compose("photo-1", facts)
 
     assert result == "A nice day at the beach."
     assert captured["api_key"] == "test-key"
     assert captured["model"] == "my-text-model"
-    assert captured["messages"] == [{"role": "user", "content": enrich._build_prompt(
-        {"filename": "beach.jpg", "vlm_description": "a beach", "location_name": None, "individuals": []}
-    )}]
+    assert captured["messages"] == [{"role": "user", "content": enrich._build_prompt(facts)}]
+
+    # The prompt and the raw response must both be logged, for diagnosing
+    # why a generated description came out wrong/too short/too long.
+    [record] = [r for r in caplog.records if "photo-1" in r.getMessage()]
+    assert enrich._build_prompt(facts) in record.getMessage()
+    assert "A nice day at the beach." in record.getMessage()
 
 
 # --- _photo_facts ----------------------------------------------------------
@@ -164,7 +172,7 @@ def test_enrich_description_is_a_noop_for_a_missing_photo(client, monkeypatch):
     monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("LUMINARY_OPENAI_MODEL", "my-text-model")
     calls = []
-    monkeypatch.setattr(enrich, "_compose", lambda facts: calls.append(facts) or "unused")
+    monkeypatch.setattr(enrich, "_compose", lambda photo_id, facts: calls.append(facts) or "unused")
 
     enrich.enrich_description("does-not-exist")  # must not raise
 
@@ -172,7 +180,7 @@ def test_enrich_description_is_a_noop_for_a_missing_photo(client, monkeypatch):
 
 
 def test_enrich_description_stores_the_composed_text(client, monkeypatch):
-    monkeypatch.setattr(enrich, "_compose", lambda facts: "A composed description.")
+    monkeypatch.setattr(enrich, "_compose", lambda photo_id, facts: "A composed description.")
     _insert_photo("photo-1")
 
     enrich.enrich_description("photo-1")
@@ -183,9 +191,7 @@ def test_enrich_description_stores_the_composed_text(client, monkeypatch):
 
 
 def test_enrich_description_leaves_a_stale_description_in_place_on_failure(client, monkeypatch, caplog):
-    import logging
-
-    def boom(facts):
+    def boom(photo_id, facts):
         raise RuntimeError("upstream exploded")
 
     monkeypatch.setattr(enrich, "_compose", boom)

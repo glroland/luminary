@@ -40,6 +40,12 @@ response) is logged and leaves `description` as whatever it already was
 a transient failure), never raised to the caller. None of the call sites
 above treat this as something whose failure should fail the tag/untag/
 sync/refresh it's attached to.
+
+On every successful generation, `_compose` logs the full prompt sent to
+the model and its raw response at INFO, tagged with the photo id -- the
+only way to see exactly what the model was asked and what it actually said
+back, which matters because "the description is too short/vague/wrong"
+is otherwise unverifiable without it.
 """
 
 import logging
@@ -49,10 +55,10 @@ from .database import get_connection
 
 logger = logging.getLogger(__name__)
 
-# Short rewrite, not a full report -- keeps this fast and keeps the UI's
-# description paragraph (PhotoModal.jsx's .photo-modal-description) from
-# growing unwieldy.
-_MAX_TOKENS = 300
+# A few sentences, not a one-liner, but still short enough to keep the
+# UI's description paragraph (PhotoModal.jsx's .photo-modal-description)
+# from growing unwieldy.
+_MAX_TOKENS = 600
 
 
 class EnrichmentNotConfigured(Exception):
@@ -99,16 +105,17 @@ def _build_prompt(facts: dict) -> str:
     if facts["individuals"]:
         lines.append(f"People identified in the photo: {', '.join(facts['individuals'])}")
     lines.append(
-        "\nWrite one short, natural-language description (1-2 sentences) of this photo for a "
-        "personal photo library, weaving in whichever of the facts above are useful. Don't invent "
-        "details beyond what's given above, don't mention the filename literally, and don't mention "
-        "that this description or the caption was computer-generated -- just describe the photo "
-        "naturally, as a caption."
+        "\nWrite a detailed, natural-language description (3-5 sentences) of this photo for a "
+        "personal photo library, weaving in whichever of the facts above are useful. Describe the "
+        "scene vividly -- setting, mood, notable details -- rather than a one-line summary. Don't "
+        "invent details beyond what's given above, don't mention the filename literally, and don't "
+        "mention that this description or the caption was computer-generated -- just describe the "
+        "photo naturally, as a caption."
     )
     return "\n".join(lines)
 
 
-def _compose(facts: dict) -> str:
+def _compose(photo_id: str, facts: dict) -> str:
     from openai import OpenAI  # lazy: keep this an optional dependency at import time, like chat.py
 
     from .config import get_openai_api_key, get_openai_base_url, get_openai_model
@@ -121,11 +128,12 @@ def _compose(facts: dict) -> str:
             "LUMINARY_OPENAI_MODEL (and LUMINARY_OPENAI_BASE_URL if this isn't api.openai.com)."
         )
 
+    prompt = _build_prompt(facts)
     client = OpenAI(api_key=api_key, base_url=get_openai_base_url())
     try:
         response = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": _build_prompt(facts)}],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=_MAX_TOKENS,
         )
     except Exception as exc:
@@ -133,7 +141,11 @@ def _compose(facts: dict) -> str:
 
         _log_upstream_error_body(exc)
         raise
-    return response.choices[0].message.content.strip()
+    description = response.choices[0].message.content.strip()
+    logger.info(
+        "Description enrichment for photo %s -- prompt: %s -- response: %s", photo_id, prompt, description
+    )
+    return description
 
 
 def enrich_description(photo_id: str) -> None:
@@ -146,7 +158,7 @@ def enrich_description(photo_id: str) -> None:
         return
 
     try:
-        description = _compose(facts)
+        description = _compose(photo_id, facts)
     except EnrichmentNotConfigured as exc:
         logger.debug("Skipping description enrichment for photo %s: %s", photo_id, exc)
         return
