@@ -35,10 +35,10 @@ api:
   resources:
     requests:
       cpu: 2000m
-      memory: 2Gi
-    limits:
-      cpu: 8000m
       memory: 6Gi
+    limits:
+      cpu: 12000m
+      memory: 36Gi
   persistence:
     enabled: true
     size: 5Gi
