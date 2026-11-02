@@ -1,20 +1,26 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Shared registry/org path and tag for both the api and web images --
+# the Jenkinsfile pushes both as "<repository>/luminary-api:$BUILD_NUMBER"
+# and "<repository>/luminary-web:$BUILD_NUMBER", so both components always
+# come from the same registry and build.
+image:
+  repository: registry.home.glroland.com/luminary
+  tag: "2"
+
 api:
   image:
-    repository: quay.io/yourorg/luminary-api
-    tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
   port: 8080
   resources:
     requests:
-      cpu: 100m
-      memory: 128Mi
+      cpu: 2000m
+      memory: 2Gi
     limits:
-      cpu: 500m
-      memory: 512Mi
+      cpu: 8000m
+      memory: 6Gi
   persistence:
     enabled: true
     size: 5Gi
@@ -25,14 +31,14 @@ api:
     # fsspec URI for photo storage: a bare path or file:// uses the PVC
     # below; s3://, smb://, https://, etc. point at an external backend
     # instead (set api.persistence.enabled=false in that case).
-    photosUri: /data/photos
+    photosUri: "smb://data.home.glroland.com/photo/2019 Spring Break in Boone"
     # --- Database: photo metadata + thumbnails -----------------------------
     # A remote Postgres server that already exists outside this chart/the
     # ArgoCD app it tracks -- this chart never stands up Postgres itself.
     # Provision the database/role on it with `make db`/`make db-recreate`
     # (see db/ and the README) before deploying.
     database:
-      host: db.example.com
+      host: db.home.glroland.com
       port: 5432
       name: luminary
     # Name of a Secret (same namespace, keys `username`/`password`) holding
@@ -50,9 +56,9 @@ api:
     # this at a self-hosted OpenAI-compatible server (vLLM, Ollama, LM
     # Studio, etc). Leave empty only if the endpoint genuinely *is*
     # api.openai.com (the openai SDK's own default).
-    openaiBaseUrl: ""
+    openaiBaseUrl: "https://maas.apps.ocp.home.glroland.com/sandbox/gemma-4/v1"
     # Model name as that server calls it -- required, no default.
-    openaiModel: ""
+    openaiModel: "gemma-4"
     # Name of a Secret (same namespace, key `apiKey`) holding the API key.
     # Leave empty if the endpoint needs no key. Never put the key directly
     # in this values file.
@@ -77,8 +83,6 @@ api:
 
 web:
   image:
-    repository: quay.io/yourorg/luminary-web
-    tag: latest
     pullPolicy: IfNotPresent
   replicaCount: 1
   port: 8080

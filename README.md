@@ -394,10 +394,8 @@ helm lint deploy/helm/luminary
 helm template luminary deploy/helm/luminary
 helm upgrade --install luminary deploy/helm/luminary \
   --namespace luminary --create-namespace \
-  --set api.image.repository=quay.io/myorg/luminary-api \
-  --set api.image.tag=1.0.0 \
-  --set web.image.repository=quay.io/myorg/luminary-web \
-  --set web.image.tag=1.0.0
+  --set image.repository=quay.io/myorg \
+  --set image.tag=1.0.0
 ```
 
 ### GitOps via ArgoCD
