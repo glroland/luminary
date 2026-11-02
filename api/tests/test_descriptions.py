@@ -1,4 +1,4 @@
-from app import enrich
+from app import embeddings, enrich
 from app.database import get_connection
 from conftest import refresh_descriptions_and_wait
 
@@ -30,6 +30,18 @@ def test_refresh_updates_the_description_for_every_photo(client, monkeypatch):
     monkeypatch.setattr(
         enrich, "_compose", lambda photo_id, facts: f"A description for {facts['filename']}."
     )
+
+    # Replacing _compose above bypasses enrich_description's own
+    # EnrichmentNotConfigured short-circuit, so this test (unlike most
+    # others exercising enrich_description) actually reaches
+    # embeddings.embed_description/embed_text -- mock that away too, same
+    # as test_storage.py/test_photos.py's search tests do, so this doesn't
+    # incidentally race a real local embedding-model download/load against
+    # refresh_descriptions_and_wait's fixed polling timeout.
+    def _embeddings_not_exercised(text, is_query=False):
+        raise embeddings.EmbeddingNotConfigured("embeddings not exercised by this test")
+
+    monkeypatch.setattr(embeddings, "embed_text", _embeddings_not_exercised)
 
     status = refresh_descriptions_and_wait(client)
     assert status["status"] == "completed"

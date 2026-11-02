@@ -183,22 +183,24 @@ SEARCH_RESULTS_LIMIT = 500
 def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
     """Free-text search over `description` via `description_embedding`
     similarity (the sidebar's "Search" section, GET /api/photos/search) --
-    embeds `query` with the same model as photos' own descriptions
-    (embeddings.embed_text) and returns every photo whose cosine
-    similarity to it is at least `threshold` (0-1, higher = more similar),
-    ordered most-similar first. Each result dict carries all of
+    embeds `query` with the same local model as photos' own descriptions
+    (embeddings.embed_text, is_query=True for this call since `query` is a
+    search query, not a passage -- see embeddings.py's module docstring on
+    why that matters for BGE specifically) and returns every photo whose
+    cosine similarity to it is at least `threshold` (0-1, higher = more
+    similar), ordered most-similar first. Each result dict carries all of
     METADATA_COLUMNS plus a `similarity` key.
 
     Unlike find_similar_photos, a missing/misconfigured embeddings backend
     is **not** swallowed here -- embeddings.embed_text raises
-    EmbeddingNotConfigured (or whatever the openai SDK itself raises) and
-    this lets it propagate, since a user-initiated search should surface a
-    real error (the router maps it to a 503/502) rather than silently
-    returning no results. A missing `description_embedding` column (the
-    pgvector extension was never installed) still degrades to [] the same
-    way find_similar_photos does, though -- that's a server-side gap, not
-    something a 503 would help the user act on."""
-    embedding = embeddings.embed_text(query)
+    EmbeddingNotConfigured (or whatever sentence-transformers/torch itself
+    raises) and this lets it propagate, since a user-initiated search
+    should surface a real error (the router maps it to a 503/502) rather
+    than silently returning no results. A missing `description_embedding`
+    column (the pgvector extension was never installed) still degrades to
+    [] the same way find_similar_photos does, though -- that's a
+    server-side gap, not something a 503 would help the user act on."""
+    embedding = embeddings.embed_text(query, is_query=True)
     try:
         with get_connection() as conn:
             rows = conn.execute(

@@ -82,6 +82,8 @@ spec:
             - name: LUMINARY_EMBEDDING_MODEL
               value: {{ .Values.env.embeddingModel | quote }}
             {{- end }}
+            - name: LUMINARY_EMBEDDING_DEVICE
+              value: {{ .Values.env.embeddingDevice | quote }}
             - name: LUMINARY_FLORENCE_MODEL
               value: {{ .Values.env.florenceModel | quote }}
             - name: LUMINARY_FLORENCE_DEVICE

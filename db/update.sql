@@ -38,18 +38,21 @@
 --    `vlm_description` doesn't (a database that's already past this
 --    point is untouched); see enrich.py's module docstring for when
 --    `description` gets (re)computed going forward.
--- 4. Adds photos.description_embedding (halfvec(3072)) plus its HNSW
+-- 4. Adds photos.description_embedding (vector(1024)) plus its HNSW
 --    index, for similarity search -- see embeddings.py's module
 --    docstring and create_tables.sql's own comment on this column for
---    the full reasoning. Unlike the first three, this one has a real
---    prerequisite `make db-update` itself can't satisfy: the pgvector
---    extension must already be installed in this database (run
---    db/create_extensions.sql as a superuser first -- db-update connects
---    as the app role, which typically can't CREATE EXTENSION itself). If
---    that hasn't happened, the ALTER TABLE below fails with "type
---    halfvec does not exist", and -v ON_ERROR_STOP=1 (see above) aborts
---    the whole run *without* clearing this file -- install the
---    extension, then just re-run `make db-update`.
+--    the full reasoning (a local BAAI/bge-large-en-v1.5 model, not an
+--    OpenAI-compatible embeddings endpoint). Also migrates away an
+--    earlier halfvec(3072) column, if present, from before that model
+--    switch -- see the DO block's own comment. Unlike the first three,
+--    this one has a real prerequisite `make db-update` itself can't
+--    satisfy: the pgvector extension must already be installed in this
+--    database (run db/create_extensions.sql as a superuser first --
+--    db-update connects as the app role, which typically can't CREATE
+--    EXTENSION itself). If that hasn't happened, the ALTER TABLE below
+--    fails with "type vector does not exist", and -v ON_ERROR_STOP=1
+--    (see above) aborts the whole run *without* clearing this file --
+--    install the extension, then just re-run `make db-update`.
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -71,7 +74,21 @@ END $$;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS vlm_description TEXT;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS description TEXT;
 
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding halfvec(3072);
+-- Migrates away an earlier halfvec(3072) OpenAI-embedding column, if
+-- present -- those embeddings are meaningless under the new local
+-- vector(1024) model regardless, so there's nothing worth converting in
+-- place (see create_tables.sql's matching comment).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'photos' AND column_name = 'description_embedding'
+          AND udt_name <> 'vector'
+    ) THEN
+        ALTER TABLE photos DROP COLUMN description_embedding;
+    END IF;
+END $$;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding vector(1024);
 
 CREATE INDEX IF NOT EXISTS idx_photos_description_embedding
-    ON photos USING hnsw (description_embedding halfvec_cosine_ops);
+    ON photos USING hnsw (description_embedding vector_cosine_ops);

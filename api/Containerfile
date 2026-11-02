@@ -7,14 +7,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
-# Where Florence-2 (transformers/huggingface_hub) and facenet-pytorch's
+# Where Florence-2, the local embedding model (embeddings.py -- both via
+# transformers/huggingface_hub/sentence-transformers), and facenet-pytorch's
 # vggface2 face-embedding weights (recognition.py's "Refresh Faces") cache
 # their downloaded files -- set *before* the pre-download step below so
 # it writes here, and left set for the running container so it reads from
 # the exact same place at startup/first use instead of re-downloading.
-# photos.description_embedding's model (embeddings.py, LUMINARY_EMBEDDING_
-# MODEL) has nothing to pre-cache here -- it's a remote OpenAI-compatible
-# API call (client.embeddings.create), not a local model file.
 ENV HF_HOME=/opt/model-cache/huggingface \
     TORCH_HOME=/opt/model-cache/torch
 
@@ -26,10 +24,17 @@ ENV HF_HOME=/opt/model-cache/huggingface \
 # chat.py's _load_florence() will try to fetch the mismatched one instead.
 ARG LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-base
 
-# Mirrors chat.py's _load_florence()/recognition.py's _load_embedder()
-# almost exactly (model id, trust_remote_code, pretrained="vggface2") --
-# this needs network access at build time (same as the pip install above),
-# so it has to run before HF_HUB_OFFLINE is set below.
+# Same reasoning, for embeddings.py's local embedding model -- must match
+# config.py's get_embedding_model() default; override both together with
+# `--build-arg LUMINARY_EMBEDDING_MODEL=...` or embeddings._load_embedder()
+# will try to fetch the mismatched one instead of using this cache.
+ARG LUMINARY_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+
+# Mirrors chat.py's _load_florence()/embeddings.py's _load_embedder()/
+# recognition.py's _load_embedder() almost exactly (model id,
+# trust_remote_code, pretrained="vggface2") -- this needs network access
+# at build time (same as the pip install above), so it has to run before
+# HF_HUB_OFFLINE is set below.
 RUN mkdir -p "$HF_HOME" "$TORCH_HOME" && python -c "\
 import torch; \
 from transformers import AutoModelForCausalLM, AutoProcessor; \
@@ -38,19 +43,23 @@ AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, trust_
 AutoProcessor.from_pretrained(model_id, trust_remote_code=True); \
 from facenet_pytorch import InceptionResnetV1; \
 InceptionResnetV1(pretrained='vggface2').eval(); \
-print('Pre-downloaded and cached Florence-2 (' + model_id + ') and facenet-pytorch vggface2 weights.')"
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('${LUMINARY_EMBEDDING_MODEL}', device='cpu'); \
+print('Pre-downloaded and cached Florence-2 (' + model_id + '), facenet-pytorch vggface2 weights, and the embedding model (${LUMINARY_EMBEDDING_MODEL}).')"
 
-# From here on, Florence-2 must use the cache just populated above rather
-# than silently re-downloading on the first real chat/sync request --
-# HF_HUB_OFFLINE makes transformers' from_pretrained (huggingface_hub-
-# based) raise instead of even checking the network, so a cache/runtime-
-# model mismatch fails loudly rather than downloading unexpectedly in a
+# From here on, Florence-2/the embedding model must use the cache just
+# populated above rather than silently re-downloading on the first real
+# chat/sync/search request -- HF_HUB_OFFLINE makes transformers' and
+# sentence-transformers' from_pretrained (both huggingface_hub-based)
+# raise instead of even checking the network, so a cache/runtime-model
+# mismatch fails loudly rather than downloading unexpectedly in a
 # deployed container. facenet-pytorch's own downloader (facenet_pytorch/
 # models/utils/download.py) already skips its request whenever the
 # destination file exists under $TORCH_HOME, with no separate offline
 # flag needed -- the pre-download step above is what makes that true.
 ENV HF_HUB_OFFLINE=1 \
-    LUMINARY_FLORENCE_MODEL=${LUMINARY_FLORENCE_MODEL}
+    LUMINARY_FLORENCE_MODEL=${LUMINARY_FLORENCE_MODEL} \
+    LUMINARY_EMBEDDING_MODEL=${LUMINARY_EMBEDDING_MODEL}
 
 ENV PYTHONPATH=/app/src \
     LUMINARY_DATA_DIR=/data/photos \

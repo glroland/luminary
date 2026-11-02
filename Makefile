@@ -94,6 +94,16 @@ LUMINARY_OPENAI_MODEL ?= gemma-4
 # `make build-api LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-large`.
 LUMINARY_FLORENCE_MODEL ?= microsoft/Florence-2-base
 
+# Embedding model for photos.description_embedding (embeddings.py) -- a
+# local Hugging Face sentence-embedding model, loaded once per process and
+# cached (embeddings.py's _embedder), not an OpenAI-compatible embeddings
+# endpoint call -- see embeddings.py's module docstring for why. Same
+# override story as LUMINARY_FLORENCE_MODEL above: also passed to
+# `build-api` as a --build-arg, so override both together, e.g.
+# `make run-api LUMINARY_EMBEDDING_MODEL=...` /
+# `make build-api LUMINARY_EMBEDDING_MODEL=...`.
+LUMINARY_EMBEDDING_MODEL ?= BAAI/bge-large-en-v1.5
+
 # Env vars for run-api: points at LUMINARY_DATABASE_NAME (the dev database).
 LUMINARY_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
 	LUMINARY_DATABASE_PORT=$(LUMINARY_DATABASE_PORT) \
@@ -170,7 +180,7 @@ lint-web:
 run-api:
 	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) $(LUMINARY_DATABASE_ENV) \
 		LUMINARY_OPENAI_BASE_URL=$(LUMINARY_OPENAI_BASE_URL) LUMINARY_OPENAI_MODEL=$(LUMINARY_OPENAI_MODEL) \
-		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) \
+		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:
@@ -183,6 +193,7 @@ build: build-api build-web
 build-api:
 	$(CONTAINER_ENGINE) build -t $(API_IMAGE):$(TAG) \
 		--build-arg LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) \
+		--build-arg LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
 		-f api/Containerfile api
 
 build-web:

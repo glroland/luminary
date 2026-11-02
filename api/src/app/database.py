@@ -37,8 +37,8 @@ def get_connection():
         )
         raise
 
-    # Registers pgvector's vector/halfvec type adapters (embeddings.py's
-    # HalfVector <-> photos.description_embedding) on *this* connection --
+    # Registers pgvector's vector type adapter (embeddings.py's Vector <->
+    # photos.description_embedding) on *this* connection --
     # get_connection() opens a fresh one per operation (no pooling), so
     # this has to happen every time, not once at startup. Guarded on
     # whether the `vector` type actually exists in this database: without
@@ -187,13 +187,41 @@ def init_db() -> None:
         # working on every startup regardless. A failure here is logged
         # once per startup, not raised; it never takes down init_db()/the
         # app. See db/create_tables.sql's matching statements (kept in
-        # sync with these) for the full reasoning on halfvec(3072)/HNSW.
+        # sync with these) for the full reasoning on vector(1024)/HNSW.
+        #
+        # The DO block below is a migration, not just a column add: an
+        # earlier version of this app stored a halfvec(3072) OpenAI
+        # embedding here (see embeddings.py's module docstring for why
+        # that switched to a local vector(1024) model) -- this runs on
+        # every startup (init_db() always has, there's no migrations
+        # framework), so a database that already has the old column type
+        # needs it dropped before the new one can be added; the old
+        # embeddings are meaningless under the new model regardless, there
+        # is nothing worth preserving by converting in place instead of
+        # dropping. A fresh/already-migrated database (udt_name already
+        # 'vector') skips the drop and the ADD COLUMN/CREATE INDEX below
+        # are no-ops, same self-healing shape as the vlm_description
+        # rename above.
         try:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding halfvec(3072)")
+            conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'photos' AND column_name = 'description_embedding'
+                          AND udt_name <> 'vector'
+                    ) THEN
+                        ALTER TABLE photos DROP COLUMN description_embedding;
+                    END IF;
+                END $$
+                """
+            )
+            conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding vector(1024)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_photos_description_embedding "
-                "ON photos USING hnsw (description_embedding halfvec_cosine_ops)"
+                "ON photos USING hnsw (description_embedding vector_cosine_ops)"
             )
             conn.commit()
         except psycopg.Error as exc:

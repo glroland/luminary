@@ -40,7 +40,7 @@ One row per indexed photo. Rows are inserted/updated/deleted exclusively by
 | `thumbnail`     | `BYTEA`            | yes      | A 320×320 (max) JPEG, generated at index time by `storage.THUMBNAIL_SIZE`/`sync._sync_one_file`. `NULL` until generated, or permanently if the source file couldn't be decoded — thumbnailing is best-effort and never fails the whole sync. Deliberately excluded from `storage.METADATA_COLUMNS`/`list_photos`/`get_photo` so listing photos never pulls thumbnail bytes off disk; only `get_thumbnail` (`GET /api/photos/{id}/thumbnail`) reads this column. |
 | `vlm_description` | `TEXT`           | yes      | Florence-2-generated caption (`chat.caption_image`, run from `sync._run_florence_pipeline`). `NULL` if Florence-2 isn't configured, hasn't run yet, or failed. Doubles as the signal for "face detection has already run for this photo too" (see `faces` below) — there's no separate column for that. Not shown directly in the UI — it's one of the inputs `description` below is composed from, not the user-facing text itself. Used to be the column named `description`; see "Write ordering" below for the rename. |
 | `description`   | `TEXT`             | yes      | The description actually shown in the UI (`PhotoModal.jsx`) — an LLM-composed rewrite (`enrich.enrich_description`, any OpenAI-*compatible* chat endpoint, same `LUMINARY_OPENAI_*` config `chat.py`'s `"openai"` backend uses) weaving together `vlm_description`, the names of any individuals currently tagged in the photo (via `faces.person_id`/`individuals.name`), `location_name`, and `filename`. `NULL` until that's succeeded at least once for this photo; a later failure leaves whatever value was already there rather than clearing it. Regenerated every time any of those inputs can change — a sync that (re)writes `vlm_description`, a manual tag/untag (`people.py`), an auto-match (`recognition.py`), or deleting a tagged individual (`people.delete_individual`) — see `enrich.py`'s module docstring for the exact list. |
-| `description_embedding` | `halfvec(3072)` | yes | Vector embedding of `description` (not `vlm_description`), for similarity search (`storage.find_similar_photos`, `GET /api/photos/{id}/similar`) — see `embeddings.py`'s module docstring for the model (OpenAI `text-embedding-3-large`, full native 3072 dimensions, `LUMINARY_EMBEDDING_MODEL`) and why `halfvec` rather than pgvector's plain `vector` type (indexable up to 4,000 dimensions vs. 2,000, so this column's full dimensionality stays indexable without truncating the embedding to fit). `NULL` until `enrich.enrich_description` successfully generates a `description` *and* `embeddings.embed_description` then embeds it — same best-effort semantics as every other derived column here, and the same trigger list as `description` itself, since this is always regenerated in lockstep with it. Also `NULL` for every row if the pgvector extension was never installed on this Postgres server (see `database.py`'s `init_db()`, which degrades gracefully rather than failing the rest of the schema) — this is the one column in `photos` that depends on something outside this app's own SQL. |
+| `description_embedding` | `vector(1024)` | yes | Vector embedding of `description` (not `vlm_description`), for similarity search (`storage.find_similar_photos`, `GET /api/photos/{id}/similar`) — see `embeddings.py`'s module docstring for the model (a local `BAAI/bge-large-en-v1.5`, run in-process via `sentence-transformers`, `LUMINARY_EMBEDDING_MODEL`) and why plain `vector` rather than `halfvec` (this model's native 1,024 dimensions already fits `vector`'s 2,000-dimension index cap, so there's no need for `halfvec`'s 16-bit-float tradeoff). `NULL` until `enrich.enrich_description` successfully generates a `description` *and* `embeddings.embed_description` then embeds it — same best-effort semantics as every other derived column here, and the same trigger list as `description` itself, since this is always regenerated in lockstep with it. Also `NULL` for every row if the pgvector extension was never installed on this Postgres server (see `database.py`'s `init_db()`, which degrades gracefully rather than failing the rest of the schema) — this is the one column in `photos` that depends on something outside this app's own SQL. |
 
 No indexes beyond the primary key and `idx_photos_description_embedding`
 (an HNSW index over `description_embedding`, cosine distance — only
@@ -255,17 +255,20 @@ cosine-distance operator (`<=>`). Unrelated to `recognition.py` above —
 that matches *faces* by image embedding similarity; this matches *photos*
 by embedding the LLM-composed `description` text, not the image itself.
 
-Embeds with OpenAI's `text-embedding-3-large` (`LUMINARY_EMBEDDING_MODEL`,
-same `LUMINARY_OPENAI_*` endpoint/credentials `enrich.py`'s description
-rewrite already uses) at its full native 3072 dimensions — deliberately
-never truncated via the OpenAI API's own `dimensions` parameter, even
-though a smaller size would fit pgvector's plain `vector` type's 2,000-
-dimension index cap. Storing the untruncated embedding while staying
-indexable is why the column is `halfvec(3072)`, not `vector(3072)`:
-`halfvec` (16-bit floats) raises that cap to 4,000 dimensions, comfortably
-covering 3,072 with nothing thrown away. See `embeddings.py`'s own module
-docstring for the full reasoning, including what to do if you're pointed
-at a different OpenAI-*compatible* server/model.
+Embeds with a **local** Hugging Face sentence-embedding model
+(`LUMINARY_EMBEDDING_MODEL`, default `BAAI/bge-large-en-v1.5`), run
+in-process via `sentence-transformers` — deliberately *not* a call to an
+OpenAI-*compatible* embeddings endpoint, unlike `enrich.py`'s description
+rewrite above: a self-hosted `LUMINARY_OPENAI_BASE_URL` may expose chat
+completions only, with no embeddings endpoint, or one backed by a
+different, incompatible model than whatever generated the embeddings
+already stored here. At this model's native 1,024 dimensions, the column
+is declared `vector(1024)` — pgvector's plain type, whose HNSW/IVFFlat
+index cap is 2,000 dimensions, comfortably covers it with no need for
+`halfvec`'s 16-bit-float tradeoff (which the previous, higher-dimension
+OpenAI `text-embedding-3-large` choice required). See `embeddings.py`'s
+own module docstring for the full reasoning, including what to do if you
+swap in a different embedding model.
 
 `embeddings.embed_description(photo_id)` is called from the *end* of
 `enrich.enrich_description` — every one of that function's own call sites

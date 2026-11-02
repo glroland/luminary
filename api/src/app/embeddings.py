@@ -3,112 +3,180 @@ embedding of `photos.description` (enrich.py's LLM-composed rewrite, never
 the raw Florence-2 `vlm_description`) used for similarity search: "find
 photos whose description reads most like this one", via pgvector's
 nearest-neighbor operators (storage.find_similar_photos,
-GET /api/photos/{id}/similar).
+GET /api/photos/{id}/similar), and for the sidebar's free-text search
+(storage.search_photos, GET /api/photos/search).
 
 --- Model and dimension choice ---
 
-Embeds with OpenAI's text-embedding-3-large (LUMINARY_EMBEDDING_MODEL,
-config.get_embedding_model) at its full native 3072 dimensions --
-deliberately *not* shortened via the OpenAI embeddings API's own
-`dimensions` parameter (which supports shrinking this model's output via
-Matryoshka representation learning, e.g. to 1024 or 1536 -- OpenAI's own
-docs show this degrades gracefully, but it still always costs some
-retrieval quality versus the untruncated embedding; "highest fidelity"
-here means not throwing any of it away).
+Embeds with a local Hugging Face sentence-embedding model
+(LUMINARY_EMBEDDING_MODEL, config.get_embedding_model -- default
+BAAI/bge-large-en-v1.5), loaded once per process and run in-process via
+sentence-transformers -- deliberately *not* a call to an OpenAI-
+*compatible* embeddings endpoint. LUMINARY_OPENAI_* is configured for
+*chat completions* (chat.py's "openai" backend, enrich.py's description
+rewrite) against whatever server LUMINARY_OPENAI_BASE_URL points at -- a
+self-hosted OpenAI-compatible gateway (vLLM, Ollama, a local proxy, a
+small sandboxed model server) commonly exposes chat completions only,
+with no `/embeddings` endpoint at all, and even one that does expose it
+may back it with a different, incompatible model than whatever generated
+the embeddings already stored in this database -- there's no guarantee an
+arbitrary OpenAI-compatible server's embedding model matches the one this
+column was indexed with, or that it has one at all. Running the embedding
+model ourselves removes that dependency entirely: the exact same weights,
+loaded once (see _load_embedder below) and cached for the life of the
+process, generate both a photo's stored embedding and every search
+query's, so the two are always comparable regardless of how (or whether)
+LUMINARY_OPENAI_* is even configured.
 
-Keeping the full, untruncated embedding while still being able to index it
-is why `photos.description_embedding` is declared `halfvec(3072)` in
-db/create_tables.sql, not `vector(3072)`: pgvector's `vector` type only
-supports HNSW/IVFFlat indexes up to 2,000 dimensions (see pgvector's own
-README) -- a plain `vector(3072)` column could still *store* the value
-(vector's storage cap is far higher, 16,000 dimensions) but could never be
-indexed, so every similarity query would silently become a full table
-scan as the library grows. `halfvec` (16-bit floats instead of `vector`'s
-32-bit) raises that indexable cap to 4,000 dimensions, comfortably
-covering this model's 3,072 with no truncation needed. The halved storage
-per row is an incidental side effect of that choice, not the reason for
-it.
+BAAI/bge-large-en-v1.5 is a strong, widely-benchmarked open embedding
+model (a consistent top scorer on the MTEB retrieval leaderboard among
+similarly-sized models) at 1,024 dimensions. That comfortably fits under
+pgvector's plain `vector` type's HNSW/IVFFlat index cap of 2,000
+dimensions (see pgvector's own README), so `photos.description_embedding`
+is declared `vector(1024)` in db/create_tables.sql, not `halfvec` -- at
+this dimension count there's no need to trade precision (halfvec's 16-bit
+floats) for indexability the way the previous OpenAI
+text-embedding-3-large choice (3,072 dimensions) required. A model with a
+different native dimension count needs a schema change (the column/index
+are declared at a fixed width), not just an env var change -- update
+db/create_tables.sql, database.py's init_db(), and db/update.sql
+together, same as any other schema change (see database.py's module docs
+on why there's no migrations framework).
 
-text-embedding-3-large is OpenAI's highest-fidelity general-purpose text
-embedding model as of this writing. If LUMINARY_OPENAI_BASE_URL points at
-a different OpenAI-*compatible* server instead, set LUMINARY_EMBEDDING_
-MODEL to whatever that server calls its own best embedding model -- but
-note EMBEDDING_DIMENSIONS below is specific to text-embedding-3-large's
-own native size. A model with a different native dimension count needs a
-schema change (the column/index are declared at a fixed width), not just
-an env var change: there's no migrations framework in this app (see
-database.py's module docs) -- update db/create_tables.sql, database.py's
-init_db(), and db/update.sql together, same as any other schema change.
+BGE's retrieval models are trained *asymmetrically*: a short instruction
+is prepended to a *query* before embedding it, but never to the *passage*
+being searched over (here, a photo's description) -- see the model
+card's own usage example. `embed_text(text, is_query=...)` takes that
+explicitly rather than guessing it from the caller: embed_description
+below always embeds a passage (is_query=False, its default),
+storage.search_photos always embeds a user's free-text query
+(is_query=True). Getting this backwards doesn't raise -- it just quietly
+degrades match quality, since both are still valid 1,024-dimensional
+vectors -- so don't drop the parameter at either call site.
+
+Embeddings are L2-normalized (sentence-transformers'
+`normalize_embeddings=True`) so cosine distance (pgvector's `<=>`
+operator, used throughout storage.py) is a meaningful metric for them --
+BGE's own usage recommendations assume normalized embeddings, same
+reasoning recognition.py already documents for facenet-pytorch's face
+embeddings.
+
+The model's weights must already be present in this container's Hugging
+Face cache (HF_HOME, api/Containerfile's pre-download RUN step) before
+_load_embedder ever runs -- HF_HUB_OFFLINE=1 (also set there) makes a
+cache miss fail loudly (surfaces as a bare exception, not swallowed into
+EmbeddingNotConfigured -- see _load_embedder below) instead of silently
+reaching out to huggingface.co from a deployed container. Changing
+LUMINARY_EMBEDDING_MODEL means rebuilding the image with a matching
+`--build-arg` (see the Containerfile/Makefile) or this will always fail
+at runtime.
 
 --- When this runs ---
 
 embed_description(photo_id) is called from enrich.enrich_description()
 immediately after a new `description` is stored, for every one of that
-function's own call sites (a sync's first description, tag/untag, "Refresh
-Faces" auto-tagging, deleting an individual, and the bulk "Refresh
-Descriptions" job -- see enrich.py's module docstring for the full list).
-The embedding always describes the *current* description text, so it's
-regenerated in lockstep with it rather than on any separate schedule --
-there's no case where `description` changes without `description_embedding`
-being refreshed alongside it, and no case where this runs without
-`description` having just changed.
+function's own call sites (a sync's first description, tag/untag,
+"Refresh Faces" auto-tagging, deleting an individual, and the bulk
+"Refresh Descriptions" job -- see enrich.py's module docstring for the
+full list). The embedding always describes the *current* description
+text, so it's regenerated in lockstep with it rather than on any separate
+schedule -- there's no case where `description` changes without
+`description_embedding` being refreshed alongside it, and no case where
+this runs without `description` having just changed. This is also how an
+already-populated library picks up a *new* embedding model after one is
+swapped in (changing LUMINARY_EMBEDDING_MODEL, or this module's default):
+running "Refresh Descriptions" re-embeds every photo's existing
+`description` text under the new model, with no separate backfill job
+needed.
 
 Best-effort, same shape as every other derived field in this app: a
-failure (missing config, network error, pgvector not installed -- see
-database.py's init_db()) is logged and leaves description_embedding as
-whatever it already was, never raised to enrich_description.
+failure (missing torch/sentence-transformers, a cache miss under
+HF_HUB_OFFLINE=1, pgvector not installed -- see database.py's init_db())
+is logged and leaves description_embedding as whatever it already was,
+never raised to enrich_description.
 """
 
 import logging
+import threading
 
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
 
-# text-embedding-3-large's native output size -- see this module's
-# docstring for why this is never truncated via the OpenAI API's own
-# `dimensions` parameter, and why the column is declared `halfvec`, not
-# `vector`, to stay indexable at this size.
-EMBEDDING_DIMENSIONS = 3072
+# BAAI/bge-large-en-v1.5's native output size -- see this module's
+# docstring for why this is never shortened, and why the column is
+# declared `vector`, not `halfvec`, at this dimension count.
+EMBEDDING_DIMENSIONS = 1024
+
+# BGE's own usage instructions: prepend this to a *query* before embedding
+# it, never to a passage/document -- see this module's docstring.
+_QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
 
 class EmbeddingNotConfigured(Exception):
-    """Raised when the openai embeddings backend isn't configured --
-    mirrors enrich.EnrichmentNotConfigured/chat.ChatNotConfigured."""
+    """Raised when the local embedding model's dependencies aren't
+    installed -- mirrors chat.ChatNotConfigured/
+    recognition.FaceRecognitionNotConfigured exactly, including the same
+    "only ImportError, nothing else" rule (see _load_embedder below): a
+    real load failure (e.g. a Hugging Face cache miss under
+    HF_HUB_OFFLINE=1) must propagate as a bare exception, not get
+    misreported as "not configured"."""
 
 
-def embed_text(text: str):
-    """Embeds arbitrary text with the same model/endpoint as
-    embed_description below -- shared by that function (embedding a
-    photo's `description`) and storage.search_photos (embedding a user's
-    free-text search query), since both need the exact same embedding
-    space to be comparable via pgvector's `<=>` operator. Raises
-    EmbeddingNotConfigured/whatever the openai SDK itself raises; unlike
-    embed_description, this is not best-effort -- both callers want a real
-    error to surface (a 503/502 to the API client), not a silently
-    skipped embedding."""
-    from openai import OpenAI  # lazy: keep this an optional dependency at import time, like chat.py/enrich.py
-    from pgvector import HalfVector
+_embedder_lock = threading.Lock()
+_embedder = None
 
-    from .config import get_embedding_model, get_openai_api_key, get_openai_base_url
 
-    api_key = get_openai_api_key()
-    if not api_key:
-        raise EmbeddingNotConfigured(
-            "Description embeddings aren't configured: set LUMINARY_OPENAI_API_KEY "
-            "(and LUMINARY_OPENAI_BASE_URL if this isn't api.openai.com)."
-        )
+def _load_embedder():
+    """Loads and caches LUMINARY_EMBEDDING_MODEL for the life of this
+    process -- same lazy-import/module-global-cache/lock shape as
+    chat._load_florence()/recognition._load_embedder(). Only ImportError
+    (missing torch/sentence-transformers) becomes EmbeddingNotConfigured;
+    any other exception from SentenceTransformer(...) (e.g. the offline
+    cache-miss OSError HF_HUB_OFFLINE=1 raises for a model that was never
+    pre-downloaded into the image) is left to propagate as-is, same
+    reasoning chat._load_florence() documents for Florence-2."""
+    global _embedder
 
-    model = get_embedding_model()
-    client = OpenAI(api_key=api_key, base_url=get_openai_base_url())
-    try:
-        response = client.embeddings.create(model=model, input=text)
-    except Exception as exc:
-        from .chat import _log_upstream_error_body  # same diagnostic chat.py/enrich.py's openai calls use
+    with _embedder_lock:
+        if _embedder is not None:
+            return _embedder
 
-        _log_upstream_error_body(exc)
-        raise
-    return HalfVector(response.data[0].embedding)
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise EmbeddingNotConfigured(
+                "Description embeddings require the torch/sentence-transformers dependencies to be installed."
+            ) from exc
+
+        from .config import get_embedding_device, get_embedding_model
+
+        model_id = get_embedding_model()
+        device = get_embedding_device()
+
+        logger.info("Loading embedding model %s on %s (first use only)", model_id, device)
+        _embedder = SentenceTransformer(model_id, device=device)
+        logger.info("Embedding model ready")
+        return _embedder
+
+
+def embed_text(text: str, is_query: bool = False):
+    """Embeds arbitrary text with the local model _load_embedder loads --
+    shared by embed_description below (embedding a photo's `description`,
+    is_query=False) and storage.search_photos (embedding a user's
+    free-text search query, is_query=True), since both need the exact
+    same embedding space to be comparable via pgvector's `<=>` operator.
+    `is_query` controls BGE's asymmetric query instruction -- see this
+    module's docstring. Raises EmbeddingNotConfigured, or whatever
+    sentence-transformers/torch itself raises; unlike embed_description,
+    this is not best-effort -- both callers want a real error to surface
+    (a 503/502 to the API client), not a silently skipped embedding."""
+    from pgvector import Vector
+
+    model = _load_embedder()
+    input_text = _QUERY_INSTRUCTION + text if is_query else text
+    embedding = model.encode(input_text, normalize_embeddings=True)
+    return Vector(embedding.tolist())
 
 
 def embed_description(photo_id: str) -> bool:
@@ -133,7 +201,18 @@ def embed_description(photo_id: str) -> bool:
         logger.warning("Could not embed description for photo %s", photo_id, exc_info=True)
         return False
 
-    with get_connection() as conn:
-        conn.execute("UPDATE photos SET description_embedding = %s WHERE id = %s", (embedding, photo_id))
-        conn.commit()
+    # The write-back needs its own try/except, same as embed_text() above
+    # -- a database-side failure here (most commonly description_embedding
+    # not existing as a real pgvector column at all, e.g. the extension
+    # was never installed on this Postgres server) must degrade the same
+    # best-effort way a failure to *compute* the embedding already does,
+    # not propagate out of this "never raises" function and, in turn, out
+    # of enrich.enrich_description's own best-effort call to it.
+    try:
+        with get_connection() as conn:
+            conn.execute("UPDATE photos SET description_embedding = %s WHERE id = %s", (embedding, photo_id))
+            conn.commit()
+    except Exception:
+        logger.warning("Could not store description embedding for photo %s", photo_id, exc_info=True)
+        return False
     return True

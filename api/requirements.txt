@@ -14,12 +14,11 @@ aiohttp==3.14.5
 psycopg[binary]==3.3.6
 
 # photos.description_embedding (embeddings.py) -- registers the pgvector
-# extension's vector/halfvec types with psycopg3 (database.py's
-# get_connection()) so a Python list of floats can be read/written to a
-# halfvec column directly. The *server-side* pgvector extension itself is
-# a separate, Postgres-side install -- see db/create_extensions.sql and
-# the README's "Database" section; this package is only the client-side
-# type adapter.
+# extension's vector type with psycopg3 (database.py's get_connection())
+# so a Python list of floats can be read/written to a vector column
+# directly. The *server-side* pgvector extension itself is a separate,
+# Postgres-side install -- see db/create_extensions.sql and the README's
+# "Database" section; this package is only the client-side type adapter.
 pgvector==0.5.1
 
 # Photo chat: path 1 (any OpenAI-compatible multimodal endpoint)
@@ -55,3 +54,11 @@ facenet-pytorch==2.5.3
 # Matches torch==2.15.0 above (the index this environment resolves against
 # only has 0.29.2 for it -- older 0.x releases are yanked upstream).
 torchvision==0.29.2
+
+# photos.description_embedding (embeddings.py) -- a local Hugging Face
+# sentence-embedding model (BAAI/bge-large-en-v1.5 by default,
+# LUMINARY_EMBEDDING_MODEL), run in-process rather than calling an
+# OpenAI-*compatible* embeddings endpoint (see embeddings.py's module
+# docstring for why). Built on the same torch/transformers stack Florence-2
+# above already requires -- no second ML framework.
+sentence-transformers==3.3.1

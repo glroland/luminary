@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from app import enrich
+from app import embeddings, enrich
 from app.database import get_connection
 
 
@@ -181,6 +181,17 @@ def test_enrich_description_is_a_noop_for_a_missing_photo(client, monkeypatch):
 
 def test_enrich_description_stores_the_composed_text(client, monkeypatch):
     monkeypatch.setattr(enrich, "_compose", lambda photo_id, facts: "A composed description.")
+
+    # Replacing _compose above bypasses enrich_description's own
+    # EnrichmentNotConfigured short-circuit, so this test (unlike most
+    # others exercising enrich_description) actually reaches
+    # embeddings.embed_description/embed_text -- not this test's concern,
+    # and left unmocked it would trigger a real local embedding-model
+    # download/load the first time this runs in a fresh test process.
+    def _embeddings_not_exercised(text, is_query=False):
+        raise embeddings.EmbeddingNotConfigured("embeddings not exercised by this test")
+
+    monkeypatch.setattr(embeddings, "embed_text", _embeddings_not_exercised)
     _insert_photo("photo-1")
 
     enrich.enrich_description("photo-1")

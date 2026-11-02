@@ -153,16 +153,24 @@ def get_geocode_zoom() -> int:
 
 
 def get_embedding_model() -> str:
-    """Model name for photos.description_embedding -- uses the *same*
-    LUMINARY_OPENAI_API_KEY/_BASE_URL as chat.py's "openai" backend/
-    enrich.py's description rewrite (an embeddings endpoint is just
-    another model on the same OpenAI-*compatible* server), but its own
-    model name, since a provider's embedding and chat-completion models
-    are essentially always different. Defaults to OpenAI's
-    text-embedding-3-large -- see embeddings.py's module docstring for
-    why that model, at its full native dimension count (never truncated
-    via the OpenAI API's own `dimensions` parameter)."""
-    return os.environ.get("LUMINARY_EMBEDDING_MODEL", "text-embedding-3-large")
+    """Hugging Face model id for photos.description_embedding -- a local
+    sentence-embedding model run in-process via sentence-transformers
+    (embeddings.py), deliberately *not* a call to an OpenAI-*compatible*
+    embeddings endpoint -- LUMINARY_OPENAI_BASE_URL may point at a
+    self-hosted chat gateway with no embeddings endpoint at all, or one
+    whose embeddings endpoint produces a different, incompatible vector
+    space than whatever already generated the embeddings stored in this
+    database. Defaults to BAAI/bge-large-en-v1.5 -- see embeddings.py's
+    module docstring for why that model, and why its weights must already
+    be present in this container's Hugging Face cache (api/Containerfile)
+    rather than fetched at first use."""
+    return os.environ.get("LUMINARY_EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+
+
+def get_embedding_device() -> str:
+    """Mirrors get_florence_device() above -- "cpu" by default, "cuda"/
+    "cuda:0" etc. if a GPU is available to the pod."""
+    return os.environ.get("LUMINARY_EMBEDDING_DEVICE", "cpu")
 
 
 # --- Automatic face recognition ("Refresh Faces", recognition.py) --------

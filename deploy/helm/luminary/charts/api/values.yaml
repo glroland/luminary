@@ -70,12 +70,19 @@ env:
   # streaming API to use regardless of this setting).
   openaiStreaming: false
   # --- Description embeddings for similarity search (embeddings.py) -----
-  # Model name for photos.description_embedding, on the same endpoint/
-  # credentials as the openai settings above. Empty here means "use the
-  # app's own default" (text-embedding-3-large -- see embeddings.py's
-  # module docstring); only set this if LUMINARY_OPENAI_BASE_URL points at
-  # a self-hosted server whose embedding model is called something else.
+  # Hugging Face model id for photos.description_embedding -- a local
+  # model run in-process (sentence-transformers), unrelated to the openai
+  # settings above (see embeddings.py's module docstring for why: a
+  # self-hosted OpenAI-compatible endpoint may have no embeddings endpoint
+  # at all, or an incompatible one). Empty here means "use the app's own
+  # default" (BAAI/bge-large-en-v1.5); its weights must already be baked
+  # into the api image at build time (api/Containerfile's
+  # LUMINARY_EMBEDDING_MODEL build-arg) -- if you override this, rebuild
+  # the image with a matching --build-arg too, or it'll fail to load.
   embeddingModel: ""
+  # "cpu" or "cuda" (a GPU-scheduled node/runtime class is required for
+  # "cuda"; not set up by this chart) -- same as florenceDevice below.
+  embeddingDevice: cpu
   # --- Photo chat: path 2, local Florence-2 vision-language model -------
   # https://huggingface.co/microsoft/Florence-2-base . Runs in-process in
   # the api pod via torch/transformers -- substantially increases memory

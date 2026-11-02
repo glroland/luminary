@@ -125,14 +125,14 @@ def test_delete_photo_also_deletes_its_faces(client):
     assert storage.get_faces("photo-1") == []
 
 
-def _embedding_vector(*leading_values, dims=3072):
-    """A full-width halfvec(3072) value, as the column itself requires --
+def _embedding_vector(*leading_values, dims=1024):
+    """A full-width vector(1024) value, as the column itself requires --
     `leading_values` set the first few components (which, padded with
     zeros, are what actually determines cosine similarity in these
     tests), the rest filled with zeros."""
-    from pgvector import HalfVector
+    from pgvector import Vector
 
-    return HalfVector(list(leading_values) + [0.0] * (dims - len(leading_values)))
+    return Vector(list(leading_values) + [0.0] * (dims - len(leading_values)))
 
 
 def _insert_photo_with_embedding(photo_id: str, description: str, *leading_values) -> None:
@@ -151,11 +151,11 @@ def test_search_photos_orders_by_similarity_descending(client, monkeypatch):
     # Identical direction -> similarity 1.0; orthogonal -> 0.0; a 45-degree
     # angle -> ~0.707 -- controllable, exact cosine similarities via a
     # couple of nonzero leading components, zero-padded out to the
-    # column's full 3072 width.
+    # column's full 1024 width.
     _insert_photo_with_embedding("photo-orthogonal", "a mountain at dusk", 0.0, 1.0)
     _insert_photo_with_embedding("photo-identical", "a cat on a sofa", 1.0, 0.0)
     _insert_photo_with_embedding("photo-diagonal", "a cat sleeping on a couch", 1.0, 1.0)
-    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text: _embedding_vector(1.0, 0.0))
+    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text, is_query=False: _embedding_vector(1.0, 0.0))
 
     results = storage.search_photos("a cat", threshold=0.0)
 
@@ -168,7 +168,7 @@ def test_search_photos_orders_by_similarity_descending(client, monkeypatch):
 def test_search_photos_filters_out_results_below_threshold(client, monkeypatch):
     _insert_photo_with_embedding("photo-orthogonal", "a mountain at dusk", 0.0, 1.0)
     _insert_photo_with_embedding("photo-identical", "a cat on a sofa", 1.0, 0.0)
-    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text: _embedding_vector(1.0, 0.0))
+    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text, is_query=False: _embedding_vector(1.0, 0.0))
 
     results = storage.search_photos("a cat", threshold=0.5)
 
@@ -178,7 +178,7 @@ def test_search_photos_filters_out_results_below_threshold(client, monkeypatch):
 def test_search_photos_excludes_photos_with_no_embedding_yet(client, monkeypatch):
     _insert_bare_photo_row("photo-no-embedding")
     _insert_photo_with_embedding("photo-identical", "a cat on a sofa", 1.0, 0.0)
-    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text: _embedding_vector(1.0, 0.0))
+    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text, is_query=False: _embedding_vector(1.0, 0.0))
 
     results = storage.search_photos("a cat", threshold=0.0)
 
@@ -188,7 +188,7 @@ def test_search_photos_excludes_photos_with_no_embedding_yet(client, monkeypatch
 def test_search_photos_propagates_a_misconfigured_embeddings_backend(client, monkeypatch):
     from app import embeddings
 
-    def boom(text):
+    def boom(text, is_query=False):
         raise embeddings.EmbeddingNotConfigured("not configured")
 
     monkeypatch.setattr(storage.embeddings, "embed_text", boom)

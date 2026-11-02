@@ -395,25 +395,30 @@ active search the same way starting a search clears those — the four
 sidebar sections are mutually exclusive ways to narrow the same grid, not
 combinable filters.
 
-`embeddings.py` embeds with OpenAI's `text-embedding-3-large`
-(`LUMINARY_EMBEDDING_MODEL`, same `LUMINARY_OPENAI_*` endpoint/credentials
-"Description enrichment" above already uses) at its full native 3072
-dimensions, never truncated down via the OpenAI API's own `dimensions`
-parameter. The column is declared `halfvec(3072)`, not `vector(3072)`:
-pgvector's plain `vector` type only supports an index (HNSW/IVFFlat) up
-to 2,000 dimensions, but `halfvec` (16-bit floats) raises that to 4,000 —
-comfortably covering this model's full 3,072 dimensions without
-truncating the embedding just to fit under the index's cap. See
-`embeddings.py`'s module docstring for the full reasoning, including what
-to change if `LUMINARY_OPENAI_BASE_URL` points at a different server/
-model.
+`embeddings.py` embeds with a **local** Hugging Face sentence-embedding
+model (`LUMINARY_EMBEDDING_MODEL`, default `BAAI/bge-large-en-v1.5`), run
+in-process via `sentence-transformers` — deliberately *not* a call to an
+OpenAI-compatible embeddings endpoint. `LUMINARY_OPENAI_*` is for *chat
+completions* only (see "Description enrichment" above); a self-hosted
+OpenAI-compatible server may expose no embeddings endpoint at all, or one
+backed by a different, incompatible model than whatever already generated
+the embeddings stored in this database — running the model ourselves
+removes that dependency entirely. At 1,024 native dimensions, the column
+is declared `vector(1024)` (pgvector's plain type, whose HNSW/IVFFlat
+index cap is 2,000 dimensions — no need for `halfvec`'s precision
+tradeoff at this size, unlike the previous OpenAI `text-embedding-3-large`
+choice). See `embeddings.py`'s module docstring for the full reasoning,
+including what to do if you swap in a different embedding model.
 
 `description_embedding` is regenerated automatically alongside
 `description` itself — same trigger list as "Description enrichment"
 above (including the "Refresh Descriptions" button), no separate step.
+Running "Refresh Descriptions" is also how an already-populated library
+picks up a newly-swapped-in `LUMINARY_EMBEDDING_MODEL` — it re-embeds
+every photo's existing description text, no separate backfill job.
 Best-effort, same semantics as every other derived field in this app: a
-failure (missing config, network error) just leaves it as whatever it
-already was.
+failure (missing torch/sentence-transformers, a Hugging Face cache miss)
+just leaves it as whatever it already was.
 
 **Requires the `pgvector` Postgres extension** — see `db/
 create_extensions.sql` and the "Database" section above. Without it,
@@ -463,18 +468,18 @@ be pointed at any API service URL without rebuilding.
 The api image's build also downloads and bakes in Florence-2
 (`LUMINARY_FLORENCE_MODEL`, same Makefile variable `run-api` uses --
 `make build-api LUMINARY_FLORENCE_MODEL=...` passes it through as a
-`--build-arg`) and facenet-pytorch's vggface2 face-embedding weights
-("Refresh Faces"), so neither is ever downloaded at container startup or
-on a pod's first real chat/sync/"Refresh Faces" request — `HF_HUB_OFFLINE=1`
-is set for the running container specifically to make that a hard
-guarantee for Florence-2 (a mismatched `LUMINARY_FLORENCE_MODEL` at deploy
-time fails loudly instead of silently fetching a different checkpoint).
-`photos.description_embedding`'s model (`LUMINARY_EMBEDDING_MODEL`, see
-"Similarity search" below) has nothing to pre-cache this way -- it's a
-remote OpenAI-compatible API call, not a local model file. This does mean
-`make build-api`/the Jenkinsfile's equivalent step need network access to
-Hugging Face/GitHub during the build, and the resulting image is
-correspondingly larger (both sets of weights, not just the Python
+`--build-arg`), facenet-pytorch's vggface2 face-embedding weights
+("Refresh Faces"), and the local embedding model behind similarity search
+(`LUMINARY_EMBEDDING_MODEL`, same override story — see "Similarity
+search" below), so none of the three is ever downloaded at container
+startup or on a pod's first real chat/sync/"Refresh Faces"/search
+request — `HF_HUB_OFFLINE=1` is set for the running container
+specifically to make that a hard guarantee (a mismatched
+`LUMINARY_FLORENCE_MODEL`/`LUMINARY_EMBEDDING_MODEL` at deploy time fails
+loudly instead of silently fetching a different checkpoint). This does
+mean `make build-api`/the Jenkinsfile's equivalent step need network
+access to Hugging Face/GitHub during the build, and the resulting image
+is correspondingly larger (all three sets of weights, not just the Python
 dependencies) -- see `api/Containerfile`'s own comments for the full
 reasoning.
 
