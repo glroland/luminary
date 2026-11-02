@@ -46,7 +46,7 @@ api:
     accessMode: ReadWriteOnce
   env:
     corsOrigins: "*"
-    photosUri: "smb://data.home.glroland.com/photo/2019 Spring Break in Boone"
+    photosUri: "smb://data.home.glroland.com/photo"
     database:
       host: db.home.glroland.com
       port: 5432
