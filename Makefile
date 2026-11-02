@@ -84,7 +84,14 @@ LUMINARY_OPENAI_MODEL ?= gemma-4
 # once per process and cached (chat.py's _florence_model/_florence_processor),
 # so changing this requires a full restart of run-api, not just re-running a
 # chat request -- `--reload` only restarts on file changes, not env changes.
-# Override e.g. `make run-api LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-large`.
+# Also passed to `build-api` as a --build-arg (see api/Containerfile), which
+# pre-downloads and caches this exact checkpoint into the image at build
+# time -- override both together, or the image's build-time cache and its
+# own runtime default will disagree and it'll try to fetch the mismatched
+# one instead of using the cache (api/Containerfile's own comments have the
+# full reasoning). Override e.g.
+# `make run-api LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-large` /
+# `make build-api LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-large`.
 LUMINARY_FLORENCE_MODEL ?= microsoft/Florence-2-base
 
 # Env vars for run-api: points at LUMINARY_DATABASE_NAME (the dev database).
@@ -174,7 +181,9 @@ run-web:
 build: build-api build-web
 
 build-api:
-	$(CONTAINER_ENGINE) build -t $(API_IMAGE):$(TAG) -f api/Containerfile api
+	$(CONTAINER_ENGINE) build -t $(API_IMAGE):$(TAG) \
+		--build-arg LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) \
+		-f api/Containerfile api
 
 build-web:
 	$(CONTAINER_ENGINE) build -t $(WEB_IMAGE):$(TAG) -f web/Containerfile web

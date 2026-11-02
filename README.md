@@ -460,6 +460,24 @@ unprivileged nginx image serves it and reverse-proxies `/api/*` to
 templated into the nginx config with `envsubst`). This lets the same image
 be pointed at any API service URL without rebuilding.
 
+The api image's build also downloads and bakes in Florence-2
+(`LUMINARY_FLORENCE_MODEL`, same Makefile variable `run-api` uses --
+`make build-api LUMINARY_FLORENCE_MODEL=...` passes it through as a
+`--build-arg`) and facenet-pytorch's vggface2 face-embedding weights
+("Refresh Faces"), so neither is ever downloaded at container startup or
+on a pod's first real chat/sync/"Refresh Faces" request — `HF_HUB_OFFLINE=1`
+is set for the running container specifically to make that a hard
+guarantee for Florence-2 (a mismatched `LUMINARY_FLORENCE_MODEL` at deploy
+time fails loudly instead of silently fetching a different checkpoint).
+`photos.description_embedding`'s model (`LUMINARY_EMBEDDING_MODEL`, see
+"Similarity search" below) has nothing to pre-cache this way -- it's a
+remote OpenAI-compatible API call, not a local model file. This does mean
+`make build-api`/the Jenkinsfile's equivalent step need network access to
+Hugging Face/GitHub during the build, and the resulting image is
+correspondingly larger (both sets of weights, not just the Python
+dependencies) -- see `api/Containerfile`'s own comments for the full
+reasoning.
+
 ## Deploying to OpenShift
 
 The Helm chart in `deploy/helm/luminary` deploys both components:
