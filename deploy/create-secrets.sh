@@ -13,17 +13,24 @@
 # password) is provisioned separately via `make db`/`db/` -- see the
 # README's "Database" section.
 #
-# The database secret is always required. The photos-backend and OpenAI
-# secrets are skipped (left blank, nothing created/touched) if you leave
-# their first prompt empty -- e.g. a local/NFS photos backend or S3 via IAM
-# role needs no credentials, and you may not be using the openai chat
-# backend at all.
+# The database secret is always required, and its prompts default to the
+# username/password `make db`/`make db-recreate` themselves default to
+# (Makefile's LUMINARY_DATABASE_USER/_PASSWORD) -- press enter to accept.
+# The photos-backend and OpenAI secrets are skipped (left blank, nothing
+# created/touched) if you leave their first prompt empty -- e.g. a
+# local/NFS photos backend or S3 via IAM role needs no credentials, and you
+# may not be using the openai chat backend at all.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-luminary}"
 DB_SECRET_NAME="luminary-db-credentials"
 PHOTOS_SECRET_NAME="luminary-photos-credentials"
 OPENAI_SECRET_NAME="luminary-openai-credentials"
+
+# Matches Makefile's LUMINARY_DATABASE_USER/_PASSWORD defaults (what
+# `make db`/`make db-recreate` themselves provision when not overridden).
+DB_DEFAULT_USERNAME="luminary"
+DB_DEFAULT_PASSWORD="luminary"
 
 if ! command -v oc >/dev/null 2>&1; then
   echo "error: 'oc' (OpenShift CLI) not found on PATH" >&2
@@ -73,9 +80,24 @@ prompt_optional() {
   printf -v "${var_name}" '%s' "${value}"
 }
 
+prompt_with_default() {
+  # $1=prompt label $2=var name $3=default $4=silent(1/0) -- enter accepts the default
+  local label="$1" var_name="$2" default="$3" silent="$4" value=""
+  if [ "${silent}" = "1" ]; then
+    read -r -s -p "${label} [${default}]: " value
+    echo
+  else
+    read -r -p "${label} [${default}]: " value
+  fi
+  if [ -z "${value}" ]; then
+    value="${default}"
+  fi
+  printf -v "${var_name}" '%s' "${value}"
+}
+
 echo "--- Database credentials (${DB_SECRET_NAME}, always required) ---"
-prompt_required "Database username" DB_USERNAME 0
-prompt_required "Database password" DB_PASSWORD 1
+prompt_with_default "Database username" DB_USERNAME "${DB_DEFAULT_USERNAME}" 0
+prompt_with_default "Database password" DB_PASSWORD "${DB_DEFAULT_PASSWORD}" 1
 echo
 
 echo "--- Photos backend credentials (${PHOTOS_SECRET_NAME}, blank to skip) ---"
