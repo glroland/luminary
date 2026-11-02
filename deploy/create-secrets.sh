@@ -42,8 +42,12 @@ OPENAI_SECRET_NAME="luminary-openai-credentials"
 # `make db`/`make db-recreate` themselves provision when not overridden).
 # Name/username aren't secrets, so these fall back to LUMINARY_DATABASE_
 # NAME/_USER from the environment (e.g. already exported for `make
-# db-create`) and are always echoed literally at the prompt.
-DB_DEFAULT_NAME="${LUMINARY_DATABASE_NAME:-luminary}"
+# db-create`) and are always echoed literally at the prompt. The database
+# name's own placeholder is "luminary-prod" rather than the generic
+# "luminary" username/password use -- this script is normally run against
+# a real prod database created via `make db-create`, and that's the name
+# used in the examples here/in the README's "Database" section.
+DB_DEFAULT_NAME="${LUMINARY_DATABASE_NAME:-luminary-prod}"
 DB_DEFAULT_USERNAME="${LUMINARY_DATABASE_USER:-luminary}"
 # The password default is handled separately below: LUMINARY_DATABASE_
 # PASSWORD from the environment *is* a real secret, so unlike the two
