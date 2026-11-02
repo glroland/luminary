@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "web.fullname" . }}
+  labels:
+    {{- include "web.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "web.appName" . }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "web.appName" . }}
+        app.kubernetes.io/component: web
+    spec:
+      imagePullSecrets:
+        - name: {{ include "web.pullSecretName" . }}
+      containers:
+        - name: web
+          image: "{{ .Values.global.image.repository }}/luminary-web:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.port }}
+          env:
+            - name: API_PROXY_TARGET
+              value: "http://{{ include "web.apiFullname" . }}:{{ .Values.global.apiPort }}"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.port }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.port }}

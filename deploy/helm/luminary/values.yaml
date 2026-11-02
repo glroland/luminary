@@ -1,19 +1,37 @@
-nameOverride: ""
-fullnameOverride: ""
+# Values shared across the api and web subcharts (charts/api, charts/web) --
+# Helm passes everything under "global:" down into every subchart's own
+# .Values.global automatically, which is how both charts agree on naming,
+# the shared image registry/tag, and the api's port (the web subchart needs
+# the latter to build its nginx proxy target) without referencing each
+# other directly.
+global:
+  nameOverride: ""
+  fullnameOverride: ""
+  # Port the api container listens on and the api Service/Route expose --
+  # shared because the web subchart's nginx proxy target needs it too.
+  apiPort: 8080
+  # Shared registry/org path and tag for both the api and web images --
+  # the Jenkinsfile pushes both as "<repository>/luminary-api:$BUILD_NUMBER"
+  # and "<repository>/luminary-web:$BUILD_NUMBER", so both components always
+  # come from the same registry and build.
+  image:
+    repository: registry.home.glroland.com/luminary
+    tag: "2"
+  # Base64-encoded .dockerconfigjson for pulling the api/web images above --
+  # same registry credential used by both, hence shared here rather than
+  # duplicated per component. Note this value is plaintext-equivalent
+  # (base64, not encrypted) once committed to source control -- consider
+  # moving it to a values file kept out of git (--values on the CLI,
+  # excluded via .gitignore) or managing this Secret out-of-band instead.
+  imagePullSecretDockerConfigJson: ewogICJhdXRocyI6IHsKICAgICJyZWdpc3RyeS5ob21lLmdscm9sYW5kLmNvbSI6IHsKICAgICAgImF1dGgiOiAiYkhWdGFXNWhjbmtyYjJOd09qZEJRVGxRUjBWTFNVMUxOVWhYVWpBNFFVNUVXbGcwTWtzeE9USklVRVZCT0V0Rk9WTTJSVTFGUlZKUlJUbFVVVFpLTTBSU1dGWllRVUl3U1VKVVRUaz0iLAogICAgICAiZW1haWwiOiAiIgogICAgfQogIH0KfQ==
 
-# Shared registry/org path and tag for both the api and web images --
-# the Jenkinsfile pushes both as "<repository>/luminary-api:$BUILD_NUMBER"
-# and "<repository>/luminary-web:$BUILD_NUMBER", so both components always
-# come from the same registry and build.
-image:
-  repository: registry.home.glroland.com/luminary
-  tag: "2"
-
+# Everything below is passed straight through to the matching subchart
+# (charts/api, charts/web) as its own root values -- see each subchart's
+# values.yaml for defaults/documentation of these fields.
 api:
   image:
     pullPolicy: IfNotPresent
   replicaCount: 1
-  port: 8080
   resources:
     requests:
       cpu: 2000m
@@ -28,54 +46,18 @@ api:
     accessMode: ReadWriteOnce
   env:
     corsOrigins: "*"
-    # fsspec URI for photo storage: a bare path or file:// uses the PVC
-    # below; s3://, smb://, https://, etc. point at an external backend
-    # instead (set api.persistence.enabled=false in that case).
     photosUri: "smb://data.home.glroland.com/photo/2019 Spring Break in Boone"
-    # --- Database: photo metadata + thumbnails -----------------------------
-    # A remote Postgres server that already exists outside this chart/the
-    # ArgoCD app it tracks -- this chart never stands up Postgres itself.
-    # Provision the database/role on it with `make db`/`make db-recreate`
-    # (see db/ and the README) before deploying.
     database:
       host: db.home.glroland.com
       port: 5432
       name: luminary
-    # Name of a Secret (same namespace, keys `username`/`password`) holding
-    # the credentials `make db` provisioned above. Required -- unlike
-    # photosCredentialsSecret, Postgres always needs something to
-    # authenticate with. Never put these directly in this values file.
     databaseCredentialsSecret: luminary-db-credentials
-    # Name of a Secret (same namespace, keys `username`/`password`) used to
-    # authenticate to photosUri -- e.g. an smb:// share. Leave empty if the
-    # backend needs no credentials (local/NFS, or S3 via IAM role). Never
-    # put credentials directly in photosUri or in this values file.
     photosCredentialsSecret: ""
-    # --- Photo chat: path 1, any OpenAI-*compatible* multimodal endpoint ---
-    # Base URL of the endpoint -- never assumed to be api.openai.com; point
-    # this at a self-hosted OpenAI-compatible server (vLLM, Ollama, LM
-    # Studio, etc). Leave empty only if the endpoint genuinely *is*
-    # api.openai.com (the openai SDK's own default).
     openaiBaseUrl: "https://maas.apps.ocp.home.glroland.com/sandbox/gemma-4/v1"
-    # Model name as that server calls it -- required, no default.
     openaiModel: "gemma-4"
-    # Name of a Secret (same namespace, key `apiKey`) holding the API key.
-    # Leave empty if the endpoint needs no key. Never put the key directly
-    # in this values file.
     openaiApiKeySecret: ""
-    # Stream the reply back token-by-token instead of all at once. Off by
-    # default; only applies to the openai backend (Florence-2 has no
-    # streaming API to use regardless of this setting).
     openaiStreaming: false
-    # --- Photo chat: path 2, local Florence-2 vision-language model -------
-    # https://huggingface.co/microsoft/Florence-2-base . Runs in-process in
-    # the api pod via torch/transformers -- substantially increases memory
-    # use (bump api.resources above; budget several GiB for CPU inference,
-    # more for -large) and cold-start time (weights are downloaded and
-    # loaded into memory on first chat request, then cached).
     florenceModel: microsoft/Florence-2-base
-    # "cpu" or "cuda" (a GPU-scheduled node/runtime class is required for
-    # "cuda"; not set up by this chart).
     florenceDevice: cpu
   route:
     enabled: true

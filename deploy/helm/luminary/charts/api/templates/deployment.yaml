@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "api.fullname" . }}
+  labels:
+    {{- include "api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "api.appName" . }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "api.appName" . }}
+        app.kubernetes.io/component: api
+    spec:
+      imagePullSecrets:
+        - name: {{ include "api.pullSecretName" . }}
+      containers:
+        - name: api
+          image: "{{ .Values.global.image.repository }}/luminary-api:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.global.apiPort }}
+          env:
+            - name: LUMINARY_PHOTOS_URI
+              value: {{ .Values.env.photosUri | quote }}
+            {{- if .Values.env.photosCredentialsSecret }}
+            - name: LUMINARY_PHOTOS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.photosCredentialsSecret }}
+                  key: username
+            - name: LUMINARY_PHOTOS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.photosCredentialsSecret }}
+                  key: password
+            {{- end }}
+            - name: LUMINARY_DATABASE_HOST
+              value: {{ .Values.env.database.host | quote }}
+            - name: LUMINARY_DATABASE_PORT
+              value: {{ .Values.env.database.port | quote }}
+            - name: LUMINARY_DATABASE_NAME
+              value: {{ .Values.env.database.name | quote }}
+            - name: LUMINARY_DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.databaseCredentialsSecret }}
+                  key: username
+            - name: LUMINARY_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.databaseCredentialsSecret }}
+                  key: password
+            - name: LUMINARY_CORS_ORIGINS
+              value: {{ .Values.env.corsOrigins | quote }}
+            {{- if .Values.env.openaiBaseUrl }}
+            - name: LUMINARY_OPENAI_BASE_URL
+              value: {{ .Values.env.openaiBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.env.openaiModel }}
+            - name: LUMINARY_OPENAI_MODEL
+              value: {{ .Values.env.openaiModel | quote }}
+            {{- end }}
+            {{- if .Values.env.openaiApiKeySecret }}
+            - name: LUMINARY_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.openaiApiKeySecret }}
+                  key: apiKey
+            {{- end }}
+            - name: LUMINARY_OPENAI_STREAMING
+              value: {{ .Values.env.openaiStreaming | quote }}
+            - name: LUMINARY_FLORENCE_MODEL
+              value: {{ .Values.env.florenceModel | quote }}
+            - name: LUMINARY_FLORENCE_DEVICE
+              value: {{ .Values.env.florenceDevice | quote }}
+            - name: PORT
+              value: {{ .Values.global.apiPort | quote }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.global.apiPort }}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.global.apiPort }}
+            initialDelaySeconds: 10
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "api.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

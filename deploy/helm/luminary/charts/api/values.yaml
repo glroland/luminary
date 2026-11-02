@@ -1,0 +1,82 @@
+# Defaults for standalone installs of this subchart. When deployed as part
+# of the luminary umbrella chart, the parent's values.yaml "api:" section
+# overrides these, and "global:" (image repository/tag, api port, naming
+# overrides) is shared with the web subchart -- see the parent chart's
+# values.yaml.
+global:
+  nameOverride: ""
+  fullnameOverride: ""
+  apiPort: 8080
+  image:
+    repository: quay.io/yourorg
+    tag: latest
+
+image:
+  pullPolicy: IfNotPresent
+replicaCount: 1
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClassName: ""
+  accessMode: ReadWriteOnce
+env:
+  corsOrigins: "*"
+  # fsspec URI for photo storage: a bare path or file:// uses the PVC
+  # below; s3://, smb://, https://, etc. point at an external backend
+  # instead (set persistence.enabled=false in that case).
+  photosUri: /data/photos
+  # --- Database: photo metadata + thumbnails -----------------------------
+  # A remote Postgres server that already exists outside this chart/the
+  # ArgoCD app it tracks -- this chart never stands up Postgres itself.
+  # Provision the database/role on it with `make db`/`make db-recreate`
+  # (see db/ and the README) before deploying.
+  database:
+    host: db.example.com
+    port: 5432
+    name: luminary
+  # Name of a Secret (same namespace, keys `username`/`password`) holding
+  # the credentials `make db` provisioned above. Required -- unlike
+  # photosCredentialsSecret, Postgres always needs something to
+  # authenticate with. Never put these directly in this values file.
+  databaseCredentialsSecret: luminary-db-credentials
+  # Name of a Secret (same namespace, keys `username`/`password`) used to
+  # authenticate to photosUri -- e.g. an smb:// share. Leave empty if the
+  # backend needs no credentials (local/NFS, or S3 via IAM role). Never
+  # put credentials directly in photosUri or in this values file.
+  photosCredentialsSecret: ""
+  # --- Photo chat: path 1, any OpenAI-*compatible* multimodal endpoint ---
+  # Base URL of the endpoint -- never assumed to be api.openai.com; point
+  # this at a self-hosted OpenAI-compatible server (vLLM, Ollama, LM
+  # Studio, etc). Leave empty only if the endpoint genuinely *is*
+  # api.openai.com (the openai SDK's own default).
+  openaiBaseUrl: ""
+  # Model name as that server calls it -- required, no default.
+  openaiModel: ""
+  # Name of a Secret (same namespace, key `apiKey`) holding the API key.
+  # Leave empty if the endpoint needs no key. Never put the key directly
+  # in this values file.
+  openaiApiKeySecret: ""
+  # Stream the reply back token-by-token instead of all at once. Off by
+  # default; only applies to the openai backend (Florence-2 has no
+  # streaming API to use regardless of this setting).
+  openaiStreaming: false
+  # --- Photo chat: path 2, local Florence-2 vision-language model -------
+  # https://huggingface.co/microsoft/Florence-2-base . Runs in-process in
+  # the api pod via torch/transformers -- substantially increases memory
+  # use (bump resources above; budget several GiB for CPU inference, more
+  # for -large) and cold-start time (weights are downloaded and loaded
+  # into memory on first chat request, then cached).
+  florenceModel: microsoft/Florence-2-base
+  # "cpu" or "cuda" (a GPU-scheduled node/runtime class is required for
+  # "cuda"; not set up by this chart).
+  florenceDevice: cpu
+route:
+  enabled: true
+  host: ""

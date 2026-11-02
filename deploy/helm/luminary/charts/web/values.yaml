@@ -1,0 +1,27 @@
+# Defaults for standalone installs of this subchart. When deployed as part
+# of the luminary umbrella chart, the parent's values.yaml "web:" section
+# overrides these, and "global:" (image repository/tag, api port, naming
+# overrides) is shared with the api subchart -- see the parent chart's
+# values.yaml.
+global:
+  nameOverride: ""
+  fullnameOverride: ""
+  apiPort: 8080
+  image:
+    repository: quay.io/yourorg
+    tag: latest
+
+image:
+  pullPolicy: IfNotPresent
+replicaCount: 1
+port: 8080
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+route:
+  enabled: true
+  host: ""

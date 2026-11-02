@@ -1,0 +1,6 @@
+apiVersion: v2
+name: api
+description: Luminary API service (FastAPI + Postgres metadata, read-only against the photos backend)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
