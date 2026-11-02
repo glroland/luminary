@@ -3,11 +3,13 @@ import {
   createIndividual,
   deleteIndividual,
   faceThumbnailUrl,
+  fetchDescriptionRefreshStatus,
   fetchFaceRefreshStatus,
   fetchIndividualFaces,
   fetchIndividuals,
   individualThumbnailUrl,
   purgeDatabase,
+  refreshDescriptions,
   refreshFaces,
   untagFace,
   updateIndividual,
@@ -36,6 +38,11 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   // of global app state, since it's specific to the individuals catalog.
   const [refreshStatus, setRefreshStatus] = useState(null);
   const refreshPollRef = useRef(null);
+  // "Refresh Descriptions" (enrich.py's bulk enrich_description job) --
+  // same shape as refreshStatus/refreshPollRef above, but its own state
+  // since the two jobs are independent and can run/poll concurrently.
+  const [descriptionRefreshStatus, setDescriptionRefreshStatus] = useState(null);
+  const descriptionRefreshPollRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
 
   useEffect(() => {
@@ -54,7 +61,22 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         }
       })
       .catch(() => {});
-    return () => clearInterval(refreshPollRef.current);
+    // Same "resume polling if already running" check, for a description
+    // refresh left running from before this page was (re)opened -- unlike
+    // face refresh, nothing auto-triggers this one server-side, but it can
+    // still outlive a page navigation since it's a background job either way.
+    fetchDescriptionRefreshStatus()
+      .then((status) => {
+        if (status.status === "running") {
+          setDescriptionRefreshStatus(status);
+          pollDescriptionRefreshStatus();
+        }
+      })
+      .catch(() => {});
+    return () => {
+      clearInterval(refreshPollRef.current);
+      clearInterval(descriptionRefreshPollRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -128,6 +150,37 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         setRefreshStatus(null);
       }
     }, REFRESH_POLL_INTERVAL_MS);
+  }
+
+  function pollDescriptionRefreshStatus() {
+    clearInterval(descriptionRefreshPollRef.current);
+    descriptionRefreshPollRef.current = setInterval(async () => {
+      try {
+        const status = await fetchDescriptionRefreshStatus();
+        if (status.status === "running") {
+          setDescriptionRefreshStatus(status);
+          return;
+        }
+        clearInterval(descriptionRefreshPollRef.current);
+        setDescriptionRefreshStatus(status);
+        // The regenerated text itself is only visible on a photo's own
+        // modal (App.jsx's photos list), not anywhere on this page -- no
+        // reload here, unlike reloadAfterRefresh() for faces.
+        setTimeout(() => setDescriptionRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
+      } catch {
+        clearInterval(descriptionRefreshPollRef.current);
+        setDescriptionRefreshStatus(null);
+      }
+    }, REFRESH_POLL_INTERVAL_MS);
+  }
+
+  function handleRefreshDescriptions() {
+    refreshDescriptions()
+      .then((status) => {
+        setDescriptionRefreshStatus(status);
+        pollDescriptionRefreshStatus();
+      })
+      .catch((err) => setPageError(err.message));
   }
 
   function handleRefreshFaces() {
@@ -264,6 +317,42 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
                 style={{
                   width: `${
                     refreshStatus.total > 0 ? Math.round((refreshStatus.processed / refreshStatus.total) * 100) : 0
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="management-refresh-descriptions">
+        {!descriptionRefreshStatus || descriptionRefreshStatus.status === "idle" ? (
+          <button type="button" className="refresh-button" onClick={handleRefreshDescriptions}>
+            Refresh Descriptions
+          </button>
+        ) : descriptionRefreshStatus.status === "error" ? (
+          <div className="sync-status sync-status-error" role="status">
+            Refresh failed{descriptionRefreshStatus.error ? `: ${descriptionRefreshStatus.error}` : ""}
+          </div>
+        ) : (
+          <div className="sync-status" role="status" aria-live="polite">
+            <span className="sync-status-label">
+              {descriptionRefreshStatus.status === "completed"
+                ? `Done -- ${descriptionRefreshStatus.updated} updated`
+                : `Refreshing descriptions… ${
+                    descriptionRefreshStatus.total > 0
+                      ? Math.round((descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100)
+                      : 0
+                  }%`}
+            </span>
+            <div className="sync-progress-track">
+              <div
+                className="sync-progress-fill"
+                style={{
+                  width: `${
+                    descriptionRefreshStatus.total > 0
+                      ? Math.round((descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100)
+                      : 0
                   }%`,
                 }}
               />

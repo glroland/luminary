@@ -302,4 +302,69 @@ describe("ManagementPage", () => {
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
   });
+
+  it("runs 'Refresh Descriptions' and reflects progress through to completion", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const refreshMock = vi
+      .spyOn(client, "refreshDescriptions")
+      .mockResolvedValue({ status: "running", processed: 0, total: 10, updated: 0, error: null });
+
+    const statusMock = vi.spyOn(client, "fetchDescriptionRefreshStatus");
+    // First call is the mount-time "is a refresh already running?" check --
+    // idle, so it doesn't preempt the click below. The next two are the
+    // poll loop started by that click.
+    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, updated: 0, error: null });
+    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, updated: 3, error: null });
+    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, updated: 8, error: null });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh descriptions/i }));
+      await Promise.resolve();
+    });
+    expect(refreshMock).toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/refreshing descriptions… 40%/i)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/done -- 8 updated/i)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.getByRole("button", { name: /refresh descriptions/i })).toBeInTheDocument();
+  });
+
+  it("shows a failure message if 'Refresh Descriptions' errors", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "refreshDescriptions").mockResolvedValue({
+      status: "running",
+      processed: 0,
+      total: 0,
+      updated: 0,
+      error: null,
+    });
+    vi.spyOn(client, "fetchDescriptionRefreshStatus").mockResolvedValue({
+      status: "error",
+      processed: 0,
+      total: 0,
+      updated: 0,
+      error: "description enrichment isn't configured",
+    });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh descriptions/i }));
+      await Promise.resolve();
+    });
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+  });
 });

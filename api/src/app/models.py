@@ -152,3 +152,12 @@ class FaceRefreshStatus(BaseModel):
     total: int = 0  # candidate faces found at the start of this run
     matched: int = 0  # of those, how many got auto-tagged
     error: Optional[str] = None
+
+
+class DescriptionRefreshStatus(BaseModel):
+    # Mirrors FaceRefreshStatus's shape -- see enrich.py's _RefreshProgress.
+    status: str  # "idle" | "running" | "completed" | "error"
+    processed: int = 0  # photos considered so far
+    total: int = 0  # photos in the library at the start of this run
+    updated: int = 0  # of those, how many actually got a new description
+    error: Optional[str] = None

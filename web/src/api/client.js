@@ -151,6 +151,14 @@ export async function fetchFaceRefreshStatus() {
   return request("/faces/refresh/status");
 }
 
+export async function refreshDescriptions() {
+  return request("/descriptions/refresh", { method: "POST" });
+}
+
+export async function fetchDescriptionRefreshStatus() {
+  return request("/descriptions/refresh/status");
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

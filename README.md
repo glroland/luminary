@@ -363,6 +363,17 @@ No separate configuration beyond `LUMINARY_OPENAI_API_KEY`/`_MODEL`/
 `_BASE_URL` (see "Photo chat" above) — if those aren't set, description
 enrichment just never runs, the same as the openai chat backend itself.
 
+The management page's **Refresh Descriptions** button
+(`POST /api/descriptions/refresh`, polled via
+`GET /api/descriptions/refresh/status`) is the bulk equivalent of the
+individually-triggered recomputation above: it regenerates `description`
+for every photo in the library, not just ones whose underlying facts just
+changed. Use it after changing `enrich.py`'s prompt (e.g. wanting more
+detail than existing rows were generated with) or after configuring the
+`openai` backend for the first time on a library that was synced before
+it was available. Same background-job shape as "Refresh Faces"
+(own thread, progress polling, `idle`/`running`/`completed`/`error`).
+
 ## Local development
 
 Requires Python 3.12+, Node 20+, `podman` (or `docker`), and a reachable
