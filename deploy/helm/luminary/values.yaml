@@ -52,10 +52,14 @@ api:
       port: 5432
       name: luminary
     databaseCredentialsSecret: luminary-db-credentials
-    photosCredentialsSecret: ""
+    # Created by deploy/scripts/create-secrets.sh -- keep this name in sync
+    # with that script's PHOTOS_SECRET_NAME.
+    photosCredentialsSecret: luminary-photos-credentials
     openaiBaseUrl: "https://maas.apps.ocp.home.glroland.com/sandbox/gemma-4/v1"
     openaiModel: "gemma-4"
-    openaiApiKeySecret: ""
+    # Created by deploy/scripts/create-secrets.sh -- keep this name in sync
+    # with that script's OPENAI_SECRET_NAME.
+    openaiApiKeySecret: luminary-openai-credentials
     openaiStreaming: false
     florenceModel: microsoft/Florence-2-base
     florenceDevice: cpu

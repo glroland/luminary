@@ -389,6 +389,21 @@ The Helm chart in `deploy/helm/luminary` deploys both components:
 - a `Deployment` + `Service` + `Route` for the web app, configured to proxy to
   the API's in-cluster Service
 
+Before the first install, create the Secrets the chart expects for the
+photos backend and the OpenAI-compatible chat endpoint (`oc login` first):
+
+```bash
+deploy/scripts/create-secrets.sh
+```
+
+This prompts for the photos-backend username/password and the OpenAI API
+key, then creates `luminary-photos-credentials` and
+`luminary-openai-credentials` in the `luminary` namespace — the exact names
+`deploy/helm/luminary/values.yaml`'s `api.env.photosCredentialsSecret` /
+`api.env.openaiApiKeySecret` already point at. Skip it if your photos
+backend needs no credentials (local/NFS, S3 via IAM role) and you're not
+using the `openai` chat backend.
+
 ```bash
 helm lint deploy/helm/luminary
 helm template luminary deploy/helm/luminary
