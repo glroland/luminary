@@ -1,13 +1,17 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 import fsspec
+import psycopg
 from PIL import Image
 from PIL.ExifTags import IFD
 
 from .config import get_photos_password, get_photos_uri, get_photos_username
 from .database import get_connection
+
+logger = logging.getLogger(__name__)
 
 THUMBNAIL_SIZE = (320, 320)
 
@@ -122,6 +126,50 @@ def get_thumbnail(photo_id: str) -> Optional[bytes]:
     with get_connection() as conn:
         row = conn.execute("SELECT thumbnail FROM photos WHERE id = %s", (photo_id,)).fetchone()
         return row["thumbnail"] if row else None
+
+
+# Default size of the result list for find_similar_photos below -- enough
+# for a small grid without pulling in most of a modest-sized library.
+SIMILAR_PHOTOS_LIMIT = 12
+
+
+def find_similar_photos(photo_id: str, limit: int = SIMILAR_PHOTOS_LIMIT) -> list[dict]:
+    """Nearest neighbors of `photo_id`'s own `description_embedding`, by
+    cosine distance (pgvector's `<=>` operator -- see embeddings.py's
+    module docstring for the model/embedding behind this column).
+    Excludes `photo_id` itself and any photo with no embedding yet (a NULL
+    embedding has no defined distance to compare, so it's excluded from
+    both sides of the comparison, not just the candidate side). Returns []
+    if `photo_id` doesn't exist or has no embedding of its own yet.
+
+    Also returns [] (rather than raising) if `description_embedding`
+    doesn't exist as a column at all -- the pgvector extension was never
+    installed on this Postgres server, so database.py's init_db() never
+    got to create it either (logged there once at startup; logged again
+    here, since this is the point where that gap actually becomes
+    user-visible)."""
+    try:
+        with get_connection() as conn:
+            row = conn.execute("SELECT description_embedding FROM photos WHERE id = %s", (photo_id,)).fetchone()
+            if not row or row["description_embedding"] is None:
+                return []
+            rows = conn.execute(
+                f"SELECT {METADATA_COLUMNS} FROM photos "
+                "WHERE id != %s AND description_embedding IS NOT NULL "
+                "ORDER BY description_embedding <=> %s LIMIT %s",
+                (photo_id, row["description_embedding"], limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except psycopg.errors.UndefinedColumn:
+        # get_connection() has already logged the full traceback for this
+        # (every psycopg.Error is, regardless of caller) -- just add the
+        # pointer to what's actually missing and degrade to an empty
+        # result instead of a 500.
+        logger.warning(
+            "photos.description_embedding doesn't exist -- is the pgvector extension installed? "
+            'See db/create_extensions.sql and the README\'s "Database" section.'
+        )
+        return []
 
 
 def stream_original(metadata: dict):

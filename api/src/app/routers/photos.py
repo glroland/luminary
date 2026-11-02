@@ -76,6 +76,16 @@ def get_photo_faces(photo_id: str) -> dict:
     return {"faces": storage.get_faces(photo_id)}
 
 
+@router.get("/photos/{photo_id}/similar", response_model=PhotoList)
+def get_similar_photos(photo_id: str) -> dict:
+    # storage.find_similar_photos already returns [] (rather than raising)
+    # for a photo with no embedding yet, or if pgvector itself was never
+    # installed -- a 404 here is reserved for the photo truly not existing.
+    if not storage.get_photo(photo_id):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return {"photos": storage.find_similar_photos(photo_id)}
+
+
 @router.delete("/photos/{photo_id}", status_code=204)
 def remove_photo(photo_id: str) -> None:
     # Removes the index entry only -- the source file on the photos backend

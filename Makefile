@@ -201,12 +201,25 @@ push-web:
 # host -- not by these targets. LUMINARY_DATABASE_ADMIN_PASSWORD must be
 # supplied for db/db-recreate/db-drop (not db-update, below -- that one
 # only needs the app role's own credentials).
+#
+# Both `db` and `db-create` also run db/create_extensions.sql (as the
+# admin user, against each target database) to install the pgvector
+# extension -- required for photos.description_embedding/similarity
+# search (embeddings.py). That only runs the SQL side; the Postgres
+# server itself needs pgvector's files already installed at the OS level
+# first (see that file's own header comment) -- an admin task outside
+# this repo. Without it, `db`/`db-create` still succeed overall
+# (create_tables.sql degrades gracefully -- see its header comment), just
+# without that column/index.
 
 define CREATE_DATABASE
 	PGPASSWORD=$(LUMINARY_DATABASE_ADMIN_PASSWORD) psql \
 		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_ADMIN_USER) -d postgres \
 		-v db_name=$(1) -v db_user=$(LUMINARY_DATABASE_USER) -v db_password=$(LUMINARY_DATABASE_PASSWORD) \
 		-f db/create_db_and_user.sql
+	PGPASSWORD=$(LUMINARY_DATABASE_ADMIN_PASSWORD) psql \
+		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_ADMIN_USER) -d $(1) \
+		-f db/create_extensions.sql
 	PGPASSWORD=$(LUMINARY_DATABASE_PASSWORD) psql \
 		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_USER) -d $(1) \
 		-f db/create_tables.sql
@@ -270,6 +283,9 @@ endif
 		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_ADMIN_USER) -d postgres \
 		-v db_name=$(LUMINARY_CREATE_DB_NAME) -v db_user=$(LUMINARY_CREATE_DB_USER) -v db_password=$(LUMINARY_CREATE_DB_PASSWORD) \
 		-f db/create_db_and_user.sql
+	PGPASSWORD=$(LUMINARY_DATABASE_ADMIN_PASSWORD) psql \
+		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_DATABASE_ADMIN_USER) -d $(LUMINARY_CREATE_DB_NAME) \
+		-f db/create_extensions.sql
 	PGPASSWORD=$(LUMINARY_CREATE_DB_PASSWORD) psql \
 		-h $(LUMINARY_DATABASE_HOST) -p $(LUMINARY_DATABASE_PORT) -U $(LUMINARY_CREATE_DB_USER) -d $(LUMINARY_CREATE_DB_NAME) \
 		-f db/create_tables.sql

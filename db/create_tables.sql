@@ -12,6 +12,20 @@
 -- exists so the schema can also be provisioned/inspected independently of
 -- starting the app. No migrations framework: a schema change means
 -- updating both this file and init_db() together.
+--
+-- This also attempts `CREATE EXTENSION IF NOT EXISTS vector` itself,
+-- purely as a convenience no-op for the common case where
+-- db/create_extensions.sql already installed it as a superuser (see that
+-- file) -- IF NOT EXISTS makes a repeat attempt here harmless. If it
+-- *hasn't* run yet and this file's own app-role connection lacks the
+-- privilege to create the extension itself, psql prints an error for
+-- this one statement and keeps going (no `-v ON_ERROR_STOP=1` here,
+-- unlike db/update.sql) -- `photos.description_embedding`/its index further
+-- down then also fail the same way, but every other table/column in this
+-- file still gets created normally. Run db/create_extensions.sql as a
+-- superuser first to avoid relying on that degradation.
+
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS photos (
     id TEXT PRIMARY KEY,
@@ -51,6 +65,40 @@ CREATE TABLE IF NOT EXISTS photos (
 -- EXISTS makes this a no-op against a database created after the column
 -- was already part of the CREATE TABLE above.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
+
+-- Embedding of `description` (not `vlm_description`), for similarity
+-- search (GET /api/photos/{id}/similar, storage.find_similar_photos) --
+-- see embeddings.py's module docstring for the full reasoning.
+-- Deliberately NOT inline on the CREATE TABLE above, unlike location_name
+-- -- halfvec is a type the vector extension provides, so if that
+-- extension isn't actually installed (CREATE EXTENSION above failed/was
+-- skipped), referencing `halfvec` inside the CREATE TABLE itself would
+-- fail the *entire* statement, taking every other column in `photos`
+-- down with it. Isolating it in its own ALTER TABLE means a missing
+-- extension only costs this one column/its index below, never the rest
+-- of the table. halfvec(3072), not vector(3072): pgvector's plain
+-- `vector` type only supports HNSW/IVFFlat indexes up to 2,000
+-- dimensions, but `halfvec` (16-bit floats) raises that cap to 4,000,
+-- comfortably fitting OpenAI text-embedding-3-large's full native 3,072
+-- dimensions without truncating it down to fit -- the highest embedding
+-- fidelity pgvector can actually index. NULL until
+-- enrich.enrich_description() successfully generates a `description` for
+-- this photo and embeddings.embed_description() then embeds it;
+-- regenerated in lockstep with `description` every time that changes
+-- (same trigger list as `description` itself above), never on its own
+-- separate schedule.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding halfvec(3072);
+
+-- HNSW over cosine distance -- the operator find_similar_photos' `<=>`
+-- queries use. Built after the column exists rather than inline on the
+-- CREATE TABLE, same as idx_faces_* further down -- an index needs its
+-- target column to already exist. A database where the vector extension
+-- (and thus the halfvec type/column above) never got created has nothing
+-- here for this to index; this statement then errors the same way the
+-- CREATE EXTENSION/ALTER TABLE above do, for the same reason (see this
+-- file's header comment).
+CREATE INDEX IF NOT EXISTS idx_photos_description_embedding
+    ON photos USING hnsw (description_embedding halfvec_cosine_ops);
 
 -- `description` used to hold Florence-2's raw caption directly; that's now
 -- `vlm_description`, freeing `description` for enrich.py's LLM-composed

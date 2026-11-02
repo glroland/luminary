@@ -69,6 +69,13 @@ env:
   # default; only applies to the openai backend (Florence-2 has no
   # streaming API to use regardless of this setting).
   openaiStreaming: false
+  # --- Description embeddings for similarity search (embeddings.py) -----
+  # Model name for photos.description_embedding, on the same endpoint/
+  # credentials as the openai settings above. Empty here means "use the
+  # app's own default" (text-embedding-3-large -- see embeddings.py's
+  # module docstring); only set this if LUMINARY_OPENAI_BASE_URL points at
+  # a self-hosted server whose embedding model is called something else.
+  embeddingModel: ""
   # --- Photo chat: path 2, local Florence-2 vision-language model -------
   # https://huggingface.co/microsoft/Florence-2-base . Runs in-process in
   # the api pod via torch/transformers -- substantially increases memory

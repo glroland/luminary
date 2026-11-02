@@ -78,6 +78,10 @@ spec:
             {{- end }}
             - name: LUMINARY_OPENAI_STREAMING
               value: {{ .Values.env.openaiStreaming | quote }}
+            {{- if .Values.env.embeddingModel }}
+            - name: LUMINARY_EMBEDDING_MODEL
+              value: {{ .Values.env.embeddingModel | quote }}
+            {{- end }}
             - name: LUMINARY_FLORENCE_MODEL
               value: {{ .Values.env.florenceModel | quote }}
             - name: LUMINARY_FLORENCE_DEVICE

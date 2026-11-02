@@ -1,0 +1,35 @@
+-- Installs the pgvector extension in one application database --
+-- `photos.description_embedding` (see db/create_tables.sql, embeddings.py)
+-- needs this before that column/its index can exist.
+--
+-- Run with psql as a Postgres superuser, against the *target* database
+-- itself (unlike create_db_and_user.sql, which runs against the `postgres`
+-- maintenance database to create that database in the first place --
+-- CREATE EXTENSION is per-database, so it has to run after the database
+-- exists, connected to it directly):
+--
+--   psql "postgresql://postgres:<admin-password>@<host>:<port>/luminary-dev" \
+--     -f db/create_extensions.sql
+--
+-- `make db`/`make db-create` run this once per database, right after
+-- create_db_and_user.sql and before create_tables.sql.
+--
+-- This only runs the SQL side of installing the extension -- Postgres
+-- still needs the pgvector extension's own files (the compiled .so plus
+-- its .control/.sql files) already present on the server at the OS level,
+-- an administrator task entirely outside this repo (e.g. `apt install
+-- postgresql-16-pgvector`, a managed service's own "enable pgvector"
+-- setting, or building it from https://github.com/pgvector/pgvector).
+-- `CREATE EXTENSION IF NOT EXISTS vector` below errors out with a clear
+-- "extension \"vector\" is not available" if that step hasn't happened --
+-- that's a signal to go do it, not a bug here.
+--
+-- Also note CREATE EXTENSION itself commonly requires superuser (or a
+-- role granted `pg_install_trusted_extension`) even once the extension's
+-- files are installed -- pgvector isn't universally marked "trusted"
+-- across every distribution/managed service, so this deliberately runs
+-- as LUMINARY_DATABASE_ADMIN_USER, not the app role `create_tables.sql`
+-- otherwise runs as. IF NOT EXISTS makes re-running this (e.g. via
+-- `make db-recreate`) a no-op once it's already installed.
+
+CREATE EXTENSION IF NOT EXISTS vector;

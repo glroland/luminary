@@ -47,6 +47,13 @@ only way to see exactly what the model was asked and what it actually said
 back, which matters because "the description is too short/vague/wrong"
 is otherwise unverifiable without it.
 
+Every successful generation also regenerates `photos.description_embedding`
+(embeddings.py, embeddings.embed_description) -- a vector embedding of the
+description text itself, for similarity search (storage.
+find_similar_photos). That's a separate module since it has its own model/
+dimension concerns independent of this one's chat-completion model; see
+its docstring for why.
+
 start_refresh() (routers/descriptions.py's "Refresh Descriptions" button,
 POST /api/descriptions/refresh) is the bulk equivalent of the four
 individually-triggered call sites above: it regenerates `description` for
@@ -67,6 +74,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from . import embeddings
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -191,6 +199,13 @@ def enrich_description(photo_id: str) -> bool:
     with get_connection() as conn:
         conn.execute("UPDATE photos SET description = %s WHERE id = %s", (description, photo_id))
         conn.commit()
+
+    # The embedding must always describe the *current* description text --
+    # regenerate it in lockstep, right here, rather than on any separate
+    # schedule. Best-effort in its own right (see embeddings.py's module
+    # docstring); its own success/failure is independent of the
+    # description update above, which has already committed either way.
+    embeddings.embed_description(photo_id)
     return True
 
 

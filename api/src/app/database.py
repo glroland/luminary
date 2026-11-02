@@ -2,7 +2,9 @@ import logging
 from contextlib import contextmanager
 
 import psycopg
+from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
+from psycopg.types import TypeInfo
 
 from .config import (
     get_database_host,
@@ -34,6 +36,20 @@ def get_connection():
             get_database_name(),
         )
         raise
+
+    # Registers pgvector's vector/halfvec type adapters (embeddings.py's
+    # HalfVector <-> photos.description_embedding) on *this* connection --
+    # get_connection() opens a fresh one per operation (no pooling), so
+    # this has to happen every time, not once at startup. Guarded on
+    # whether the `vector` type actually exists in this database: without
+    # this check, register_vector() itself raises on a database where the
+    # pgvector extension was never installed (see init_db()'s own
+    # best-effort attempt to create it, and db/create_extensions.sql) --
+    # every *other* table/column in this app must keep working either
+    # way, so this never becomes a reason get_connection() itself fails.
+    if TypeInfo.fetch(conn, "vector") is not None:
+        register_vector(conn)
+
     try:
         yield conn
     except psycopg.Error:
@@ -158,4 +174,35 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
         conn.commit()
+
+        # photos.description_embedding (embeddings.py) -- for similarity
+        # search. Best-effort and isolated in its own commit/rollback,
+        # unlike everything above: it needs the pgvector extension
+        # installed in this database first, which this app role may not
+        # have privilege to do itself (see db/create_extensions.sql's own
+        # comment on why CREATE EXTENSION commonly needs superuser), and a
+        # Postgres server that never got pgvector installed at the OS
+        # level at all is a real, expected case this must degrade
+        # gracefully from -- every other table/column above must keep
+        # working on every startup regardless. A failure here is logged
+        # once per startup, not raised; it never takes down init_db()/the
+        # app. See db/create_tables.sql's matching statements (kept in
+        # sync with these) for the full reasoning on halfvec(3072)/HNSW.
+        try:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding halfvec(3072)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_photos_description_embedding "
+                "ON photos USING hnsw (description_embedding halfvec_cosine_ops)"
+            )
+            conn.commit()
+        except psycopg.Error as exc:
+            conn.rollback()
+            logger.warning(
+                "Could not set up pgvector (extension/column/index) for photos.description_embedding -- "
+                "similarity search will be unavailable until the pgvector extension is installed on this "
+                "Postgres server (see db/create_extensions.sql and the README's \"Database\" section). "
+                "Everything else started normally. Cause: %s",
+                exc,
+            )
     logger.info("Database ready at %s:%s/%s", get_database_host(), get_database_port(), get_database_name())

@@ -65,6 +65,15 @@ api:
     # with that script's OPENAI_SECRET_NAME.
     openaiApiKeySecret: luminary-openai-credentials
     openaiStreaming: false
+    # Left at the app's own default (text-embedding-3-large) -- but note
+    # the gemma-4 sandbox endpoint above is a chat model, not necessarily
+    # one that also serves embeddings under that name. If description
+    # embeddings start logging failures, either point this at a real
+    # embeddings-capable endpoint (a separate LUMINARY_OPENAI_BASE_URL
+    # would be needed too, since embeddings.py reuses the same base URL
+    # as the chat config above) or ignore it -- it's best-effort and
+    # won't break anything else either way.
+    embeddingModel: ""
     florenceModel: microsoft/Florence-2-base
     florenceDevice: cpu
   route:

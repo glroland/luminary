@@ -10,7 +10,7 @@
 --
 --   psql "postgresql://luminary:<password>@<host>:<port>/luminary" -v ON_ERROR_STOP=1 -f db/update.sql
 --
--- Current contents: three independent, idempotent changes, safe to apply
+-- Current contents: four independent, idempotent changes, safe to apply
 -- together even if one or more were already applied via a current
 -- create_tables.sql:
 --
@@ -38,6 +38,18 @@
 --    `vlm_description` doesn't (a database that's already past this
 --    point is untouched); see enrich.py's module docstring for when
 --    `description` gets (re)computed going forward.
+-- 4. Adds photos.description_embedding (halfvec(3072)) plus its HNSW
+--    index, for similarity search -- see embeddings.py's module
+--    docstring and create_tables.sql's own comment on this column for
+--    the full reasoning. Unlike the first three, this one has a real
+--    prerequisite `make db-update` itself can't satisfy: the pgvector
+--    extension must already be installed in this database (run
+--    db/create_extensions.sql as a superuser first -- db-update connects
+--    as the app role, which typically can't CREATE EXTENSION itself). If
+--    that hasn't happened, the ALTER TABLE below fails with "type
+--    halfvec does not exist", and -v ON_ERROR_STOP=1 (see above) aborts
+--    the whole run *without* clearing this file -- install the
+--    extension, then just re-run `make db-update`.
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -58,3 +70,8 @@ END $$;
 
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS vlm_description TEXT;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS description TEXT;
+
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding halfvec(3072);
+
+CREATE INDEX IF NOT EXISTS idx_photos_description_embedding
+    ON photos USING hnsw (description_embedding halfvec_cosine_ops);

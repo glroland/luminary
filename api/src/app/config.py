@@ -149,6 +149,22 @@ def get_geocode_zoom() -> int:
     return int(os.environ.get("LUMINARY_GEOCODE_ZOOM", "17"))
 
 
+# --- Description embeddings for similarity search (embeddings.py) -------
+
+
+def get_embedding_model() -> str:
+    """Model name for photos.description_embedding -- uses the *same*
+    LUMINARY_OPENAI_API_KEY/_BASE_URL as chat.py's "openai" backend/
+    enrich.py's description rewrite (an embeddings endpoint is just
+    another model on the same OpenAI-*compatible* server), but its own
+    model name, since a provider's embedding and chat-completion models
+    are essentially always different. Defaults to OpenAI's
+    text-embedding-3-large -- see embeddings.py's module docstring for
+    why that model, at its full native dimension count (never truncated
+    via the OpenAI API's own `dimensions` parameter)."""
+    return os.environ.get("LUMINARY_EMBEDDING_MODEL", "text-embedding-3-large")
+
+
 # --- Automatic face recognition ("Refresh Faces", recognition.py) --------
 
 
