@@ -16,10 +16,16 @@
 # The database secret is always required, and its prompts default to the
 # username/password `make db`/`make db-recreate` themselves default to
 # (Makefile's LUMINARY_DATABASE_USER/_PASSWORD) -- press enter to accept.
+#
 # The photos-backend and OpenAI secrets are skipped (left blank, nothing
 # created/touched) if you leave their first prompt empty -- e.g. a
 # local/NFS photos backend or S3 via IAM role needs no credentials, and you
-# may not be using the openai chat backend at all.
+# may not be using the openai chat backend at all. Their prompts default to
+# LUMINARY_PHOTOS_USERNAME/_PASSWORD/LUMINARY_OPENAI_API_KEY from the
+# calling shell's environment, if set (the same env vars `make run-api`
+# reads) -- press enter to accept. Unlike the database defaults above,
+# these may be real secrets, so the password/API key prompts never echo
+# the actual default value, only that one is available.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-luminary}"
@@ -31,6 +37,14 @@ OPENAI_SECRET_NAME="luminary-openai-credentials"
 # `make db`/`make db-recreate` themselves provision when not overridden).
 DB_DEFAULT_USERNAME="luminary"
 DB_DEFAULT_PASSWORD="luminary"
+
+# Defaults for the photos-backend/OpenAI prompts below, pulled from the
+# environment if the caller already has them set (e.g. sourced the same
+# profile `make run-api` uses) -- empty if not set, which just means
+# "blank to skip" at the prompt.
+PHOTOS_USERNAME_DEFAULT="${LUMINARY_PHOTOS_USERNAME:-}"
+PHOTOS_PASSWORD_DEFAULT="${LUMINARY_PHOTOS_PASSWORD:-}"
+OPENAI_API_KEY_DEFAULT="${LUMINARY_OPENAI_API_KEY:-}"
 
 if ! command -v oc >/dev/null 2>&1; then
   echo "error: 'oc' (OpenShift CLI) not found on PATH" >&2
@@ -51,37 +65,10 @@ if ! oc get namespace "${NAMESPACE}" >/dev/null 2>&1; then
   oc create namespace "${NAMESPACE}"
 fi
 
-prompt_required() {
-  # $1=prompt label $2=var name $3=silent(1/0)
-  local label="$1" var_name="$2" silent="$3" value=""
-  while [ -z "${value}" ]; do
-    if [ "${silent}" = "1" ]; then
-      read -r -s -p "${label}: " value
-      echo
-    else
-      read -r -p "${label}: " value
-    fi
-    if [ -z "${value}" ]; then
-      echo "  (value cannot be empty)"
-    fi
-  done
-  printf -v "${var_name}" '%s' "${value}"
-}
-
-prompt_optional() {
-  # $1=prompt label $2=var name $3=silent(1/0) -- allows an empty value
-  local label="$1" var_name="$2" silent="$3" value=""
-  if [ "${silent}" = "1" ]; then
-    read -r -s -p "${label}: " value
-    echo
-  else
-    read -r -p "${label}: " value
-  fi
-  printf -v "${var_name}" '%s' "${value}"
-}
-
 prompt_with_default() {
-  # $1=prompt label $2=var name $3=default $4=silent(1/0) -- enter accepts the default
+  # $1=prompt label $2=var name $3=default $4=silent(1/0) -- enter accepts
+  # the default, always echoed literally in the bracket (only for defaults
+  # that are not real secrets, e.g. the DB dev placeholder below).
   local label="$1" var_name="$2" default="$3" silent="$4" value=""
   if [ "${silent}" = "1" ]; then
     read -r -s -p "${label} [${default}]: " value
@@ -95,20 +82,61 @@ prompt_with_default() {
   printf -v "${var_name}" '%s' "${value}"
 }
 
+prompt_optional_visible() {
+  # $1=prompt label $2=var name $3=default (may be empty) -- enter accepts
+  # the default; not silent, so only use for non-secret values.
+  local label="$1" var_name="$2" default="$3" value="" bracket="blank to skip"
+  if [ -n "${default}" ]; then
+    bracket="${default}"
+  fi
+  read -r -p "${label} [${bracket}]: " value
+  if [ -z "${value}" ]; then
+    value="${default}"
+  fi
+  printf -v "${var_name}" '%s' "${value}"
+}
+
+prompt_secret() {
+  # $1=prompt label $2=var name $3=default (may be empty) $4=required(1/0)
+  # Enter accepts the default. The bracket never echoes the actual default
+  # value (it may be a real secret pulled from the environment) -- only
+  # whether one is available.
+  local label="$1" var_name="$2" default="$3" required="$4" value="" bracket
+  if [ -n "${default}" ]; then
+    bracket="press enter to use value from environment"
+  elif [ "${required}" = "1" ]; then
+    bracket="required"
+  else
+    bracket="blank to skip"
+  fi
+  while :; do
+    read -r -s -p "${label} [${bracket}]: " value
+    echo
+    if [ -z "${value}" ]; then
+      value="${default}"
+    fi
+    if [ -n "${value}" ] || [ "${required}" != "1" ]; then
+      break
+    fi
+    echo "  (value cannot be empty)"
+  done
+  printf -v "${var_name}" '%s' "${value}"
+}
+
 echo "--- Database credentials (${DB_SECRET_NAME}, always required) ---"
 prompt_with_default "Database username" DB_USERNAME "${DB_DEFAULT_USERNAME}" 0
 prompt_with_default "Database password" DB_PASSWORD "${DB_DEFAULT_PASSWORD}" 1
 echo
 
 echo "--- Photos backend credentials (${PHOTOS_SECRET_NAME}, blank to skip) ---"
-prompt_optional "Photos backend username (blank to skip)" PHOTOS_USERNAME 0
+prompt_optional_visible "Photos backend username" PHOTOS_USERNAME "${PHOTOS_USERNAME_DEFAULT}"
 if [ -n "${PHOTOS_USERNAME}" ]; then
-  prompt_required "Photos backend password" PHOTOS_PASSWORD 1
+  prompt_secret "Photos backend password" PHOTOS_PASSWORD "${PHOTOS_PASSWORD_DEFAULT}" 1
 fi
 echo
 
 echo "--- OpenAI-compatible chat endpoint credentials (${OPENAI_SECRET_NAME}, blank to skip) ---"
-prompt_optional "OpenAI-compatible endpoint API key (blank to skip)" OPENAI_API_KEY 1
+prompt_secret "OpenAI-compatible endpoint API key" OPENAI_API_KEY "${OPENAI_API_KEY_DEFAULT}" 0
 echo
 
 oc create secret generic "${DB_SECRET_NAME}" \
