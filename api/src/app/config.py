@@ -141,12 +141,17 @@ def get_geocode_zoom() -> int:
     """Nominatim's `zoom` parameter picks which OSM feature *layer* reverse
     geocoding resolves to -- low values resolve to broad administrative
     areas (city/county/state), high values (up to 18) resolve to individual
-    buildings. There's no single right value across very different photo
-    subjects (a building interior vs. a large state park) -- like
-    LUMINARY_FACE_MATCH_THRESHOLD below, this is a starting point to tune
-    against your own library's real photos, not a verified-correct
-    number."""
-    return int(os.environ.get("LUMINARY_GEOCODE_ZOOM", "17"))
+    buildings/named businesses. There's no single right value across very
+    different photo subjects (a building interior vs. a large state park)
+    -- like LUMINARY_FACE_MATCH_THRESHOLD below, this is a starting point
+    to tune against your own library's real photos, not a
+    verified-correct number. Defaults to 18 (the maximum, building-level)
+    rather than a coarser value specifically so a named business mapped in
+    OSM (e.g. a Target -- see geocode.py's `_PLACE_KEYS`) has a chance to
+    resolve over just its containing street/neighborhood; lower this if
+    that ends up producing overly narrow results for a library that's
+    mostly outdoor/park photos instead."""
+    return int(os.environ.get("LUMINARY_GEOCODE_ZOOM", "18"))
 
 
 # --- Description embeddings for similarity search (embeddings.py) -------

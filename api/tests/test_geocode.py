@@ -56,6 +56,49 @@ def test_describe_handles_a_real_nominatim_protected_area_response():
     )
 
 
+def test_describe_prefers_a_named_business_plus_locality_plus_state():
+    # A big-box retailer mapped in OSM as its own named point/building --
+    # Nominatim puts the business's name under the `shop` key (the OSM tag
+    # the matched feature actually carries), the same way a park's name
+    # ends up under `tourism`/`protected_area` above.
+    address = {
+        "shop": "Target",
+        "city": "Alpharetta",
+        "state": "Georgia",
+        "country": "United States",
+    }
+    assert geocode._describe(address, "unused") == "Target, Alpharetta, Georgia"
+
+
+def test_describe_includes_street_address_between_named_place_and_locality():
+    address = {
+        "shop": "Target",
+        "house_number": "123",
+        "road": "North Point Pkwy",
+        "city": "Alpharetta",
+        "state": "Georgia",
+        "country": "United States",
+    }
+    assert geocode._describe(address, "unused") == (
+        "Target, 123 North Point Pkwy, Alpharetta, Georgia"
+    )
+
+
+def test_describe_includes_road_without_house_number_when_number_is_absent():
+    address = {
+        "shop": "Target",
+        "road": "North Point Pkwy",
+        "city": "Alpharetta",
+        "state": "Georgia",
+    }
+    assert geocode._describe(address, "unused") == "Target, North Point Pkwy, Alpharetta, Georgia"
+
+
+def test_describe_includes_street_even_with_no_named_place():
+    address = {"house_number": "456", "road": "Mystery Hill Lane", "town": "Boone", "state": "North Carolina"}
+    assert geocode._describe(address, "unused") == "456 Mystery Hill Lane, Boone, North Carolina"
+
+
 def test_describe_falls_back_to_locality_and_state_with_no_named_place():
     address = {"town": "Boone", "state": "North Carolina"}
     assert geocode._describe(address, None) == "Boone, North Carolina"
@@ -66,13 +109,15 @@ def test_describe_falls_back_to_county_when_no_city_town_or_village_is_present()
     # Boone, NC that had no city/town/village in its address at all --
     # without this fallback, _describe produced a bare "North Carolina"
     # with no county context, which is strictly worse than including it.
+    # (The `road` itself is now included too -- see
+    # test_describe_includes_street_even_with_no_named_place above.)
     address = {
         "road": "Mystery Hill Lane",
         "county": "Watauga County",
         "state": "North Carolina",
         "country": "United States",
     }
-    assert geocode._describe(address, "unused") == "Watauga County, North Carolina"
+    assert geocode._describe(address, "unused") == "Mystery Hill Lane, Watauga County, North Carolina"
 
 
 def test_describe_prefers_city_town_or_village_over_county():
@@ -81,7 +126,11 @@ def test_describe_prefers_city_town_or_village_over_county():
 
 
 def test_describe_falls_back_to_display_name_when_address_has_no_curated_fields():
-    address = {"postcode": "28605", "road": "Main St"}
+    # `road` is itself a curated field now (see
+    # test_describe_includes_street_even_with_no_named_place above), so
+    # this case needs an address with no road either to actually exercise
+    # the display_name fallback.
+    address = {"postcode": "28605"}
     assert geocode._describe(address, "Main St, 28605") == "Main St, 28605"
 
 

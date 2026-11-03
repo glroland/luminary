@@ -251,8 +251,10 @@ cached) is also per-pod, in-memory state — same caveat.
 
 - `geocode.py` reverse-geocodes a photo's EXIF GPS coordinates into
   `photos.location_name`, a short human-readable place description (e.g.
-  "Boone, North Carolina" or "Grandfather Mountain State Park, Blowing
-  Rock, North Carolina") stored alongside the raw `latitude`/`longitude` —
+  "Boone, North Carolina", "Grandfather Mountain State Park, Blowing
+  Rock, North Carolina", or "Target, 123 North Point Pkwy, Alpharetta,
+  Georgia" — see `_describe`'s own docstring for the street slot's
+  placement) stored alongside the raw `latitude`/`longitude` —
   called from `sync.py`'s `_describe_location`, only when those
   coordinates are themselves (re)extracted (i.e. `content_changed`, same
   as `latitude`/`longitude` — no separate backfill pass for this field,
@@ -275,12 +277,21 @@ cached) is also per-pod, in-memory state — same caveat.
   malformed JSON, Nominatim's own `{"error": ...}` "nothing here"
   response), and it's `sync._describe_location`'s job to catch that and
   log it, never `sync`'s own failure. `LUMINARY_GEOCODE_ZOOM`
-  (`config.get_geocode_zoom`, default `17`) picks which OSM feature layer
-  the lookup resolves to (low = broad administrative area, high = up to
-  building-level) — like `LUMINARY_FACE_MATCH_THRESHOLD` elsewhere, this
-  has no single verified-correct value across very different photo
-  subjects; treat it as a starting point to tune against your own
-  library's real photos.
+  (`config.get_geocode_zoom`, default `18`, the maximum) picks which OSM
+  feature layer the lookup resolves to (low = broad administrative area,
+  high = up to building/named-business-level) — like
+  `LUMINARY_FACE_MATCH_THRESHOLD` elsewhere, this has no single
+  verified-correct value across very different photo subjects; treat it
+  as a starting point to tune against your own library's real photos
+  (lower it if a mostly-outdoor/park library ends up with overly narrow
+  results). `geocode._PLACE_KEYS` is the ordered set of Nominatim address
+  keys checked for a "notable place" name to lead with — it includes
+  `shop`/`mall`/`office` (alongside `national_park`/`tourism`/`amenity`/
+  etc.) specifically so a named business mapped as its own point/building
+  in OSM (e.g. a Target) can surface as the location name instead of just
+  its containing street/neighborhood; whether that happens for a given
+  photo depends on GPS precision plus OSM's crowd-sourced coverage at
+  that spot, not just this zoom/key config.
 
 - `enrich.py` composes `photos.description` — the description actually
   shown in the UI — by having a general-purpose LLM (any

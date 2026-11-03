@@ -1,6 +1,7 @@
 """Best-effort reverse geocoding of a photo's GPS coordinates into a short,
-human-readable place description (e.g. "Boone, North Carolina" or
-"Grandfather Mountain State Park, Blowing Rock, North Carolina"), stored as
+human-readable place description (e.g. "Boone, North Carolina",
+"Grandfather Mountain State Park, Blowing Rock, North Carolina", or
+"Target, 123 North Point Pkwy, Alpharetta, Georgia"), stored as
 `photos.location_name` alongside the raw latitude/longitude. Only ever
 called from sync.py's `_sync_one_file`, when a photo's GPS coordinates are
 (re)extracted from EXIF -- i.e. only on insert/update, same as latitude/
@@ -62,7 +63,31 @@ _last_request_at = 0.0
 # photos often do -- don't expect this to reliably outrank a trail/road
 # name for a point that happens to sit on one, that's a genuine Nominatim
 # limitation, not a bug here.
-_PLACE_KEYS = ("national_park", "protected_area", "attraction", "tourism", "leisure", "natural", "historic", "amenity")
+#
+# `shop`/`mall`/`office` cover named businesses (e.g. a Target or other
+# big-box retailer mapped in OSM as a point/building with its own name) --
+# Nominatim's address breakdown puts the business's *name* under the key
+# matching whatever OSM tag the matched feature carries (`shop=*` for most
+# retail, `shop=mall` for a shopping center, `office=*` for a workplace),
+# the same way it puts a park's name under `national_park` above. Like the
+# park case, this only resolves to the business if GPS precision plus
+# LUMINARY_GEOCODE_ZOOM (needs to be high -- 18, building-level -- for
+# this) land the point on that business's own mapped feature rather than
+# just its containing street/neighborhood; whether it's mapped at all
+# depends entirely on OSM's crowd-sourced coverage for that location.
+_PLACE_KEYS = (
+    "national_park",
+    "protected_area",
+    "attraction",
+    "tourism",
+    "leisure",
+    "natural",
+    "historic",
+    "shop",
+    "mall",
+    "office",
+    "amenity",
+)
 # Locality, most to least specific.
 _LOCALITY_KEYS = ("city", "town", "village", "hamlet", "suburb")
 
@@ -77,13 +102,23 @@ def _rate_limit() -> None:
 
 
 def _describe(address: dict, display_name: Optional[str]) -> Optional[str]:
-    """Builds a short "<notable place>, <locality>, <state>"-style string
-    from Nominatim's structured `address` object (preferred -- it's what
-    produces "Grandfather Mountain State Park, Blowing Rock, North
+    """Builds a short "<notable place>, <street>, <locality>, <state>"-style
+    string from Nominatim's structured `address` object (preferred -- it's
+    what produces "Grandfather Mountain State Park, Blowing Rock, North
     Carolina"-style results), falling back to Nominatim's own full
     `display_name` (which includes a postcode and country, more cluttered
     but always present when the lookup matched *something*) only if none
     of the curated fields below are present.
+
+    The street slot (`house_number` + `road`) sits right after the notable
+    place, before locality -- e.g. "Target, 123 Main St, Alpharetta,
+    Georgia" -- since it's the next level down in specificity from a named
+    business/place, same as `house_number`+`road` is one level down from
+    `city` in Nominatim's own address hierarchy. `house_number` only gets
+    used when `road` is also present (a bare number with no street name
+    isn't meaningful on its own); `road` alone (no `house_number`) is
+    still included, since Nominatim often has the street but not a
+    specific number for a GPS-derived point.
 
     `county` is deliberately only a fallback for the locality slot (used
     when none of _LOCALITY_KEYS are present), not folded into the
@@ -96,6 +131,9 @@ def _describe(address: dict, display_name: Optional[str]) -> Optional[str]:
         if address.get(key):
             parts.append(address[key])
             break
+    if address.get("road"):
+        street = f"{address['house_number']} {address['road']}" if address.get("house_number") else address["road"]
+        parts.append(street)
     for key in _LOCALITY_KEYS:
         if address.get(key):
             parts.append(address[key])

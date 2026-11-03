@@ -354,7 +354,7 @@ it never fails a sync.
 |-------------------------------|------------------------------------------------|-----------------------------------------|
 | `LUMINARY_GEOCODE_BASE_URL`  | `https://nominatim.openstreetmap.org/reverse` | Nominatim-compatible reverse-geocoding endpoint |
 | `LUMINARY_GEOCODE_USER_AGENT`| `luminary-photo-browser/1.0`                | Sent as the `User-Agent` header — [Nominatim's usage policy](https://operations.osmfoundation.org/policies/nominatim/) requires one identifying the calling application |
-| `LUMINARY_GEOCODE_ZOOM`      | `17`                                         | Which OSM feature layer the lookup resolves to (low = broad administrative area, high up to `18` = individual building) — no single right value across very different photo subjects; tune against your own library |
+| `LUMINARY_GEOCODE_ZOOM`      | `18`                                         | Which OSM feature layer the lookup resolves to (low = broad administrative area, high up to `18` = individual building/named business) — no single right value across very different photo subjects; tune against your own library |
 
 The public Nominatim instance's usage policy caps requests at **one per
 second**; `geocode.py` enforces that globally across sync's concurrent
