@@ -783,6 +783,12 @@ body {
     border-left: none;
     border-top: 1px solid #dce6f2;
   }
+
+  .management-refresh-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
 }
 
 /* --- Sidebar (Sidebar.jsx) ------------------------------------------- */
@@ -1350,12 +1356,36 @@ body {
   cursor: not-allowed;
 }
 
-.management-refresh {
-  margin-bottom: 1rem;
+.management-refresh-zone {
+  margin-bottom: 2rem;
+  padding: 1rem;
+  border: 1px solid #dce6f2;
+  border-radius: 8px;
+  background: #f4f7fb;
 }
 
-.management-refresh-faces {
-  margin-bottom: 1rem;
+.management-refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid #dce6f2;
+}
+
+.management-refresh-row:first-of-type {
+  border-top: none;
+  padding-top: 0.4rem;
+}
+
+.management-refresh-control {
+  flex-shrink: 0;
+  min-width: 160px;
+}
+
+.management-refresh-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #4a6fa1;
 }
 
 .management-danger-zone {

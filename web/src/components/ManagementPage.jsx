@@ -350,78 +350,107 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       <button type="button" className="management-back" onClick={onBack}>
         &larr; Back to gallery
       </button>
-      <h2>Manage individuals</h2>
 
-      <div className="management-refresh">
-        <SyncStatus status={syncStatus} onRefresh={onRefresh} />
-      </div>
+      <h2>Refresh metadata</h2>
 
-      <div className="management-refresh-faces">
-        {!refreshStatus || refreshStatus.status === "idle" ? (
-          <button type="button" className="refresh-button" onClick={handleRefreshFaces}>
-            Refresh Faces
-          </button>
-        ) : refreshStatus.status === "error" ? (
-          <div className="sync-status sync-status-error" role="status">
-            Refresh failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
+      <div className="management-refresh-zone">
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            <SyncStatus status={syncStatus} onRefresh={onRefresh} />
           </div>
-        ) : (
-          <div className="sync-status" role="status" aria-live="polite">
-            <span className="sync-status-label">
-              {refreshStatus.status === "completed"
-                ? `Done -- ${refreshStatus.matched} matched`
-                : `Matching faces… ${
-                    refreshStatus.total > 0 ? Math.round((refreshStatus.processed / refreshStatus.total) * 100) : 0
-                  }%`}
-            </span>
-            <div className="sync-progress-track">
-              <div
-                className="sync-progress-fill"
-                style={{
-                  width: `${
-                    refreshStatus.total > 0 ? Math.round((refreshStatus.processed / refreshStatus.total) * 100) : 0
-                  }%`,
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
+          <p className="management-refresh-description">
+            Scans the photos backend for new, changed, or removed files and updates the index to
+            match. Run this after adding or removing photos outside Luminary.
+          </p>
+        </div>
 
-      <div className="management-refresh-descriptions">
-        {!descriptionRefreshStatus || descriptionRefreshStatus.status === "idle" ? (
-          <button type="button" className="refresh-button" onClick={handleRefreshDescriptions}>
-            Refresh Descriptions
-          </button>
-        ) : descriptionRefreshStatus.status === "error" ? (
-          <div className="sync-status sync-status-error" role="status">
-            Refresh failed{descriptionRefreshStatus.error ? `: ${descriptionRefreshStatus.error}` : ""}
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            {!refreshStatus || refreshStatus.status === "idle" ? (
+              <button type="button" className="refresh-button" onClick={handleRefreshFaces}>
+                Refresh Faces
+              </button>
+            ) : refreshStatus.status === "error" ? (
+              <div className="sync-status sync-status-error" role="status">
+                Refresh failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
+              </div>
+            ) : (
+              <div className="sync-status" role="status" aria-live="polite">
+                <span className="sync-status-label">
+                  {refreshStatus.status === "completed"
+                    ? `Done -- ${refreshStatus.matched} matched`
+                    : `Matching faces… ${
+                        refreshStatus.total > 0
+                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
+                          : 0
+                      }%`}
+                </span>
+                <div className="sync-progress-track">
+                  <div
+                    className="sync-progress-fill"
+                    style={{
+                      width: `${
+                        refreshStatus.total > 0
+                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="sync-status" role="status" aria-live="polite">
-            <span className="sync-status-label">
-              {descriptionRefreshStatus.status === "completed"
-                ? `Done -- ${descriptionRefreshStatus.updated} updated`
-                : `Refreshing descriptions… ${
-                    descriptionRefreshStatus.total > 0
-                      ? Math.round((descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100)
-                      : 0
-                  }%`}
-            </span>
-            <div className="sync-progress-track">
-              <div
-                className="sync-progress-fill"
-                style={{
-                  width: `${
-                    descriptionRefreshStatus.total > 0
-                      ? Math.round((descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100)
-                      : 0
-                  }%`,
-                }}
-              />
-            </div>
+          <p className="management-refresh-description">
+            Matches still-untagged faces against people you've already tagged at least once, and
+            auto-assigns the confident matches.
+          </p>
+        </div>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            {!descriptionRefreshStatus || descriptionRefreshStatus.status === "idle" ? (
+              <button type="button" className="refresh-button" onClick={handleRefreshDescriptions}>
+                Refresh Descriptions
+              </button>
+            ) : descriptionRefreshStatus.status === "error" ? (
+              <div className="sync-status sync-status-error" role="status">
+                Refresh failed{descriptionRefreshStatus.error ? `: ${descriptionRefreshStatus.error}` : ""}
+              </div>
+            ) : (
+              <div className="sync-status" role="status" aria-live="polite">
+                <span className="sync-status-label">
+                  {descriptionRefreshStatus.status === "completed"
+                    ? `Done -- ${descriptionRefreshStatus.updated} updated`
+                    : `Refreshing descriptions… ${
+                        descriptionRefreshStatus.total > 0
+                          ? Math.round(
+                              (descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100
+                            )
+                          : 0
+                      }%`}
+                </span>
+                <div className="sync-progress-track">
+                  <div
+                    className="sync-progress-fill"
+                    style={{
+                      width: `${
+                        descriptionRefreshStatus.total > 0
+                          ? Math.round(
+                              (descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100
+                            )
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
-        )}
+          <p className="management-refresh-description">
+            Rewrites each photo's description from its caption, tagged people, and location --
+            useful after tagging or renaming people.
+          </p>
+        </div>
       </div>
 
       {pageError && (
@@ -429,6 +458,8 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
           {pageError}
         </p>
       )}
+
+      <h2>Manage individuals</h2>
 
       <form className="management-add-person" onSubmit={handleAdd}>
         <input
