@@ -9,11 +9,13 @@ import {
   fetchFaceRefreshStatus,
   fetchIndividualFaces,
   fetchIndividuals,
+  fetchLocationRefreshStatus,
   fetchTags,
   individualThumbnailUrl,
   purgeDatabase,
   refreshDescriptions,
   refreshFaces,
+  refreshLocations,
   untagFace,
   updateIndividual,
   updateTag,
@@ -47,6 +49,10 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   // since the two jobs are independent and can run/poll concurrently.
   const [descriptionRefreshStatus, setDescriptionRefreshStatus] = useState(null);
   const descriptionRefreshPollRef = useRef(null);
+  // "Refresh Locations" (geocode.py's bulk re-geocode job) -- same shape
+  // again, its own independent state/poll loop.
+  const [locationRefreshStatus, setLocationRefreshStatus] = useState(null);
+  const locationRefreshPollRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
 
   // Tag catalog (tags.py/routers/tags.py) -- a separate full-CRUD list
@@ -91,9 +97,20 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         }
       })
       .catch(() => {});
+    // Same "resume polling if already running" check, for a location
+    // refresh left running from before this page was (re)opened.
+    fetchLocationRefreshStatus()
+      .then((status) => {
+        if (status.status === "running") {
+          setLocationRefreshStatus(status);
+          pollLocationRefreshStatus();
+        }
+      })
+      .catch(() => {});
     return () => {
       clearInterval(refreshPollRef.current);
       clearInterval(descriptionRefreshPollRef.current);
+      clearInterval(locationRefreshPollRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -197,6 +214,36 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       .then((status) => {
         setDescriptionRefreshStatus(status);
         pollDescriptionRefreshStatus();
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
+  function pollLocationRefreshStatus() {
+    clearInterval(locationRefreshPollRef.current);
+    locationRefreshPollRef.current = setInterval(async () => {
+      try {
+        const status = await fetchLocationRefreshStatus();
+        if (status.status === "running") {
+          setLocationRefreshStatus(status);
+          return;
+        }
+        clearInterval(locationRefreshPollRef.current);
+        setLocationRefreshStatus(status);
+        // Like description refresh, the result is only visible on a
+        // photo's own modal/map -- no reload needed here.
+        setTimeout(() => setLocationRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
+      } catch {
+        clearInterval(locationRefreshPollRef.current);
+        setLocationRefreshStatus(null);
+      }
+    }, REFRESH_POLL_INTERVAL_MS);
+  }
+
+  function handleRefreshLocations() {
+    refreshLocations()
+      .then((status) => {
+        setLocationRefreshStatus(status);
+        pollLocationRefreshStatus();
       })
       .catch((err) => setPageError(err.message));
   }
@@ -449,6 +496,49 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
           <p className="management-refresh-description">
             Rewrites each photo's description from its caption, tagged people, and location --
             useful after tagging or renaming people.
+          </p>
+        </div>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            {!locationRefreshStatus || locationRefreshStatus.status === "idle" ? (
+              <button type="button" className="refresh-button" onClick={handleRefreshLocations}>
+                Refresh Locations
+              </button>
+            ) : locationRefreshStatus.status === "error" ? (
+              <div className="sync-status sync-status-error" role="status">
+                Refresh failed{locationRefreshStatus.error ? `: ${locationRefreshStatus.error}` : ""}
+              </div>
+            ) : (
+              <div className="sync-status" role="status" aria-live="polite">
+                <span className="sync-status-label">
+                  {locationRefreshStatus.status === "completed"
+                    ? `Done -- ${locationRefreshStatus.updated} updated`
+                    : `Refreshing locations… ${
+                        locationRefreshStatus.total > 0
+                          ? Math.round((locationRefreshStatus.processed / locationRefreshStatus.total) * 100)
+                          : 0
+                      }%`}
+                </span>
+                <div className="sync-progress-track">
+                  <div
+                    className="sync-progress-fill"
+                    style={{
+                      width: `${
+                        locationRefreshStatus.total > 0
+                          ? Math.round((locationRefreshStatus.processed / locationRefreshStatus.total) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+          <p className="management-refresh-description">
+            Re-geocodes every photo that already has GPS coordinates -- useful after changing the
+            geocoding zoom level, or to pick up a named business/street address for photos indexed
+            before that detail was added.
           </p>
         </div>
       </div>

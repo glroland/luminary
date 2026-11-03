@@ -204,3 +204,13 @@ class DescriptionRefreshStatus(BaseModel):
     total: int = 0  # photos in the library at the start of this run
     updated: int = 0  # of those, how many actually got a new description
     error: Optional[str] = None
+
+
+class LocationRefreshStatus(BaseModel):
+    # Mirrors DescriptionRefreshStatus's shape -- see geocode.py's
+    # _RefreshProgress.
+    status: str  # "idle" | "running" | "completed" | "error"
+    processed: int = 0  # photos with GPS coordinates considered so far
+    total: int = 0  # such photos in the library at the start of this run
+    updated: int = 0  # of those, how many were successfully re-geocoded
+    error: Optional[str] = None

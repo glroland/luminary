@@ -341,8 +341,10 @@ wheel index to avoid pulling in CUDA libraries you don't need without a GPU.
 
 Alongside the raw `latitude`/`longitude` decoded from a photo's EXIF GPS
 tags, sync also stores a short, human-readable description of the same
-coordinates in `photos.location_name` — e.g. `"Boone, North Carolina"` or
-`"Grandfather Mountain State Park, Blowing Rock, North Carolina"` — via
+coordinates in `photos.location_name` — e.g. `"Boone, North Carolina"`,
+`"Grandfather Mountain State Park, Blowing Rock, North Carolina"`, or
+`"Target, 123 North Point Pkwy, Alpharetta, Georgia"` if that exact spot
+is mapped as a named business/street in OpenStreetMap — via
 [OpenStreetMap's Nominatim](https://nominatim.org/) reverse-geocoding API
 (free, no API key — the same OpenStreetMap service `PhotoMap.jsx` already
 depends on for map tiles). This is best-effort: a lookup failure (network
@@ -362,6 +364,18 @@ worker threads, so it becomes the long pole of a sync for a GPS-heavy
 library. Point `LUMINARY_GEOCODE_BASE_URL` at a self-hosted Nominatim
 instance to remove that cap (or avoid depending on the public instance at
 all, e.g. for an airgapped deployment).
+
+Like `latitude`/`longitude` themselves, `location_name` is only
+(re)computed when a photo is newly indexed or its file content changes
+during sync — there's no automatic backfill for photos already indexed
+before a geocoding-related setting (`LUMINARY_GEOCODE_ZOOM`, or the set of
+address fields `geocode.py` looks at) changed. The management page's
+**Refresh Locations** button (`POST /api/locations/refresh`, polled via
+`GET /api/locations/refresh/status`) re-geocodes every photo that already
+has GPS coordinates, picking up that new result — same background-job
+shape as "Refresh Faces"/"Refresh Descriptions" (own thread, progress
+polling, `idle`/`running`/`completed`/`error`), and subject to the same
+one-request-per-second cap against the public Nominatim instance above.
 
 ### Description enrichment
 

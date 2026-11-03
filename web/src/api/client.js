@@ -168,6 +168,14 @@ export async function fetchDescriptionRefreshStatus() {
   return request("/descriptions/refresh/status");
 }
 
+export async function refreshLocations() {
+  return request("/locations/refresh", { method: "POST" });
+}
+
+export async function fetchLocationRefreshStatus() {
+  return request("/locations/refresh/status");
+}
+
 export async function fetchTags() {
   const data = await request("/tags");
   return data.tags;

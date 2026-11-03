@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.enrich import progress as description_progress
+    from app.geocode import progress as location_progress
     from app.main import app
     from app.recognition import progress as refresh_progress
     from app.sync import progress as sync_progress
@@ -64,6 +65,7 @@ def client(tmp_path, monkeypatch):
     sync_progress.reset()
     refresh_progress.reset()
     description_progress.reset()
+    location_progress.reset()
 
     with TestClient(app) as test_client:
         # There's no per-test throwaway SQLite file anymore -- tests share
@@ -134,3 +136,17 @@ def refresh_descriptions_and_wait(client, timeout=5.0):
             return status
         time.sleep(0.05)
     raise AssertionError(f"description refresh did not finish in time: {status}")
+
+
+def refresh_locations_and_wait(client, timeout=5.0):
+    """Same polling pattern as sync_and_wait, for geocode.py's "Refresh
+    Locations" job (POST /api/locations/refresh)."""
+    client.post("/api/locations/refresh")
+    deadline = time.monotonic() + timeout
+    status = {}
+    while time.monotonic() < deadline:
+        status = client.get("/api/locations/refresh/status").json()
+        if status["status"] in ("completed", "error"):
+            return status
+        time.sleep(0.05)
+    raise AssertionError(f"location refresh did not finish in time: {status}")

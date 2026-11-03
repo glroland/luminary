@@ -28,8 +28,25 @@ Uses only the standard library (`urllib`) rather than adding a new HTTP
 client dependency for what's a small, optional, best-effort feature --
 every error (network failure, timeout, non-200, malformed JSON) is the
 caller's (sync.py's) responsibility to catch; this module only raises.
+
+start_refresh() (routers/locations.py's "Refresh Locations" button,
+POST /api/locations/refresh) is the bulk equivalent of sync.py's
+per-photo call above: it re-geocodes every photo that already has GPS
+coordinates, not just ones just (re)extracted during a sync -- e.g.
+after changing LUMINARY_GEOCODE_ZOOM or _PLACE_KEYS (such as the
+shop/street-address additions above) and wanting already-indexed photos
+to pick up the new result, since there's otherwise no backfill path for
+this field (same as latitude/longitude themselves -- see sync.py's
+module docstring). Same background-job shape as sync.py's start_sync()/
+recognition.py's/enrich.py's own start_refresh() (own thread + event
+loop, atomic try_start(), files fanned out across a thread pool) --
+copy that pattern, don't reinvent it. _rate_limit() above still caps
+this at one Nominatim request/second against the public instance, same
+as during a sync, so this is the long pole for a GPS-heavy library here
+too.
 """
 
+import asyncio
 import json
 import logging
 import threading
@@ -37,11 +54,20 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from .config import get_geocode_base_url, get_geocode_user_agent, get_geocode_zoom
+from .database import get_connection
 
 logger = logging.getLogger(__name__)
+
+# Mirrors enrich.py's MAX_CONCURRENCY -- _rate_limit() below still caps
+# actual Nominatim requests to one/second regardless, so this only lets
+# the DB read/write around each geocode call overlap across photos rather
+# than serializing unnecessarily.
+MAX_CONCURRENCY = 8
+_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
 
 # Nominatim's public-instance usage policy caps requests at one per second,
 # enforced here (not per-thread) since sync.py fans work out across several
@@ -180,3 +206,140 @@ def reverse_geocode(latitude: float, longitude: float, timeout: float = 10.0) ->
         return None
 
     return _describe(payload.get("address") or {}, payload.get("display_name"))
+
+
+class _RefreshProgress:
+    """Same shape/locking as sync.py's _SyncProgress/recognition.py's and
+    enrich.py's own _RefreshProgress -- see their docstrings for the
+    reasoning (atomic try_start() so a caller polling status right after
+    POST /api/locations/refresh can't observe a stale terminal status
+    from a previous run)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._state = {"status": "idle", "processed": 0, "total": 0, "updated": 0, "error": None}
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return dict(self._state)
+
+    def try_start(self) -> bool:
+        with self._lock:
+            if self._state["status"] == "running":
+                return False
+            self._state = {"status": "running", "processed": 0, "total": 0, "updated": 0, "error": None}
+            return True
+
+    def set_total(self, total: int) -> None:
+        with self._lock:
+            self._state["total"] = total
+
+    def reset(self) -> None:
+        """For tests -- see conftest.py's `client` fixture, which resets
+        this module-level singleton between tests the same way it already
+        does for sync.progress/recognition.progress/enrich.progress."""
+        with self._lock:
+            self._state = {"status": "idle", "processed": 0, "total": 0, "updated": 0, "error": None}
+
+    def record(self, updated: bool) -> None:
+        with self._lock:
+            self._state["processed"] += 1
+            if updated:
+                self._state["updated"] += 1
+
+    def finish(self) -> None:
+        with self._lock:
+            self._state["status"] = "completed"
+
+    def fail(self, error: str) -> None:
+        with self._lock:
+            self._state["status"] = "error"
+            self._state["error"] = error
+
+
+progress = _RefreshProgress()
+_thread: Optional[threading.Thread] = None
+
+
+def _geocoded_photo_ids() -> list[str]:
+    """Every photo with GPS coordinates to re-geocode. Deliberately not
+    gated on sync.py's content_changed the way the original geocode on
+    insert/update is -- the whole point of this bulk job is to pick up a
+    _describe()/LUMINARY_GEOCODE_ZOOM change (e.g. the shop/street-address
+    additions above) for photos that were already indexed before it
+    existed, with no file change of their own to trigger a re-sync."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id FROM photos WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        ).fetchall()
+        return [row["id"] for row in rows]
+
+
+def _refresh_one(photo_id: str) -> bool:
+    """Best-effort: re-geocode one photo's existing latitude/longitude and
+    overwrite location_name with the result -- including a None result,
+    the same way sync.py's _describe_location assigns its own result
+    unconditionally, so this job reproduces exactly what a fresh sync
+    would have written for the same coordinates. Only an exception
+    (network/timeout/malformed response) leaves location_name untouched
+    and is reported as not updated -- same "never raises" shape as
+    embeddings.embed_description/enrich.enrich_description."""
+    with get_connection() as conn:
+        photo = conn.execute("SELECT latitude, longitude FROM photos WHERE id = %s", (photo_id,)).fetchone()
+    if not photo:
+        return False
+
+    try:
+        location_name = reverse_geocode(photo["latitude"], photo["longitude"])
+    except Exception:
+        logger.warning("Could not re-geocode photo %s", photo_id, exc_info=True)
+        return False
+
+    with get_connection() as conn:
+        conn.execute("UPDATE photos SET location_name = %s WHERE id = %s", (location_name, photo_id))
+        conn.commit()
+    return True
+
+
+def start_refresh() -> dict:
+    """Kick off a background location refresh (every photo with GPS
+    coordinates) in its own thread/event loop if one isn't already
+    running -- same rationale/shape as sync.start_sync()/recognition.
+    start_refresh()/enrich.start_refresh() (decoupled from the API's own
+    request-handling loop, try_start() flips to "running" synchronously
+    before this returns). Returns the current status snapshot either
+    way."""
+    global _thread
+    if progress.try_start():
+        logger.info("Starting location refresh")
+        _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh()), daemon=True)
+        _thread.start()
+    else:
+        logger.info("Location refresh already in progress; ignoring duplicate start request")
+    return progress.snapshot()
+
+
+async def _run_refresh() -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        photo_ids = await loop.run_in_executor(_executor, _geocoded_photo_ids)
+        progress.set_total(len(photo_ids))
+
+        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+
+        async def handle(photo_id: str) -> None:
+            async with semaphore:
+                updated = await loop.run_in_executor(_executor, _refresh_one, photo_id)
+            progress.record(updated)
+
+        await asyncio.gather(*(handle(photo_id) for photo_id in photo_ids))
+
+        progress.finish()
+        logger.info(
+            "Location refresh completed: %d updated of %d photo(s)",
+            progress.snapshot()["updated"],
+            len(photo_ids),
+        )
+    except Exception as exc:
+        logger.exception("Location refresh failed")
+        progress.fail(str(exc))

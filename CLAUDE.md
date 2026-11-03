@@ -257,8 +257,9 @@ cached) is also per-pod, in-memory state — same caveat.
   placement) stored alongside the raw `latitude`/`longitude` —
   called from `sync.py`'s `_describe_location`, only when those
   coordinates are themselves (re)extracted (i.e. `content_changed`, same
-  as `latitude`/`longitude` — no separate backfill pass for this field,
-  deliberately, same reasoning those two already have). Uses OpenStreetMap's
+  as `latitude`/`longitude` — no *automatic* backfill for this field
+  during a sync, deliberately, same reasoning those two already have; see
+  `start_refresh()` below for the manually-triggered one). Uses OpenStreetMap's
   Nominatim reverse-geocoding API — free, no API key, the same OSM service
   `PhotoMap.jsx` already depends on for map tiles — rather than a
   commercial geocoder requiring an account/billing.
@@ -292,6 +293,25 @@ cached) is also per-pod, in-memory state — same caveat.
   its containing street/neighborhood; whether that happens for a given
   photo depends on GPS precision plus OSM's crowd-sourced coverage at
   that spot, not just this zoom/key config.
+
+  `geocode.start_refresh()` (`routers/locations.py`'s "Refresh Locations"
+  button, `POST /api/locations/refresh`) is the bulk, manually-triggered
+  counterpart to the per-photo call above: it re-geocodes every photo
+  that already has `latitude`/`longitude`, not just ones just
+  (re)extracted during a sync — the only way an already-indexed photo
+  picks up a `LUMINARY_GEOCODE_ZOOM`/`_PLACE_KEYS` change (e.g. the
+  shop/street-address additions above) without its underlying file
+  changing. Same background-job shape as `sync.py`'s/`recognition.py`'s/
+  `enrich.py`'s own `start_refresh()` (own thread + event loop, atomic
+  `try_start()`, work fanned out across a thread pool) — copy that
+  pattern, don't reinvent it. `_refresh_one` writes back whatever
+  `reverse_geocode` returns unconditionally, *including* `None` on a
+  resultless-but-successful lookup — matching `sync.py`'s own
+  `_describe_location` exactly, so a refresh reproduces what a fresh sync
+  of the same coordinates would have written; only an exception (network/
+  timeout/malformed response) leaves `location_name` untouched. Still
+  subject to the same one-request/second cap against the public Nominatim
+  instance as a sync is, since both go through the same `_rate_limit()`.
 
 - `enrich.py` composes `photos.description` — the description actually
   shown in the UI — by having a general-purpose LLM (any
@@ -635,7 +655,19 @@ cached) is also per-pod, in-memory state — same caveat.
 - `ManagementPage.jsx` (reached via the sidebar's "Manage" link,
   `view === "manage"` in `App.jsx`) is the individuals catalog's full
   CRUD surface, plus "Refresh Faces" (`recognition.py`'s backend — see its
-  CLAUDE.md entry above). An add-person form, then one `<li>` per
+  CLAUDE.md entry above), "Refresh Descriptions" (`enrich.py`'s backend),
+  and "Refresh Locations" (`geocode.py`'s backend, `POST
+  /api/locations/refresh` — re-geocodes every photo that already has GPS
+  coordinates, since there's no automatic backfill for `location_name`
+  the way there isn't one for `latitude`/`longitude`). All three buttons
+  live together in the "Refresh metadata" section at the top of the page
+  and share the same status-polling/progress-bar shape (own
+  `*RefreshStatus` state + poll-interval ref per job, reusing
+  `SyncStatus.jsx`'s `.sync-status`/`.sync-progress-track`/
+  `.sync-progress-fill` CSS classes rather than the component itself,
+  since each needs its own button text) -- copy one of the three if a
+  fourth such button is ever added, don't reinvent the polling loop. An
+  add-person form, then one `<li>` per
   individual: a chevron toggles its accordion open (lazily fetching
   `GET /api/individuals/{id}/faces` the first time, cached afterward in
   `facesByIndividual` keyed by id — a key's *absence* means "not fetched

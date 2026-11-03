@@ -376,6 +376,71 @@ describe("ManagementPage", () => {
     expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
   });
 
+  it("runs 'Refresh Locations' and reflects progress through to completion", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const refreshMock = vi
+      .spyOn(client, "refreshLocations")
+      .mockResolvedValue({ status: "running", processed: 0, total: 10, updated: 0, error: null });
+
+    const statusMock = vi.spyOn(client, "fetchLocationRefreshStatus");
+    // First call is the mount-time "is a refresh already running?" check --
+    // idle, so it doesn't preempt the click below. The next two are the
+    // poll loop started by that click.
+    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, updated: 0, error: null });
+    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, updated: 3, error: null });
+    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, updated: 8, error: null });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh locations/i }));
+      await Promise.resolve();
+    });
+    expect(refreshMock).toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/refreshing locations… 40%/i)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/done -- 8 updated/i)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(screen.getByRole("button", { name: /refresh locations/i })).toBeInTheDocument();
+  });
+
+  it("shows a failure message if 'Refresh Locations' errors", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "refreshLocations").mockResolvedValue({
+      status: "running",
+      processed: 0,
+      total: 0,
+      updated: 0,
+      error: null,
+    });
+    vi.spyOn(client, "fetchLocationRefreshStatus").mockResolvedValue({
+      status: "error",
+      processed: 0,
+      total: 0,
+      updated: 0,
+      error: "Nominatim unreachable",
+    });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh locations/i }));
+      await Promise.resolve();
+    });
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+  });
+
   describe("tags", () => {
     const VACATION = { id: "t1", name: "Vacation", created_at: "2024-01-01T00:00:00Z", photo_count: 3 };
     const PETS = { id: "t2", name: "Pets", created_at: "2024-01-01T00:00:00Z", photo_count: 1 };
