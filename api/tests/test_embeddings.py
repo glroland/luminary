@@ -153,8 +153,14 @@ def test_embed_description_is_a_noop_when_not_configured(client, monkeypatch):
 def test_embed_description_stores_the_embedding(client, monkeypatch):
     from pgvector import Vector
 
+    # photos.description_embedding is declared vector(1024) (see
+    # db/create_tables.sql) and pgvector enforces that exact dimension on
+    # insert -- a fake vector here must match it, unlike the other fakes
+    # in this file (e.g. _FakeEmbedder) that never actually reach the DB.
+    fake_embedding = [0.1] * embeddings.EMBEDDING_DIMENSIONS
+
     _insert_photo("photo-1", description="a cat on a sofa")
-    monkeypatch.setattr(embeddings, "embed_text", lambda text: Vector([0.1, 0.2, 0.3]))
+    monkeypatch.setattr(embeddings, "embed_text", lambda text: Vector(fake_embedding))
 
     assert embeddings.embed_description("photo-1") is True
 
@@ -162,7 +168,7 @@ def test_embed_description_stores_the_embedding(client, monkeypatch):
         row = conn.execute(
             "SELECT description_embedding FROM photos WHERE id = %s", ("photo-1",)
         ).fetchone()
-    assert row["description_embedding"].to_list() == pytest.approx([0.1, 0.2, 0.3], abs=1e-3)
+    assert row["description_embedding"].to_list() == pytest.approx(fake_embedding, abs=1e-3)
 
 
 def test_embed_description_leaves_embedding_untouched_on_failure(client, monkeypatch, caplog):
