@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ManagementPage from "./components/ManagementPage.jsx";
-import Pagination from "./components/Pagination.jsx";
+import { PageSizeSelect, PaginationNav } from "./components/Pagination.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
 import Sidebar, { SEARCH_THRESHOLD_OPTIONS } from "./components/Sidebar.jsx";
+import SortControl, { SORT_OPTIONS } from "./components/SortControl.jsx";
 import {
   fetchIndividualFaces,
   fetchIndividuals,
@@ -23,6 +24,33 @@ const PAGE_SIZE_OPTIONS = [24, 48, 96, 200];
 function directoryOf(filename) {
   const slash = filename.lastIndexOf("/");
   return slash === -1 ? "" : filename.slice(0, slash);
+}
+
+// Comparator backing SortControl.jsx's options. Folder sort breaks ties by
+// filename (rather than leaving same-folder photos in whatever order they
+// arrived in) so the result is still deterministic within a folder.
+function comparePhotos(a, b, sortOrder) {
+  switch (sortOrder) {
+    case "date-asc":
+      return new Date(a.created_at) - new Date(b.created_at);
+    case "filename-asc":
+      return a.filename.localeCompare(b.filename);
+    case "filename-desc":
+      return b.filename.localeCompare(a.filename);
+    case "folder-asc":
+      return (
+        directoryOf(a.filename).localeCompare(directoryOf(b.filename)) ||
+        a.filename.localeCompare(b.filename)
+      );
+    case "folder-desc":
+      return (
+        directoryOf(b.filename).localeCompare(directoryOf(a.filename)) ||
+        a.filename.localeCompare(b.filename)
+      );
+    case "date-desc":
+    default:
+      return new Date(b.created_at) - new Date(a.created_at);
+  }
 }
 
 export default function App() {
@@ -71,6 +99,9 @@ export default function App() {
   // out-of-range page.
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [page, setPage] = useState(1);
+  // Gallery sort order (date/filename/folder, see SortControl.jsx). Not
+  // applied while a search is active -- see visiblePhotos below.
+  const [sortOrder, setSortOrder] = useState(SORT_OPTIONS[0].value);
   const pollRef = useRef(null);
 
   const loadPhotos = useCallback(async () => {
@@ -207,17 +238,22 @@ export default function App() {
     setSearchError(null);
   }
 
+  const filteredPhotos =
+    selectedIndividual !== null
+      ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
+      : selectedDirectory === null
+        ? photos
+        : photos.filter((photo) => {
+            const dir = directoryOf(photo.filename);
+            return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
+          });
+
+  // Search results are already ordered most-similar-first by the API --
+  // never re-sorted here (see SortControl.jsx's comment).
   const visiblePhotos =
     searchResults !== null
       ? searchResults
-      : selectedIndividual !== null
-        ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
-        : selectedDirectory === null
-          ? photos
-          : photos.filter((photo) => {
-              const dir = directoryOf(photo.filename);
-              return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
-            });
+      : [...filteredPhotos].sort((a, b) => comparePhotos(a, b, sortOrder));
 
   const totalPages = Math.max(1, Math.ceil(visiblePhotos.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -284,6 +320,37 @@ export default function App() {
             </span>
           </button>
           <img className="app-logo" src={logo} alt="Luminary" />
+          {/* Right-aligned header controls (margin-left: auto pushes this
+              group against the header's right edge, after the logo) --
+              only meaningful for the gallery view once photos are loaded,
+              same gating the toolbar/Pagination previously had below the
+              grid. Left-to-right: sort, per-page, pagination nav. */}
+          {view === "gallery" && !isLoading && (
+            <div className="app-header-controls">
+              {searchResults === null && (
+                <SortControl
+                  value={sortOrder}
+                  onChange={(value) => {
+                    setSortOrder(value);
+                    setPage(1);
+                  }}
+                />
+              )}
+              {visiblePhotos.length > 0 && (
+                <>
+                  <PageSizeSelect
+                    pageSize={pageSize}
+                    pageSizeOptions={PAGE_SIZE_OPTIONS}
+                    onPageSizeChange={(size) => {
+                      setPageSize(size);
+                      setPage(1);
+                    }}
+                  />
+                  <PaginationNav page={currentPage} totalPages={totalPages} onPageChange={setPage} />
+                </>
+              )}
+            </div>
+          )}
         </header>
         {error && (
           <p className="error" role="alert">
@@ -314,26 +381,11 @@ export default function App() {
         ) : isLoading ? (
           <p>Loading photos...</p>
         ) : (
-          <>
-            <PhotoGrid
-              photos={paginatedPhotos}
-              onSelect={setSelectedPhoto}
-              emptyMessage={searchResults !== null ? "No photos match your search." : "No photos yet."}
-            />
-            {visiblePhotos.length > 0 && (
-              <Pagination
-                page={currentPage}
-                totalPages={totalPages}
-                pageSize={pageSize}
-                pageSizeOptions={PAGE_SIZE_OPTIONS}
-                onPageChange={setPage}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setPage(1);
-                }}
-              />
-            )}
-          </>
+          <PhotoGrid
+            photos={paginatedPhotos}
+            onSelect={setSelectedPhoto}
+            emptyMessage={searchResults !== null ? "No photos match your search." : "No photos yet."}
+          />
         )}
         <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
       </div>

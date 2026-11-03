@@ -25,6 +25,7 @@ body {
 .app-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -113,13 +114,12 @@ body {
   color: #163a6b;
 }
 
-.pagination {
+.app-header-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
   gap: 1rem;
-  margin-top: 1.5rem;
+  margin-left: auto;
 }
 
 .pagination-nav {
@@ -159,6 +159,23 @@ body {
 }
 
 .pagination-page-size select {
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+  color: #163a6b;
+}
+
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #163a6b;
+  white-space: nowrap;
+}
+
+.sort-control select {
   border: 1px solid #dce6f2;
   border-radius: 6px;
   padding: 0.3rem 0.5rem;
