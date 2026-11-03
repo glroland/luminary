@@ -17,7 +17,7 @@ import logo from "./assets/logo.svg";
 
 const POLL_INTERVAL_MS = 1000;
 const DONE_DISPLAY_MS = 2000;
-const PAGE_SIZE_OPTIONS = [24, 48, 96, 200];
+const PAGE_SIZE_OPTIONS = [15, 24, 48, 96, 200];
 
 // A photo's directory is everything in its (root-relative) filename
 // before the last "/" -- "" for one directly under the photos root.

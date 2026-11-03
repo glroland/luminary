@@ -136,13 +136,13 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("photo-00.jpg")).toBeInTheDocument());
 
-    // Default page size (24) shows the first 24 photos and hides the rest.
-    expect(screen.getByText("photo-23.jpg")).toBeInTheDocument();
-    expect(screen.queryByText("photo-24.jpg")).not.toBeInTheDocument();
+    // Default page size (15) shows the first 15 photos and hides the rest.
+    expect(screen.getByText("photo-14.jpg")).toBeInTheDocument();
+    expect(screen.queryByText("photo-15.jpg")).not.toBeInTheDocument();
     expect(screen.getByText(/page 1 of 2/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^next$/i }));
-    await waitFor(() => expect(screen.getByText("photo-24.jpg")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("photo-15.jpg")).toBeInTheDocument());
     expect(screen.queryByText("photo-00.jpg")).not.toBeInTheDocument();
     expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument();
 
