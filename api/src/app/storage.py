@@ -249,22 +249,26 @@ def delete_photo(photo_id: str) -> bool:
     on the photos backend -- that's someone else's data, not ours to
     delete. If the file is still there, the next sync will re-index it."""
     with get_connection() as conn:
-        # No FK cascade (see database.py) -- clean up the photo's faces
-        # explicitly so they don't outlive their photo row.
+        # No FK cascade (see database.py) -- clean up the photo's faces and
+        # tags explicitly so they don't outlive their photo row.
         conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
+        conn.execute("DELETE FROM photo_tags WHERE photo_id = %s", (photo_id,))
         cursor = conn.execute("DELETE FROM photos WHERE id = %s", (photo_id,))
         conn.commit()
         return cursor.rowcount > 0
 
 
 def purge_all() -> None:
-    """Delete every row from every table -- individuals, faces, and photos.
-    Like delete_photo, this only ever touches Postgres; the photos backend
-    itself is never written to or deleted from. Originals are untouched and
-    will simply be re-indexed as new photos the next time someone syncs."""
+    """Delete every row from every table -- individuals, faces, tags, and
+    photos. Like delete_photo, this only ever touches Postgres; the photos
+    backend itself is never written to or deleted from. Originals are
+    untouched and will simply be re-indexed as new photos the next time
+    someone syncs."""
     with get_connection() as conn:
         conn.execute("DELETE FROM faces")
         conn.execute("DELETE FROM individuals")
+        conn.execute("DELETE FROM photo_tags")
+        conn.execute("DELETE FROM tags")
         conn.execute("DELETE FROM photos")
         conn.commit()
 

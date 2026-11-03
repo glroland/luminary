@@ -465,9 +465,12 @@ def _delete_missing(existing: dict, seen: set) -> int:
     if not missing_ids:
         return 0
     with get_connection() as conn:
-        # No FK cascade (see database.py) -- clean up faces explicitly.
+        # No FK cascade (see database.py) -- clean up faces/tags explicitly.
         with conn.cursor() as cursor:
             cursor.executemany("DELETE FROM faces WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids])
+            cursor.executemany(
+                "DELETE FROM photo_tags WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
+            )
             cursor.executemany("DELETE FROM photos WHERE id = %s", [(photo_id,) for photo_id in missing_ids])
         conn.commit()
     return len(missing_ids)

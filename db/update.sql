@@ -10,7 +10,7 @@
 --
 --   psql "postgresql://luminary:<password>@<host>:<port>/luminary" -v ON_ERROR_STOP=1 -f db/update.sql
 --
--- Current contents: four independent, idempotent changes, safe to apply
+-- Current contents: five independent, idempotent changes, safe to apply
 -- together even if one or more were already applied via a current
 -- create_tables.sql:
 --
@@ -53,6 +53,10 @@
 --    fails with "type vector does not exist", and -v ON_ERROR_STOP=1
 --    (see above) aborts the whole run *without* clearing this file --
 --    install the extension, then just re-run `make db-update`.
+-- 5. Adds the `tags`/`photo_tags` tables backing whole-photo tagging (as
+--    opposed to `individuals`/`faces`, which tag a detected face) -- see
+--    tags.py/routers/tags.py and create_tables.sql's own comment on these
+--    two tables for the full reasoning.
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -92,3 +96,17 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding vector(1024);
 
 CREATE INDEX IF NOT EXISTS idx_photos_description_embedding
     ON photos USING hnsw (description_embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS photo_tags (
+    photo_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    PRIMARY KEY (photo_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id);

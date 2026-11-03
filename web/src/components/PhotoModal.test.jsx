@@ -19,6 +19,10 @@ vi.mock("../api/client.js", async (importOriginal) => ({
   fetchIndividuals: vi.fn(),
   createIndividual: vi.fn(),
   tagFace: vi.fn(),
+  fetchPhotoTags: vi.fn(),
+  fetchTags: vi.fn(),
+  tagPhoto: vi.fn(),
+  untagPhoto: vi.fn(),
 }));
 
 function pressF() {
@@ -61,6 +65,8 @@ describe("PhotoModal", () => {
     // individuals; tests that do override these themselves.
     client.fetchFaces.mockResolvedValue([]);
     client.fetchIndividuals.mockResolvedValue([]);
+    client.fetchPhotoTags.mockResolvedValue([]);
+    client.fetchTags.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -370,5 +376,81 @@ describe("PhotoModal", () => {
 
     await waitFor(() => expect(screen.getByText("No one identified in this photo yet.")).toBeInTheDocument());
     expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+  });
+
+  describe("tags", () => {
+    it("shows an empty state when the photo has no tags", async () => {
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await waitFor(() => expect(screen.getByText("No tags on this photo yet.")).toBeInTheDocument());
+    });
+
+    it("lists the photo's current tags", async () => {
+      client.fetchPhotoTags.mockResolvedValue([{ id: "tag-1", name: "Vacation" }]);
+
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+    });
+
+    it("adds an existing catalog tag to the photo via the dropdown", async () => {
+      client.fetchPhotoTags.mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([{ id: "tag-1", name: "Vacation" }]);
+      client.tagPhoto.mockResolvedValue();
+
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await waitFor(() => expect(screen.getByText("No tags on this photo yet.")).toBeInTheDocument());
+
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "tag-1" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      await waitFor(() => expect(client.tagPhoto).toHaveBeenCalledWith("1", "tag-1"));
+      await waitFor(() => expect(screen.queryByText("No tags on this photo yet.")).not.toBeInTheDocument());
+      expect(screen.getByText("Vacation")).toBeInTheDocument();
+    });
+
+    it("does not offer a tag that's already applied to the photo", async () => {
+      client.fetchPhotoTags.mockResolvedValue([{ id: "tag-1", name: "Vacation" }]);
+      client.fetchTags.mockResolvedValue([
+        { id: "tag-1", name: "Vacation" },
+        { id: "tag-2", name: "Pets" },
+      ]);
+
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      const select = await waitFor(() => screen.getByRole("combobox"));
+      const optionNames = within(select)
+        .getAllByRole("option")
+        .map((option) => option.textContent);
+      expect(optionNames).not.toContain("Vacation");
+      expect(optionNames).toContain("Pets");
+    });
+
+    it("removes a tag from the photo", async () => {
+      client.fetchPhotoTags.mockResolvedValue([{ id: "tag-1", name: "Vacation" }]);
+      client.untagPhoto.mockResolvedValue();
+
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove tag Vacation" }));
+
+      expect(client.untagPhoto).toHaveBeenCalledWith("1", "tag-1");
+      await waitFor(() => expect(screen.queryByText("Vacation")).not.toBeInTheDocument());
+      expect(screen.getByText("No tags on this photo yet.")).toBeInTheDocument();
+    });
+
+    it("resets tags when the photo changes", async () => {
+      client.fetchPhotoTags.mockResolvedValue([{ id: "tag-1", name: "Vacation" }]);
+
+      const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      client.fetchPhotoTags.mockResolvedValue([]);
+      rerender(<PhotoModal photo={{ ...PHOTO, id: "2" }} onClose={() => {}} />);
+
+      await waitFor(() => expect(screen.getByText("No tags on this photo yet.")).toBeInTheDocument());
+      expect(screen.queryByText("Vacation")).not.toBeInTheDocument();
+    });
   });
 });

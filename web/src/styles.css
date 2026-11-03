@@ -322,6 +322,61 @@ body {
   font-style: italic;
 }
 
+/* Right-click checklist tag menu on a gallery thumbnail (PhotoGrid.jsx's
+   tagMenu state) -- viewport-fixed and anchored at the right-click
+   position. Unlike .face-tag-menu, clicking an item toggles it and the
+   menu stays open (so multiple tags can be applied in one right-click);
+   it only closes on an outside click or Escape. */
+.tag-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(22, 58, 107, 0.35);
+  padding: 0.35rem;
+  min-width: 160px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.tag-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  color: #163a6b;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tag-menu-item:hover {
+  background: #f4f7fb;
+}
+
+.tag-menu-item-checked {
+  font-weight: 600;
+}
+
+.tag-menu-item-check {
+  width: 1em;
+  display: inline-block;
+  color: #1d4e8c;
+}
+
+.tag-menu-message {
+  color: #4a6fa1;
+  font-style: italic;
+  cursor: default;
+}
+
+.tag-menu-error {
+  color: #b91c1c;
+  cursor: default;
+  white-space: normal;
+}
+
 .photo-modal-faces-hint {
   position: absolute;
   left: 50%;
@@ -508,6 +563,92 @@ body {
 }
 
 .photo-modal-people-error {
+  margin: 0.4rem 0 0;
+  color: #b91c1c;
+  font-size: 0.8rem;
+}
+
+.photo-modal-tags {
+  border-top: 1px solid #dce6f2;
+  padding-top: 1rem;
+  flex-shrink: 0;
+}
+
+.photo-modal-tags h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: #163a6b;
+}
+
+.photo-modal-tags-list {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.photo-modal-tag-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: #f4f7fb;
+  border: 1px solid #dce6f2;
+  border-radius: 999px;
+  padding: 0.2rem 0.4rem 0.2rem 0.65rem;
+  font-size: 0.8rem;
+  color: #163a6b;
+}
+
+.photo-modal-tag-chip button {
+  background: none;
+  border: none;
+  color: #4a6fa1;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.photo-modal-tags-loading,
+.photo-modal-tags-empty {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  color: #4a6fa1;
+}
+
+.photo-modal-add-tag {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.photo-modal-add-tag select {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.photo-modal-add-tag button {
+  background: #1d4e8c;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.photo-modal-add-tag button:disabled {
+  background: #9fb6d6;
+  cursor: not-allowed;
+}
+
+.photo-modal-tags-error {
   margin: 0.4rem 0 0;
   color: #b91c1c;
   font-size: 0.8rem;
@@ -1120,6 +1261,93 @@ body {
   font-size: 0.65rem;
   padding: 0.05rem 0.35rem;
   border-radius: 999px;
+}
+
+.management-add-tag {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.management-add-tag input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.management-add-tag button {
+  background: #1d4e8c;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.management-add-tag button:disabled {
+  background: #9fb6d6;
+  cursor: not-allowed;
+}
+
+.management-tags {
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.management-tag {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: #f4f7fb;
+  border: 1px solid #dce6f2;
+  border-radius: 8px;
+}
+
+.management-tag-name {
+  flex: 1;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #163a6b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.management-tag-count {
+  font-size: 0.8rem;
+  color: #4a6fa1;
+  flex-shrink: 0;
+}
+
+.management-tag-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.management-tag-actions button {
+  background: #ffffff;
+  border: 1px solid #dce6f2;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  color: #163a6b;
+  cursor: pointer;
+}
+
+.management-tag-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .management-refresh {

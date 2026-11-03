@@ -168,6 +168,44 @@ export async function fetchDescriptionRefreshStatus() {
   return request("/descriptions/refresh/status");
 }
 
+export async function fetchTags() {
+  const data = await request("/tags");
+  return data.tags;
+}
+
+export async function createTag(name) {
+  return request("/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function updateTag(tagId, name) {
+  return request(`/tags/${tagId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteTag(tagId) {
+  await request(`/tags/${tagId}`, { method: "DELETE" });
+}
+
+export async function fetchPhotoTags(photoId) {
+  const data = await request(`/photos/${photoId}/tags`);
+  return data.tags;
+}
+
+export async function tagPhoto(photoId, tagId) {
+  await request(`/photos/${photoId}/tags/${tagId}`, { method: "POST" });
+}
+
+export async function untagPhoto(photoId, tagId) {
+  await request(`/photos/${photoId}/tags/${tagId}`, { method: "DELETE" });
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

@@ -166,6 +166,37 @@ class FaceRefreshStatus(BaseModel):
     error: Optional[str] = None
 
 
+class Tag(BaseModel):
+    id: str
+    name: str
+    created_at: str
+    # Number of photos currently tagged with this -- the management page
+    # shows this instead of the photos themselves (unlike Individual,
+    # whose per-person accordion lists every tagged face).
+    photo_count: int
+
+
+class TagList(BaseModel):
+    tags: list[Tag]
+
+
+class CreateTagRequest(BaseModel):
+    name: str
+
+
+class PhotoTag(BaseModel):
+    # The tags attached to one specific photo (GET /api/photos/{id}/tags)
+    # -- deliberately minimal, same reasoning as TaggedFace: the frontend
+    # only needs enough to render/toggle a tag, not the full catalog row's
+    # created_at/photo_count.
+    id: str
+    name: str
+
+
+class PhotoTagList(BaseModel):
+    tags: list[PhotoTag]
+
+
 class DescriptionRefreshStatus(BaseModel):
     # Mirrors FaceRefreshStatus's shape -- see enrich.py's _RefreshProgress.
     status: str  # "idle" | "running" | "completed" | "error"

@@ -134,6 +134,38 @@ def init_db() -> None:
             """
         )
 
+        # Catalog of free-form tags whole photos can be tagged with -- see
+        # tags.py / routers/tags.py (tag CRUD) and routers/photos.py's
+        # photo-tag endpoints (attaching/detaching a tag on a specific
+        # photo). Distinct from `individuals` above: a tag describes the
+        # photo as a whole, not a detected face, so there's no thumbnail
+        # column here.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tags (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+        # Many-to-many between photos and tags. No FK constraint, same
+        # explicit-delete rationale as `faces` below (see
+        # storage.delete_photo/purge_all and sync._delete_missing, all of
+        # which must also clean up this table's rows for a photo they
+        # remove).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS photo_tags (
+                photo_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                PRIMARY KEY (photo_id, tag_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id)")
+
         # One photo -> many detected faces (sync.py's Florence-2 face
         # detection). No FK constraint -- this app already deletes rows
         # explicitly (storage.delete_photo, sync._delete_missing) rather

@@ -3,8 +3,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from .. import chat, embeddings, storage
-from ..models import ChatRequest, ChatResponse, FaceList, Photo, PhotoList, PhotoSearchResults
+from .. import chat, embeddings, storage, tags
+from ..models import ChatRequest, ChatResponse, FaceList, Photo, PhotoList, PhotoSearchResults, PhotoTagList
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,29 @@ def get_photo_faces(photo_id: str) -> dict:
     if not storage.get_photo(photo_id):
         raise HTTPException(status_code=404, detail="Photo not found")
     return {"faces": storage.get_faces(photo_id)}
+
+
+@router.get("/photos/{photo_id}/tags", response_model=PhotoTagList)
+def get_photo_tags(photo_id: str) -> dict:
+    if not storage.get_photo(photo_id):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return {"tags": tags.list_tags_for_photo(photo_id)}
+
+
+@router.post("/photos/{photo_id}/tags/{tag_id}", status_code=204)
+def add_photo_tag(photo_id: str, tag_id: str) -> None:
+    if not storage.get_photo(photo_id):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    if not tags.tag_photo(photo_id, tag_id):
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+
+@router.delete("/photos/{photo_id}/tags/{tag_id}", status_code=204)
+def remove_photo_tag(photo_id: str, tag_id: str) -> None:
+    # Untagging something that was never tagged is a no-op, same shape as
+    # DELETE /api/faces/{id}/tag -- not worth a 404 over, since the end
+    # state (no tag) is identical either way.
+    tags.untag_photo(photo_id, tag_id)
 
 
 @router.get("/photos/{photo_id}/similar", response_model=PhotoList)

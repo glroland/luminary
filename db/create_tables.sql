@@ -159,6 +159,27 @@ CREATE TABLE IF NOT EXISTS individuals (
     created_at TEXT NOT NULL
 );
 
+-- Catalog of free-form tags whole photos can be tagged with (see
+-- `photo_tags` below) -- tags.py / routers/tags.py, routers/photos.py's
+-- photo-tag endpoints.
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+-- Many-to-many between photos and tags. No FK constraint, same
+-- explicit-delete rationale as `faces` below (storage.delete_photo/
+-- purge_all and sync._delete_missing all clean up this table's rows for a
+-- photo they remove).
+CREATE TABLE IF NOT EXISTS photo_tags (
+    photo_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    PRIMARY KEY (photo_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id);
+
 -- One photo -> many detected faces (sync.py's Florence-2 face detection).
 -- No FK constraint, to match the app's own explicit-delete approach
 -- (storage.delete_photo, sync._delete_missing) rather than relying on a

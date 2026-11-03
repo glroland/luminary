@@ -3,9 +3,13 @@ import {
   createIndividual,
   fetchFaces,
   fetchIndividuals,
+  fetchPhotoTags,
+  fetchTags,
   individualThumbnailUrl,
   originalUrl,
   tagFace,
+  tagPhoto,
+  untagPhoto,
 } from "../api/client.js";
 import PhotoChat from "./PhotoChat.jsx";
 import PhotoMap from "./PhotoMap.jsx";
@@ -107,6 +111,16 @@ export default function PhotoModal({ photo, onClose }) {
   const [tagMenu, setTagMenuState] = useState(null);
   const tagMenuRef = useRef(null);
 
+  // Whole-photo tags (tags.py/routers/tags.py -- distinct from the face
+  // tagging above). `photoTags` is this photo's own tags; `catalogTags`
+  // is the full tag catalog, fetched lazily to populate the "add a
+  // tag…" dropdown below -- both null means "not fetched yet", same
+  // convention as faceBoxes/individuals above.
+  const [photoTags, setPhotoTags] = useState(null);
+  const [catalogTags, setCatalogTags] = useState(null);
+  const [tagToAdd, setTagToAdd] = useState("");
+  const [tagActionError, setTagActionError] = useState(null);
+
   function setTagMenu(updater) {
     setTagMenuState((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
@@ -140,6 +154,9 @@ export default function PhotoModal({ photo, onClose }) {
     setFacesError(null);
     setTagMenu(null);
     setTagError(null);
+    setPhotoTags(null);
+    setTagToAdd("");
+    setTagActionError(null);
   }, [photo?.id]);
 
   useEffect(() => {
@@ -197,6 +214,42 @@ export default function PhotoModal({ photo, onClose }) {
     };
   }, [photo, individuals]);
 
+  // This photo's own tags -- fetched eagerly as soon as it opens, same
+  // "always visible" reasoning as faceBoxes above (the Tags panel isn't
+  // gated behind any toggle).
+  useEffect(() => {
+    if (!photo || photoTags !== null) return;
+    let cancelled = false;
+    fetchPhotoTags(photo.id)
+      .then((tags) => {
+        if (!cancelled) setPhotoTags(tags);
+      })
+      .catch((err) => {
+        if (!cancelled) setTagActionError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [photo, photoTags]);
+
+  // The full tag catalog, for the "add a tag…" dropdown -- fetched once
+  // (not reset on photo change, unlike photoTags above) and reused across
+  // every photo opened this session.
+  useEffect(() => {
+    if (!photo || catalogTags !== null) return;
+    let cancelled = false;
+    fetchTags()
+      .then((list) => {
+        if (!cancelled) setCatalogTags(list);
+      })
+      .catch((err) => {
+        if (!cancelled) setTagActionError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [photo, catalogTags]);
+
   const menuOpen = tagMenu !== null;
   useEffect(() => {
     if (!menuOpen) return;
@@ -250,6 +303,30 @@ export default function PhotoModal({ photo, onClose }) {
       .catch((err) => setAddPersonError(err.message));
   }
 
+  function handleAddTag(event) {
+    event.preventDefault();
+    if (!tagToAdd) return;
+    const tag = catalogTags?.find((candidate) => candidate.id === tagToAdd);
+    tagPhoto(photo.id, tagToAdd)
+      .then(() => {
+        if (tag) {
+          setPhotoTags((prev) => [...(prev ?? []), tag].sort((a, b) => a.name.localeCompare(b.name)));
+        }
+        setTagToAdd("");
+        setTagActionError(null);
+      })
+      .catch((err) => setTagActionError(err.message));
+  }
+
+  function handleRemoveTag(tagId) {
+    untagPhoto(photo.id, tagId)
+      .then(() => {
+        setPhotoTags((prev) => (prev ?? []).filter((tag) => tag.id !== tagId));
+        setTagActionError(null);
+      })
+      .catch((err) => setTagActionError(err.message));
+  }
+
   if (!photo) return null;
 
   const canShowBoxes = boxes.length > 0 && photo.width && photo.height && imgRect;
@@ -265,6 +342,13 @@ export default function PhotoModal({ photo, onClose }) {
   const peopleInPhoto = faceBoxes
     ? Array.from(new Map(faceBoxes.filter((box) => box.person_id).map((box) => [box.person_id, box])).values())
     : [];
+
+  // Catalog tags not already applied to this photo -- what the "add a
+  // tag…" dropdown offers. New tags themselves are only ever created via
+  // ManagementPage, not here.
+  const availableTagsToAdd = (catalogTags ?? []).filter(
+    (tag) => !(photoTags ?? []).some((applied) => applied.id === tag.id)
+  );
 
   return (
     <div className="photo-modal-backdrop" onClick={onClose}>
@@ -351,6 +435,56 @@ export default function PhotoModal({ photo, onClose }) {
                   );
                 })}
               </ul>
+            )}
+          </div>
+
+          <div className="photo-modal-tags">
+            <h3>Tags</h3>
+            {photoTags === null ? (
+              <p className="photo-modal-tags-loading">Loading…</p>
+            ) : photoTags.length === 0 ? (
+              <p className="photo-modal-tags-empty">No tags on this photo yet.</p>
+            ) : (
+              <ul className="photo-modal-tags-list">
+                {photoTags.map((tag) => (
+                  <li key={tag.id} className="photo-modal-tag-chip">
+                    <span>{tag.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag.id)}
+                      aria-label={`Remove tag ${tag.name}`}
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {catalogTags !== null && catalogTags.length === 0 ? (
+              <p className="photo-modal-tags-empty">
+                No tags catalogued yet -- add one from the Manage page.
+              </p>
+            ) : (
+              availableTagsToAdd.length > 0 && (
+                <form className="photo-modal-add-tag" onSubmit={handleAddTag}>
+                  <select value={tagToAdd} onChange={(event) => setTagToAdd(event.target.value)}>
+                    <option value="">Add a tag…</option>
+                    {availableTagsToAdd.map((tag) => (
+                      <option key={tag.id} value={tag.id}>
+                        {tag.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="submit" disabled={!tagToAdd}>
+                    Add
+                  </button>
+                </form>
+              )
+            )}
+            {tagActionError && (
+              <p role="alert" className="photo-modal-tags-error">
+                {tagActionError}
+              </p>
             )}
           </div>
 

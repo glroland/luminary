@@ -7,7 +7,8 @@ Original photo files themselves are never stored here; they stay on the
 configured photos backend (`LUMINARY_PHOTOS_URI`) and are only read, never
 written (see CLAUDE.md's hard invariant).
 
-There are three tables, `photos`, `faces`, and `individuals`, all created by
+There are five tables, `photos`, `faces`, `individuals`, `tags`, and
+`photo_tags`, all created by
 [`db/create_tables.sql`](../db/create_tables.sql) and mirrored by
 `database.py`'s `init_db()` (run on every API startup). **There is no
 migrations framework** — a schema change means updating both of those
@@ -190,6 +191,43 @@ the management page (`ManagementPage.jsx`, linked from the sidebar).
 clean up explicitly" rationale as `faces.photo_id` above. Those faces
 aren't deleted, just untagged back to plain (undetected-identity)
 Florence-2 detections.
+
+## `tags` / `photo_tags`
+
+Free-form, whole-photo tagging — see `tags.py` / `routers/tags.py` (tag
+catalog CRUD) and `routers/photos.py`'s photo-tag endpoints. Distinct from
+`individuals`/`faces` above: a tag describes a photo as a whole (e.g.
+"vacation", "favorites"), not a detected face within it, so there's no
+bounding box or thumbnail involved — just a many-to-many relationship.
+Applied from a right-click checklist menu on a gallery thumbnail
+(`PhotoGrid.jsx`) or the "Tags" panel in the photo viewer (`PhotoModal.jsx`);
+the catalog itself (create/rename/delete) is managed from the management
+page (`ManagementPage.jsx`, linked from the sidebar), which shows each
+tag's photo *count* only, never the tagged photos themselves.
+
+### `tags`
+
+| Column       | Type   | Nullable | Description |
+|--------------|--------|----------|--------------|
+| `id`         | `TEXT` | no       | Primary key. A `uuid4` string, generated when the tag is first catalogued (`POST /api/tags`). |
+| `name`       | `TEXT` | no       | Unique (enforced by a `UNIQUE` constraint — `POST`/`PATCH /api/tags` map a violation to `409`). Freeform, whatever the user typed. |
+| `created_at` | `TEXT` | no       | ISO 8601 timestamp string, same convention as `individuals.created_at`. |
+
+### `photo_tags`
+
+The join table between `photos` and `tags` — no surrogate `id`, just the
+pairing itself.
+
+| Column     | Type   | Nullable | Description |
+|------------|--------|----------|--------------|
+| `photo_id` | `TEXT` | no       | Logically references `photos.id` (see "No foreign key" under `faces` above — same rationale, enforced in application code instead). Part of the composite primary key `(photo_id, tag_id)`, so tagging an already-tagged photo with the same tag is a harmless no-op (`tags.tag_photo`'s `INSERT ... ON CONFLICT DO NOTHING`) rather than a duplicate row or an error. |
+| `tag_id`   | `TEXT` | no       | Logically references `tags.id`. Indexed (`idx_photo_tags_tag_id`) — `tags.list_tags`'s per-tag photo count, and deleting a tag's rows, both filter by it. |
+
+No foreign key, same explicit-cleanup rationale as `faces.photo_id`/
+`person_id`: `storage.delete_photo`, `storage.purge_all`, and
+`sync._delete_missing` all delete a removed photo's `photo_tags` rows
+alongside its `faces` rows, and `tags.delete_tag` deletes a removed tag's
+`photo_tags` rows before deleting the `tags` row itself.
 
 ## Automatic face recognition ("Refresh Faces")
 

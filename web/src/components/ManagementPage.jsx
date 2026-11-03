@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createIndividual,
+  createTag,
   deleteIndividual,
+  deleteTag,
   faceThumbnailUrl,
   fetchDescriptionRefreshStatus,
   fetchFaceRefreshStatus,
   fetchIndividualFaces,
   fetchIndividuals,
+  fetchTags,
   individualThumbnailUrl,
   purgeDatabase,
   refreshDescriptions,
   refreshFaces,
   untagFace,
   updateIndividual,
+  updateTag,
 } from "../api/client.js";
 import SyncStatus from "./SyncStatus.jsx";
 
@@ -45,10 +49,24 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   const descriptionRefreshPollRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
 
+  // Tag catalog (tags.py/routers/tags.py) -- a separate full-CRUD list
+  // from the individuals catalog above, shown with its photo count only
+  // (never the tagged photos themselves, unlike the per-individual
+  // accordion). Same add/rename state shape as individuals.
+  const [tags, setTags] = useState(null);
+  const [tagsError, setTagsError] = useState(null);
+  const [newTagName, setNewTagName] = useState("");
+  const [addTagError, setAddTagError] = useState(null);
+  const [renamingTagId, setRenamingTagId] = useState(null);
+  const [renameTagDraft, setRenameTagDraft] = useState("");
+
   useEffect(() => {
     fetchIndividuals()
       .then(setIndividuals)
       .catch((err) => setPageError(err.message));
+    fetchTags()
+      .then(setTags)
+      .catch((err) => setTagsError(err.message));
     // A sync may already have auto-triggered "Refresh Faces" (see sync.py's
     // _trigger_face_refresh) before this page was ever opened -- same
     // "resume polling if it's already running" check App.jsx does for sync
@@ -258,13 +276,57 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       .catch((err) => setPageError(err.message));
   }
 
-  // Purges the whole database (photos, faces, individuals) -- irreversible
-  // and global, unlike the per-item Delete buttons above, so it's the one
-  // destructive action here that confirms first.
+  function handleAddTag(event) {
+    event.preventDefault();
+    const name = newTagName.trim();
+    if (!name) return;
+    createTag(name)
+      .then((created) => {
+        setTags((prev) => sortByName([...(prev ?? []), created]));
+        setNewTagName("");
+        setAddTagError(null);
+      })
+      .catch((err) => setAddTagError(err.message));
+  }
+
+  function startRenameTag(tag) {
+    setRenamingTagId(tag.id);
+    setRenameTagDraft(tag.name);
+  }
+
+  function cancelRenameTag() {
+    setRenamingTagId(null);
+    setRenameTagDraft("");
+  }
+
+  function saveRenameTag(tagId) {
+    const name = renameTagDraft.trim();
+    if (!name) return;
+    updateTag(tagId, name)
+      .then((updated) => {
+        setTags((prev) => sortByName(prev.map((tag) => (tag.id === tagId ? updated : tag))));
+        setTagsError(null);
+        cancelRenameTag();
+      })
+      .catch((err) => setTagsError(err.message));
+  }
+
+  function handleDeleteTag(tagId) {
+    deleteTag(tagId)
+      .then(() => {
+        setTags((prev) => prev.filter((tag) => tag.id !== tagId));
+        setTagsError(null);
+      })
+      .catch((err) => setTagsError(err.message));
+  }
+
+  // Purges the whole database (photos, faces, individuals, tags) --
+  // irreversible and global, unlike the per-item Delete buttons above, so
+  // it's the one destructive action here that confirms first.
   function handlePurge() {
     if (
       !window.confirm(
-        "This permanently deletes every photo, face, and individual from the database. " +
+        "This permanently deletes every photo, face, individual, and tag from the database. " +
           "The original files on the photos backend are untouched and will be re-indexed " +
           "on the next sync. This cannot be undone. Continue?"
       )
@@ -276,6 +338,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         setIndividuals([]);
         setFacesByIndividual({});
         setExpandedIds(new Set());
+        setTags([]);
         setPurgeError(null);
         onPurged();
       })
@@ -489,11 +552,89 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         </ul>
       )}
 
+      <h2>Manage tags</h2>
+
+      {tagsError && (
+        <p role="alert" className="error">
+          {tagsError}
+        </p>
+      )}
+
+      <form className="management-add-tag" onSubmit={handleAddTag}>
+        <input
+          type="text"
+          value={newTagName}
+          onChange={(event) => setNewTagName(event.target.value)}
+          placeholder="Add a tag…"
+        />
+        <button type="submit" disabled={!newTagName.trim()}>
+          Add
+        </button>
+      </form>
+      {addTagError && (
+        <p role="alert" className="error">
+          {addTagError}
+        </p>
+      )}
+
+      {tags === null ? (
+        <p>Loading…</p>
+      ) : tags.length === 0 ? (
+        <p className="empty-state">No tags catalogued yet.</p>
+      ) : (
+        <ul className="management-tags">
+          {tags.map((tag) => {
+            const renaming = renamingTagId === tag.id;
+            return (
+              <li key={tag.id} className="management-tag">
+                {renaming ? (
+                  <input
+                    className="management-rename-input"
+                    value={renameTagDraft}
+                    autoFocus
+                    onChange={(event) => setRenameTagDraft(event.target.value)}
+                  />
+                ) : (
+                  <span className="management-tag-name">{tag.name}</span>
+                )}
+
+                <span className="management-tag-count">
+                  {tag.photo_count} photo{tag.photo_count === 1 ? "" : "s"}
+                </span>
+
+                <span className="management-tag-actions">
+                  {renaming ? (
+                    <>
+                      <button type="button" onClick={() => saveRenameTag(tag.id)} disabled={!renameTagDraft.trim()}>
+                        Save
+                      </button>
+                      <button type="button" onClick={cancelRenameTag}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => startRenameTag(tag)}>
+                        Rename
+                      </button>
+                      <button type="button" className="management-delete" onClick={() => handleDeleteTag(tag.id)}>
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
       <div className="management-danger-zone">
         <h3>Danger zone</h3>
         <p>
-          Permanently deletes every photo, face, and individual from the database. The original
-          files on the photos backend are untouched and will be re-indexed on the next sync.
+          Permanently deletes every photo, face, individual, and tag from the database. The
+          original files on the photos backend are untouched and will be re-indexed on the next
+          sync.
         </p>
         <button type="button" className="management-purge" onClick={handlePurge}>
           Purge database

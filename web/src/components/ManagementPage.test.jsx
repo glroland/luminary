@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ManagementPage from "./ManagementPage.jsx";
 import * as client from "../api/client.js";
 
@@ -7,6 +7,13 @@ const ALICE = { id: "p1", name: "Alice", has_representative_thumbnail: false, cr
 const BOB = { id: "p2", name: "Bob", has_representative_thumbnail: false, created_at: "2024-01-01T00:00:00Z" };
 
 describe("ManagementPage", () => {
+  beforeEach(() => {
+    // Every render triggers a tags fetch alongside the individuals one --
+    // defaulted to empty here so tests that don't care about tags aren't
+    // affected by it; tests that do override this themselves.
+    vi.spyOn(client, "fetchTags").mockResolvedValue([]);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -50,7 +57,8 @@ describe("ManagementPage", () => {
     await waitFor(() => expect(screen.getByText(/no individuals catalogued yet/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText("Add a person…"), { target: { value: "Alice" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const form = screen.getByPlaceholderText("Add a person…").closest("form");
+    fireEvent.click(within(form).getByRole("button", { name: "Add" }));
 
     expect(createMock).toHaveBeenCalledWith("Alice");
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
@@ -366,5 +374,79 @@ describe("ManagementPage", () => {
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+  });
+
+  describe("tags", () => {
+    const VACATION = { id: "t1", name: "Vacation", created_at: "2024-01-01T00:00:00Z", photo_count: 3 };
+    const PETS = { id: "t2", name: "Pets", created_at: "2024-01-01T00:00:00Z", photo_count: 1 };
+
+    it("lists catalogued tags with their photo counts, but no photos themselves", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([VACATION, PETS]);
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+      expect(screen.getByText("3 photos")).toBeInTheDocument();
+      expect(screen.getByText("Pets")).toBeInTheDocument();
+      expect(screen.getByText("1 photo")).toBeInTheDocument();
+      expect(document.querySelector(".management-tags img")).not.toBeInTheDocument();
+    });
+
+    it("shows an empty state when there are no tags", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([]);
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+
+      await waitFor(() => expect(screen.getByText(/no tags catalogued yet/i)).toBeInTheDocument());
+    });
+
+    it("adds a new tag via the form", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([]);
+      const createMock = vi.spyOn(client, "createTag").mockResolvedValue(VACATION);
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+      await waitFor(() => expect(screen.getByText(/no tags catalogued yet/i)).toBeInTheDocument());
+
+      fireEvent.change(screen.getByPlaceholderText("Add a tag…"), { target: { value: "Vacation" } });
+      const form = screen.getByPlaceholderText("Add a tag…").closest("form");
+      fireEvent.click(within(form).getByRole("button", { name: "Add" }));
+
+      expect(createMock).toHaveBeenCalledWith("Vacation");
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+    });
+
+    it("renames a tag", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([VACATION]);
+      const updateMock = vi.spyOn(client, "updateTag").mockResolvedValue({ ...VACATION, name: "Travel" });
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+      const input = screen.getByDisplayValue("Vacation");
+      fireEvent.change(input, { target: { value: "Travel" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(updateMock).toHaveBeenCalledWith("t1", "Travel");
+      await waitFor(() => expect(screen.getByText("Travel")).toBeInTheDocument());
+    });
+
+    it("deletes a tag", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([VACATION]);
+      const deleteMock = vi.spyOn(client, "deleteTag").mockResolvedValue();
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      expect(deleteMock).toHaveBeenCalledWith("t1");
+      await waitFor(() => expect(screen.queryByText("Vacation")).not.toBeInTheDocument());
+    });
   });
 });
