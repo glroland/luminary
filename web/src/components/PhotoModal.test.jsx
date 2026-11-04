@@ -83,11 +83,25 @@ describe("PhotoModal", () => {
     render(<PhotoModal photo={PHOTO} onClose={onClose} />);
     await flush();
 
-    expect(screen.getByText("beach.jpg")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "beach.jpg" })).toBeInTheDocument();
     expect(screen.getByText("1000 × 800")).toBeInTheDocument();
+
+    const downloadLink = screen.getByRole("link", { name: /download/i });
+    expect(downloadLink).toHaveAttribute("href", expect.stringContaining("/photos/1/original"));
+    expect(downloadLink).toHaveAttribute("download", "beach.jpg");
 
     fireEvent.click(screen.getByRole("button", { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows the full relative path as the heading and names the download after the basename", async () => {
+    render(<PhotoModal photo={{ ...PHOTO, filename: "vacation/2019/beach.jpg" }} onClose={() => {}} />);
+    await flush();
+
+    expect(screen.getByRole("heading", { name: "vacation/2019/beach.jpg" })).toBeInTheDocument();
+
+    const downloadLink = screen.getByRole("link", { name: /download/i });
+    expect(downloadLink).toHaveAttribute("download", "beach.jpg");
   });
 
   it("renders the florence-generated description when present", async () => {

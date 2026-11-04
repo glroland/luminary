@@ -753,16 +753,23 @@ body {
   cursor: default;
 }
 
-.close-button {
+.photo-modal-toolbar {
   position: absolute;
   top: 0.75rem;
   right: 0.75rem;
   z-index: 10;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.close-button {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid #dce6f2;
   border-radius: 6px;
   padding: 0.4rem 0.8rem;
   font-size: 0.85rem;
+  color: #1f2d3d;
+  text-decoration: none;
   cursor: pointer;
 }
 

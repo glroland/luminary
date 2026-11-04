@@ -353,9 +353,18 @@ export default function PhotoModal({ photo, onClose }) {
   return (
     <div className="photo-modal-backdrop" onClick={onClose}>
       <div className="photo-modal" onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="close-button" onClick={onClose}>
-          Close
-        </button>
+        <div className="photo-modal-toolbar">
+          <a
+            className="close-button"
+            href={originalUrl(photo.id)}
+            download={photo.filename.split("/").pop()}
+          >
+            Download
+          </a>
+          <button type="button" className="close-button" onClick={onClose}>
+            Close
+          </button>
+        </div>
 
         <div className="photo-modal-image-pane">
           <div className="photo-modal-image-wrap" ref={wrapRef}>
