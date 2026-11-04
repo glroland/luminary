@@ -212,6 +212,15 @@ body {
   box-shadow: 0 10px 30px rgba(22, 58, 107, 0.25);
 }
 
+/* The Fullscreen API's UA default stylesheet doesn't force a fullscreen
+   element to actually fill the screen -- without this it just keeps its
+   own 94vw/92vh box, centered on an otherwise-black screen. */
+.photo-modal:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+}
+
 .photo-modal-image-pane {
   flex: 2;
   min-width: 0;
@@ -234,6 +243,9 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
+  /* Clips the hover-zoomed image (see .photo-modal-image-zoomed) to this
+     pane instead of spilling visually into the sidebar/toolbar. */
+  overflow: hidden;
 }
 
 .photo-modal-image-pane img {
@@ -241,6 +253,14 @@ body {
   height: 100%;
   display: block;
   object-fit: contain;
+  cursor: zoom-in;
+  transition: transform 0.1s ease-out;
+}
+
+/* Hover-zoom (see PhotoModal.jsx's handleImageMouseMove) -- transform-origin
+   is set inline per-mousemove, this just applies the scale itself. */
+.photo-modal-image-zoomed {
+  transform: scale(2.5);
 }
 
 .photo-modal-bbox {

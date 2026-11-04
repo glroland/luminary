@@ -392,6 +392,100 @@ describe("PhotoModal", () => {
     expect(screen.queryByText("Alice")).not.toBeInTheDocument();
   });
 
+  describe("hover zoom", () => {
+    it("scales the image toward the cursor on hover and resets on mouse leave", async () => {
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+
+      const img = document.querySelector(".photo-modal-image-pane img");
+      vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 200, height: 100 });
+
+      fireEvent.mouseMove(img, { clientX: 50, clientY: 25 });
+      expect(img).toHaveClass("photo-modal-image-zoomed");
+      expect(img.style.transformOrigin).toBe("25% 25%");
+
+      fireEvent.mouseLeave(img);
+      expect(img).not.toHaveClass("photo-modal-image-zoomed");
+    });
+
+    it("does not zoom while a face box overlay is shown, to avoid desyncing it from the image", async () => {
+      client.fetchFaces.mockResolvedValue([{ x1: 100, y1: 100, x2: 300, y2: 300 }]);
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      measureImage();
+
+      pressF();
+      await waitFor(() => expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument());
+
+      const img = document.querySelector(".photo-modal-image-pane img");
+      fireEvent.mouseMove(img, { clientX: 50, clientY: 25 });
+      expect(img).not.toHaveClass("photo-modal-image-zoomed");
+    });
+
+    it("zooms back out immediately when 'f' is pressed while already zoomed in", async () => {
+      client.fetchFaces.mockResolvedValue([{ x1: 100, y1: 100, x2: 300, y2: 300 }]);
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      measureImage();
+
+      const img = document.querySelector(".photo-modal-image-pane img");
+      vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 200, height: 100 });
+      fireEvent.mouseMove(img, { clientX: 50, clientY: 25 });
+      expect(img).toHaveClass("photo-modal-image-zoomed");
+
+      // The mouse hasn't moved off the image -- pressing "f" alone (not a
+      // mouseleave) must still drop the zoom, since the face boxes about to
+      // render are positioned for the unzoomed image.
+      pressF();
+      expect(img).not.toHaveClass("photo-modal-image-zoomed");
+      await flush();
+    });
+
+    it("zooms back out when a chat reply brings in grounding boxes", async () => {
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      measureImage();
+      await flush();
+
+      const img = document.querySelector(".photo-modal-image-pane img");
+      vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 200, height: 100 });
+      fireEvent.mouseMove(img, { clientX: 50, clientY: 25 });
+      expect(img).toHaveClass("photo-modal-image-zoomed");
+
+      fireEvent.click(screen.getByText("trigger-boxes"));
+      expect(img).not.toHaveClass("photo-modal-image-zoomed");
+    });
+  });
+
+  describe("full screen", () => {
+    afterEach(() => {
+      delete document.exitFullscreen;
+      Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
+    });
+
+    it("requests full screen on the modal and reflects the button label from fullscreenchange", async () => {
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+
+      const modalNode = document.querySelector(".photo-modal");
+      modalNode.requestFullscreen = vi.fn(() => {
+        Object.defineProperty(document, "fullscreenElement", { value: modalNode, configurable: true });
+        document.dispatchEvent(new Event("fullscreenchange"));
+        return Promise.resolve();
+      });
+      document.exitFullscreen = vi.fn(() => {
+        Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
+        document.dispatchEvent(new Event("fullscreenchange"));
+        return Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
+      expect(modalNode.requestFullscreen).toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Exit full screen" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Exit full screen" }));
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Full screen" })).toBeInTheDocument();
+    });
+  });
+
   describe("tags", () => {
     it("shows an empty state when the photo has no tags", async () => {
       render(<PhotoModal photo={PHOTO} onClose={() => {}} />);

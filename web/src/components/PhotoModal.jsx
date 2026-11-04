@@ -68,6 +68,26 @@ export default function PhotoModal({ photo, onClose }) {
   const [boxes, setBoxes] = useState([]);
   const imgRef = useRef(null);
   const wrapRef = useRef(null);
+  const modalRef = useRef(null);
+
+  // Hover-zoom (magnifier): wherever the cursor sits over the image, that
+  // point becomes the CSS `transform-origin` for a scale-up on the <img>
+  // itself -- the point under the cursor stays put while everything around
+  // it grows, which is what makes it read as "zooming in on this spot"
+  // rather than just enlarging the whole image. `null` means not hovering
+  // (image at 1x). Percentages are relative to the <img> element's own
+  // border box (matching `transform-origin`'s own coordinate system), not
+  // the letterboxed visible-content box `imgRect` tracks below -- object-
+  // fit: contain doesn't change under a transform, so the rendered box
+  // (letterboxing included) just magnifies as a single image, the same way
+  // a real magnifying glass would held over a printed photo.
+  const [zoomOrigin, setZoomOrigin] = useState(null);
+
+  // Mirrors the Fullscreen API's actual state (not just "did we call
+  // requestFullscreen") so pressing Esc -- which browsers intercept to exit
+  // fullscreen natively, bypassing this component entirely -- still flips
+  // the button's label back.
+  const [isFullscreen, setIsFullscreen] = useState(false);
   // The <img>'s rendered visible-content box, in px relative to wrapRef --
   // re-measured on load and on resize (see useEffect below). Box overlays
   // are positioned in pixels from this rather than CSS percentages of the
@@ -149,6 +169,62 @@ export default function PhotoModal({ photo, onClose }) {
   }, [photo?.id]);
 
   useEffect(() => {
+    function handleFullscreenChange() {
+      setIsFullscreen(document.fullscreenElement === modalRef.current);
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  // Fullscreen is exited here on unmount rather than relying on the browser
+  // to do it -- closing the modal removes modalRef.current from the DOM
+  // while it may still be the active fullscreen element, which would
+  // otherwise leave the user staring at a blank fullscreen layer with
+  // nothing left to show.
+  useEffect(() => {
+    return () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+
+  // A context that doesn't grant the "fullscreen" permission (e.g. an
+  // iframe without allow="fullscreen", or a tab under remote/automated
+  // control) can make request/exitFullscreen() either reject their Promise
+  // or throw synchronously, depending on the browser -- caught both ways
+  // since there's nothing more to do about it here than not surface it as
+  // an unhandled exception; isFullscreen just stays whatever it already was
+  // (no fullscreenchange event fires either way).
+  function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        document.exitFullscreen()?.catch(() => {});
+      } else {
+        modalRef.current?.requestFullscreen()?.catch(() => {});
+      }
+    } catch {
+      // See comment above.
+    }
+  }
+
+  function handleImageMouseMove(event) {
+    // Boxes (chat grounding or stored faces) are positioned from imgRect,
+    // which isn't re-measured on every mousemove -- scaling the image out
+    // from under them while zoomed would desync the overlay from what
+    // they're supposed to be pointing at, so hover-zoom sits out while
+    // either kind of box is on screen.
+    if (canShowBoxes || canShowFaces) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setZoomOrigin({
+      x: ((event.clientX - rect.left) / rect.width) * 100,
+      y: ((event.clientY - rect.top) / rect.height) * 100,
+    });
+  }
+
+  function handleImageMouseLeave() {
+    setZoomOrigin(null);
+  }
+
+  useEffect(() => {
     setShowFaces(false);
     setFaceBoxes(null);
     setFacesError(null);
@@ -157,6 +233,7 @@ export default function PhotoModal({ photo, onClose }) {
     setPhotoTags(null);
     setTagToAdd("");
     setTagActionError(null);
+    setZoomOrigin(null);
   }, [photo?.id]);
 
   useEffect(() => {
@@ -172,12 +249,24 @@ export default function PhotoModal({ photo, onClose }) {
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
       if (isEditable) return;
 
+      // Face boxes are positioned from imgRect, not the live (possibly
+      // scaled) image -- leaving a hover-zoom engaged while they're shown
+      // would both desync the boxes from the magnified image and make
+      // them hard to read, so toggling faces always drops back to 1x.
+      setZoomOrigin(null);
       setShowFaces((prev) => !prev);
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [photo]);
+
+  // Same reasoning as the "f" handler above, for the other source of box
+  // overlays: a chat reply landing while the image is still zoomed in from
+  // an earlier hover.
+  useEffect(() => {
+    if (boxes.length > 0) setZoomOrigin(null);
+  }, [boxes]);
 
   // Fetched as soon as a photo is open, not gated on showFaces -- the
   // "People in this photo" panel below is always visible (unlike the
@@ -352,8 +441,11 @@ export default function PhotoModal({ photo, onClose }) {
 
   return (
     <div className="photo-modal-backdrop" onClick={onClose}>
-      <div className="photo-modal" onClick={(event) => event.stopPropagation()}>
+      <div className="photo-modal" ref={modalRef} onClick={(event) => event.stopPropagation()}>
         <div className="photo-modal-toolbar">
+          <button type="button" className="close-button" onClick={toggleFullscreen}>
+            {isFullscreen ? "Exit full screen" : "Full screen"}
+          </button>
           <a
             className="close-button"
             href={originalUrl(photo.id)}
@@ -368,7 +460,20 @@ export default function PhotoModal({ photo, onClose }) {
 
         <div className="photo-modal-image-pane">
           <div className="photo-modal-image-wrap" ref={wrapRef}>
-            <img ref={imgRef} src={originalUrl(photo.id)} alt={photo.filename} onLoad={updateImgRect} />
+            <img
+              ref={imgRef}
+              src={originalUrl(photo.id)}
+              alt={photo.filename}
+              onLoad={updateImgRect}
+              onMouseMove={handleImageMouseMove}
+              onMouseLeave={handleImageMouseLeave}
+              className={zoomOrigin ? "photo-modal-image-zoomed" : undefined}
+              style={
+                zoomOrigin
+                  ? { transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%` }
+                  : undefined
+              }
+            />
             {canShowBoxes &&
               boxes.map((box, index) => (
                 <div key={index} className="photo-modal-bbox" style={boxStyle(box, photo, imgRect)}>
