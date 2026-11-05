@@ -248,7 +248,22 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       .catch((err) => setPageError(err.message));
   }
 
+  // Re-detects every photo's faces against the current detection settings
+  // and discards every existing face tag, manual or auto, along with the
+  // stale boxes they were on (see recognition.py's module docstring) --
+  // same "confirm the one destructive, irreversible, global action" shape
+  // as handlePurge above, just scoped to faces/tags rather than the whole
+  // database.
   function handleRefreshFaces() {
+    if (
+      !window.confirm(
+        "This re-detects faces in every photo and deletes all existing face tags -- manual and " +
+          "automatic -- along with them. You'll need to re-tag individuals afterward before " +
+          "auto-matching can find anything. This cannot be undone. Continue?"
+      )
+    ) {
+      return;
+    }
     refreshFaces()
       .then((status) => {
         setRefreshStatus(status);

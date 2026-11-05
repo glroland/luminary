@@ -337,6 +337,52 @@ plus the downloaded model weights) — bump `api.resources` accordingly if you
 turn it on. `api/requirements.txt` has a note on using the CPU-only `torch`
 wheel index to avoid pulling in CUDA libraries you don't need without a GPU.
 
+### Face detection
+
+`POST /api/sync` detects faces in each indexed photo via facenet-pytorch's
+MTCNN (see `face_detection.py`'s module docstring) — a separate step from
+the manual/automatic face *tagging* covered elsewhere in this README. Two
+tunables:
+
+| Variable                          | Default | Purpose                              |
+|------------------------------------|---------|---------------------------------------|
+| `LUMINARY_FACE_DETECTION_THRESHOLD`| `0.8`   | Confidence MTCNN must clear to report a detected face — lower catches more faces (partial/angled/small, or in a crowded photo) at the cost of more false positives; no single right value across different libraries, tune against your own |
+| `LUMINARY_FACE_MIN_SIZE`           | `150`   | Smallest face, in pixels of MTCNN's internally-resized copy of the image (not the original photo's resolution), it will report — lower catches smaller/more distant faces at the cost of more false positives and slower detection; facenet-pytorch's own MTCNN default (`20`) was confirmed too permissive in practice (spurious small-box detections) |
+
+For local testing, just set them in your shell before running `make
+run-api` or `make test-api` (`config.py` reads both lazily, same as every
+other `LUMINARY_*` setting, so neither is hardcoded into either Makefile
+target):
+
+```bash
+LUMINARY_FACE_DETECTION_THRESHOLD=0.5 LUMINARY_FACE_MIN_SIZE=40 make run-api
+```
+
+For a deployed cluster, they're `api.env.faceDetectionThreshold`/
+`api.env.faceMinSize` in the Helm chart's `values.yaml` (see
+`deploy/helm/luminary/values.yaml`) — either edit them there or pass
+`--set api.env.faceDetectionThreshold=0.5 --set api.env.faceMinSize=40` to
+`helm upgrade`.
+
+### Background job concurrency
+
+`sync.py`'s indexing (face detection included) and `recognition.py`'s
+"Refresh Faces" each fan files/photos out across a `ThreadPoolExecutor`
+rather than processing one at a time — how many at once is
+`LUMINARY_MAX_CONCURRENCY` (default `8`, the original hardcoded value for
+both — see `config.get_max_concurrency()`'s docstring). Unlike the
+settings above, it's read once at process start, not re-read per sync/
+refresh run, since the executor's pool size can only be chosen once.
+
+`make run-api` defaults it lower, to `4` (set in the Makefile, not
+`config.py`, so it only affects local runs) — a laptop running `make
+run-api` is typically sharing CPU with everything else you're doing,
+unlike a dedicated k8s pod. Override with `make run-api
+LUMINARY_MAX_CONCURRENCY=8`. For a deployed cluster it's
+`api.env.maxConcurrency` in the Helm chart's `values.yaml`, defaulting to
+`8` — edit it there or pass `--set api.env.maxConcurrency=4` to `helm
+upgrade`.
+
 ### Reverse geocoding
 
 Alongside the raw `latitude`/`longitude` decoded from a photo's EXIF GPS

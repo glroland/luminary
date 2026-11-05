@@ -110,6 +110,12 @@ class FaceBox(BaseModel):
     # "manual" | "auto" | null (null exactly when person_id is). See
     # faces.tag_source's comment in db/create_tables.sql.
     tag_source: Optional[str] = None
+    # MTCNN's own per-candidate detection probability (face_detection.
+    # detect_faces) -- unrelated to recognition.py's match_confidence,
+    # which isn't exposed here (it's an internal matching score, not
+    # something PhotoModal.jsx's box overlay shows). Null for a face
+    # detected before this column existed (see database.py's ALTER TABLE).
+    detection_confidence: Optional[float] = None
 
 
 class FaceList(BaseModel):

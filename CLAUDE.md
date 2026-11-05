@@ -531,12 +531,69 @@ cached) is also per-pod, in-memory state — same caveat.
   once per face) — same reasoning as `people.py`'s manual tag/untag, see
   `enrich.py`'s entry above.
 
+  `start_refresh(full: bool = False)` has two callers with two very
+  differently-scoped behaviors, not one. `sync.py`'s post-sync trigger
+  passes the default, `full=False` — incremental, candidates are only
+  still-untagged faces, existing faces/tags left completely alone (cheap/
+  idempotent after the first pass, run after every sync with no extra
+  cost for a library that hasn't changed).
+
+  `routers/faces.py`'s standalone "Refresh Faces" **button** passes
+  `full=True`, a deliberately destructive operation: the premise (per
+  whoever clicks it) is that `LUMINARY_FACE_DETECTION_THRESHOLD`/
+  `LUMINARY_FACE_MIN_SIZE` (`face_detection.py`, above) just changed, so
+  every existing face *box* — not just its tag — was detected under
+  settings that no longer apply. Before matching starts,
+  `_redetect_photo_faces` re-runs `face_detection.detect_faces` for every
+  already-indexed photo against the *current* settings and replaces that
+  photo's faces (`storage.replace_faces`, deletes-then-reinserts with
+  fresh ids — the same "re-detection also wipes tags" behavior `sync.py`'s
+  own content-change path already has, just triggered by a settings
+  change instead of a file change). `detect_faces` returns, and
+  `replace_faces` stores, each box's own `detection_confidence` (MTCNN's
+  per-candidate probability, the same score `LUMINARY_FACE_DETECTION_
+  THRESHOLD` is compared against — a new `faces` column, `NULL` for any
+  row detected before it existed, same as the other `ALTER TABLE ADD
+  COLUMN`-never-backfills gaps elsewhere in this file) — unrelated to
+  `match_confidence` below, which is a different, later score for a
+  different question (*whose* face, not *whether* it's a face).
+  `PhotoModal.jsx`'s "f" overlay (below) shows this per box regardless of
+  tag state. That means a full refresh discards
+  *every* tag in the library, manual or auto, along with the stale boxes
+  — a box detected under the old sensitivity may not be the same face (or
+  exist at all) under the new one, so a tag pointing at it is exactly as
+  stale. `face_detection.ensure_configured()` is checked once, up front,
+  *before* any photo is touched — a missing torch/facenet-pytorch
+  dependency must fail the whole run before anything is wiped, not get
+  discovered photo-by-photo after some faces are already gone with
+  nothing to replace them. This is a confirmed, deliberate trade-off
+  (confirmed with the person who requested it, given how destructive it
+  is): after a full refresh, every individual needs at least one face
+  manually re-tagged again before `_reference_embeddings` has anything to
+  match future candidates against — `total`/`matched` will legitimately
+  show candidates-but-zero-matches until that happens, not a bug.
+  `_redetect_photo_faces` only skips `storage.replace_faces` entirely
+  (leaving a photo's existing faces completely alone) when its original
+  can't be read/decoded this time — "detection didn't run" must not look
+  like "detection ran and found zero faces". Every photo that had *any*
+  tagged face before the redetect (`_photos_with_tagged_faces`, read
+  before any replace_faces call) gets `enrich.enrich_description` called
+  afterward, same reasoning as `people.delete_individual`'s own bulk-clear/
+  enrich pattern — "who's in this photo" just changed there too,
+  independent of whatever the subsequent re-match does or doesn't find.
+
   Uses facenet-pytorch's `InceptionResnetV1(pretrained="vggface2")` for
   embeddings, deliberately not DeepFace (which would need TensorFlow, a
   *second* multi-GB ML framework, alongside the torch/transformers stack
   Florence-2 above already requires) — see `requirements.txt`'s comment.
-  We don't use facenet-pytorch's own MTCNN face detector at all, only its
-  embedding half, since Florence-2 already supplies every box. `_embed()`
+  Matching itself only ever uses that embedding half against boxes that
+  already exist, from `face_detection.py`'s MTCNN (see that module's own
+  entry above for why detection moved off Florence-2's `<OD>` task) —
+  this module doesn't call `detect_faces` itself for the *matching* step.
+  The one exception is the `full=True` redetect step above, which does
+  call `face_detection.detect_faces` directly, through the same MTCNN
+  `face_detection.py` already loads for `sync.py`'s own indexing.
+  `_embed()`
   calls `_load_embedder()` first (raises `FaceRecognitionNotConfigured`,
   mirroring `chat.ChatNotConfigured`, if torch/facenet-pytorch aren't
   installed) before its own bare `import torch`/`torchvision`/
@@ -724,7 +781,13 @@ cached) is also per-pod, in-memory state — same caveat.
   `tagFace(faceId, personId)`; releasing over nothing (or outside any
   item) just closes the menu with no API call. A tagged face gets a
   distinct border color (`.photo-modal-bbox-face-tagged`) and the
-  individual's name as a label. The modal's own "People" section (gated
+  individual's name as a label. Every face box, tagged or not, also shows
+  `faces.detection_confidence` (see `recognition.py`'s entry above) as a
+  rounded percentage via a second, bottom-anchored label
+  (`.photo-modal-bbox-score`, distinct from `.photo-modal-bbox-label`'s
+  `top: -1.5rem` positioning so the two never overlap on the same box) —
+  omitted entirely when `null` (a face detected before this column
+  existed). The modal's own "People" section (gated
   on `showFaces`, same as the box overlay) only supports adding a new
   individual (a plain name input/button calling `client.js`'s
   `createIndividual`) — renaming/deleting an individual, and browsing/

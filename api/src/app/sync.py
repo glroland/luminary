@@ -20,14 +20,15 @@ given file actually needs.
 
 Each inserted/updated file also gets a `vlm_description` (chat.caption_image
 -- Florence-2's raw caption, not the description shown in the UI, see
-below) and its faces detected (chat.detect_faces, general object detection
-filtered to "face" labels -- see chat.py's module docstring for why that,
-not phrase grounding, is what finds *every* face rather than just one --
-stored one-to-many in the `faces` table via storage.replace_faces) via
-Florence-2. `vlm_description` doubles as the signal for "has Florence-2
-already run on this photo at all", covering face detection too, not just
-the caption -- see _run_florence_pipeline for the ordering that makes that
-a reliable signal (faces are always written *before* `vlm_description`,
+below) and its faces detected (face_detection.detect_faces, facenet-
+pytorch's MTCNN -- see that module's docstring for why a purpose-built
+face detector replaced an earlier Florence-2 <OD> approach -- stored
+one-to-many in the `faces` table via storage.replace_faces). `vlm_
+description` doubles as the signal for "has this photo's Florence-2
+caption + face detection already run at all", covering face detection too,
+not just the caption, even though the two now come from different
+models -- see _run_florence_pipeline for the ordering that makes that a
+reliable signal (faces are always written *before* `vlm_description`,
 never after), and _sync_one_file's docstring for how that combines with
 the backfill behavior above.
 
@@ -77,13 +78,17 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, enrich, geocode, recognition, storage
+from . import chat, enrich, face_detection, geocode, recognition, storage
+from .config import get_max_concurrency
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENCY = 8
+# Read once at import time -- see config.get_max_concurrency()'s docstring
+# for why this isn't re-read per sync run the way other LUMINARY_* settings
+# are read lazily elsewhere in this app.
+MAX_CONCURRENCY = get_max_concurrency()
 
 IMAGE_EXTENSIONS = {
     ".jpg",
@@ -382,7 +387,7 @@ def _run_florence_pipeline(photo_id: str, image, relative_path: str) -> None:
     survive alongside (or instead of) this attempt's result.
 
     `image` must already be RGB and EXIF-transposed, same precondition as
-    chat.caption_image/detect_faces.
+    chat.caption_image and face_detection.detect_faces.
 
     Once `vlm_description` (and faces) are safely committed, also calls
     enrich.enrich_description(photo_id) -- `photos.description`, the text
@@ -432,15 +437,17 @@ def _generate_vlm_description(image, relative_path: str) -> Optional[str]:
 
 
 def _detect_faces(image, relative_path: str) -> Optional[list[dict]]:
-    """Best-effort Florence-2 face-detection step of _run_florence_pipeline.
-    `image` must already be RGB and EXIF-transposed. Returns the detected
-    boxes (possibly an empty list -- "no faces found" is a valid,
-    successful result, not a failure), or None if detection itself
-    couldn't run/complete. Error handling mirrors _generate_vlm_description."""
+    """Best-effort face-detection step of _run_florence_pipeline (named for
+    the pipeline it's part of; the detection itself is face_detection.py's
+    MTCNN, not Florence-2 -- see that module's docstring for why). `image`
+    must already be RGB and EXIF-transposed. Returns the detected boxes
+    (possibly an empty list -- "no faces found" is a valid, successful
+    result, not a failure), or None if detection itself couldn't run/
+    complete. Error handling mirrors _generate_vlm_description."""
     try:
-        return chat.detect_faces(image)
-    except chat.ChatNotConfigured:
-        logger.debug("Florence-2 not configured; skipping face detection for %r", relative_path)
+        return face_detection.detect_faces(image)
+    except face_detection.FaceDetectionNotConfigured:
+        logger.debug("Face detection not configured; skipping for %r", relative_path)
         return None
     except Exception:
         logger.warning("Could not detect faces for %r", relative_path, exc_info=True)

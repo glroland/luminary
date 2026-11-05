@@ -133,14 +133,15 @@ describe("PhotoModal", () => {
     await flush();
 
     const img = document.querySelector(".photo-modal-image-pane img");
-    const wrap = document.querySelector(".photo-modal-image-wrap");
 
-    // Simulate the <img> element rendered as a 600x600 box (object-fit:
+    // Simulate the <img> element laid out as a 600x600 box (object-fit:
     // contain will letterbox it, since the 1000x800 photo's aspect ratio
     // -- 1.25 -- doesn't match the square element). Visible image content
     // should work out to 600x480, vertically centered (top offset 60px).
-    vi.spyOn(wrap, "getBoundingClientRect").mockReturnValue({ left: 10, top: 20, width: 600, height: 600 });
-    vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: 10, top: 20, width: 600, height: 600 });
+    // offsetWidth/offsetHeight/offsetLeft/offsetTop, not
+    // getBoundingClientRect(), since those are what measureVisibleImageRect
+    // now reads -- see its own docstring for why.
+    setOffsetRect(img, { left: 0, top: 0, width: 600, height: 600 });
     Object.defineProperty(img, "naturalWidth", { value: 1000, configurable: true });
     Object.defineProperty(img, "naturalHeight", { value: 800, configurable: true });
 
@@ -167,11 +168,21 @@ describe("PhotoModal", () => {
     expect(document.querySelector(".photo-modal-bbox")).not.toBeInTheDocument();
   });
 
+  // jsdom has no real layout engine -- offsetWidth/offsetHeight/offsetLeft/
+  // offsetTop are plain getters that return 0 unless overridden per
+  // instance, same as naturalWidth/naturalHeight below. Mirrors
+  // measureVisibleImageRect's own use of these (not getBoundingClientRect())
+  // -- see that function's docstring for why.
+  function setOffsetRect(el, { left, top, width, height }) {
+    Object.defineProperty(el, "offsetLeft", { value: left, configurable: true });
+    Object.defineProperty(el, "offsetTop", { value: top, configurable: true });
+    Object.defineProperty(el, "offsetWidth", { value: width, configurable: true });
+    Object.defineProperty(el, "offsetHeight", { value: height, configurable: true });
+  }
+
   function measureImage() {
     const img = document.querySelector(".photo-modal-image-pane img");
-    const wrap = document.querySelector(".photo-modal-image-wrap");
-    vi.spyOn(wrap, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 800 });
-    vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 1000, height: 800 });
+    setOffsetRect(img, { left: 0, top: 0, width: 1000, height: 800 });
     Object.defineProperty(img, "naturalWidth", { value: 1000, configurable: true });
     Object.defineProperty(img, "naturalHeight", { value: 800, configurable: true });
     fireEvent.load(img);
@@ -190,6 +201,22 @@ describe("PhotoModal", () => {
     expect(screen.getByText("1 face detected (press F to hide)")).toBeInTheDocument();
     // Face boxes are unlabeled, unlike the chat-grounding boxes.
     expect(document.querySelector(".photo-modal-bbox-face .photo-modal-bbox-label")).not.toBeInTheDocument();
+    // No detection_confidence on this box -- the score badge is omitted
+    // entirely rather than showing e.g. "NaN%".
+    expect(document.querySelector(".photo-modal-bbox-score")).not.toBeInTheDocument();
+  });
+
+  it("shows MTCNN's detection confidence as a rounded percentage on each face box", async () => {
+    client.fetchFaces.mockResolvedValue([
+      { id: "f1", x1: 100, y1: 100, x2: 300, y2: 300, detection_confidence: 0.873 },
+    ]);
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+
+    pressF();
+
+    await waitFor(() => expect(document.querySelector(".photo-modal-bbox-face")).toBeInTheDocument());
+    expect(document.querySelector(".photo-modal-bbox-score").textContent).toBe("87%");
   });
 
   it("hides faces on a second press without re-fetching", async () => {
@@ -451,6 +478,48 @@ describe("PhotoModal", () => {
 
       fireEvent.click(screen.getByText("trigger-boxes"));
       expect(img).not.toHaveClass("photo-modal-image-zoomed");
+    });
+
+    it("positions face boxes correctly even while getBoundingClientRect reports a zoom-distorted box", async () => {
+      // Regression (two reported symptoms, same root cause): boxes landed
+      // in the wrong place either (a) opening the modal with the cursor
+      // already resting on the image, racing a hover-triggered zoom
+      // against the image's very first rect measurement, or (b) pressing
+      // "f" while already zoomed in, which only *starts* an animated
+      // transition back to 1x (styles.css's `transition: transform 0.1s
+      // ease-out`) rather than snapping instantly -- so even measuring
+      // right as zoom "ends" could still catch it mid-transition.
+      //
+      // Both traced back to measureVisibleImageRect reading
+      // getBoundingClientRect(), which reports the *painted* (transformed)
+      // box -- scaled, or some in-between value, whenever a zoom transform
+      // is active or animating. It now reads offsetWidth/offsetHeight/
+      // offsetLeft/offsetTop instead, which reflect the element's layout
+      // box and are never affected by `transform` at all, so there's no
+      // "measured at a bad time" case left to race against. Proof: this
+      // sets getBoundingClientRect to something wildly different from the
+      // real (offset-based) box, and the face box still renders correctly.
+      client.fetchFaces.mockResolvedValue([{ id: "f1", x1: 100, y1: 100, x2: 300, y2: 300 }]);
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+
+      const img = document.querySelector(".photo-modal-image-pane img");
+      setOffsetRect(img, { left: 0, top: 0, width: 1000, height: 800 });
+      Object.defineProperty(img, "naturalWidth", { value: 1000, configurable: true });
+      Object.defineProperty(img, "naturalHeight", { value: 800, configurable: true });
+      vi.spyOn(img, "getBoundingClientRect").mockReturnValue({ left: -500, top: -400, width: 2500, height: 2000 });
+
+      fireEvent.load(img);
+      pressF();
+
+      const box = await waitForElement(".photo-modal-bbox-face");
+      // Correct per the real 1000x800 offset-based box: x1=100/1000*1000
+      // etc. -- using getBoundingClientRect's decoy value above instead
+      // would have rendered this box far outside the image entirely.
+      expect(box.style.left).toBe("100px");
+      expect(box.style.top).toBe("100px");
+      expect(box.style.width).toBe("200px");
+      expect(box.style.height).toBe("200px");
     });
   });
 

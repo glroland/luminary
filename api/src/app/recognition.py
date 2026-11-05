@@ -1,6 +1,6 @@
 """Automatic face recognition ("Refresh Faces", POST /api/faces/refresh):
-matches already-detected-but-untagged faces (sync.py's Florence-2 face
-*detection* -- this module never detects anything, only recognizes) against
+matches already-detected-but-untagged faces (sync.py's face_detection.py
+step -- this module never detects anything, only recognizes) against
 the individuals a user has already manually tagged at least one face for
 (people.tag_face), auto-assigning `faces.person_id` wherever the match is
 confident enough. The goal is to need exactly one manual tag per person,
@@ -14,22 +14,56 @@ newly detected faces get matched without a second click. try_start()'s
 "already running" guard (below) makes the two mutually harmless -- whichever
 gets there first just gets polled to completion by the other.
 
+The two callers ask for different scopes via start_refresh(full=...).
+sync.py's post-sync trigger always passes the default, `full=False`:
+incremental, only ever matching still-untagged faces (candidate_faces()'s
+`person_id IS NULL`), cheap/idempotent to run after every single sync.
+
+routers/faces.py's button passes `full=True`, which is a fundamentally
+bigger operation: the premise (per the person clicking it) is that
+LUMINARY_FACE_DETECTION_THRESHOLD/LUMINARY_FACE_MIN_SIZE were just
+changed, which means every existing face *box* in the library -- not just
+the person_id tags on them -- was detected under settings that no longer
+apply, and is itself stale. So `full=True` doesn't just re-match; it
+re-runs face_detection.detect_faces for every already-indexed photo
+against the *current* settings and replaces that photo's faces
+(storage.replace_faces) before matching starts at all (_redetect_photo_
+faces/_redetect_all_faces). storage.replace_faces deletes-then-reinserts
+with fresh ids -- the exact same "re-detection also wipes tags" behavior
+sync.py's own content-change path already has (see its module docstring),
+just triggered by a settings change instead of a file change. That means
+a full refresh deletes *every* tag in the library, manual or auto, not
+only auto ones -- a box detected under the old sensitivity may not even
+be the same face (or exist at all) under the new one, so a tag pointing
+at it is exactly as stale as the box itself. This is a deliberate,
+confirmed trade-off (not a bug): after a full refresh, every individual
+needs at least one face manually re-tagged before _reference_embeddings
+has anything to match future candidates against again -- the matching
+phase that follows will legitimately report 0 matches until that happens.
+
 Embeddings come from facenet-pytorch's `InceptionResnetV1(pretrained=
 "vggface2")` -- a torch-native model, deliberately not DeepFace (which
 would additionally require TensorFlow, a second multi-GB ML framework,
 alongside the torch/transformers stack Florence-2 already requires -- see
-requirements.txt's comment). We also don't use facenet-pytorch's own MTCNN
-face *detector* at all: Florence-2 already supplies every face's bounding
-box, so this module only ever uses the embedding half, applied to crops of
-boxes that already exist.
+requirements.txt's comment). This module only ever uses that embedding
+half, applied to crops of boxes that already exist -- the boxes themselves
+come from sync.py's indexing pipeline, via face_detection.py (which *does*
+use facenet-pytorch's own MTCNN, as of switching face detection off of
+Florence-2's <OD> task -- see that module's docstring for why). This
+module still doesn't use MTCNN's alignment step (eye/landmark-based
+rotation/cropping before embedding) -- see below.
 
-Two safety invariants, both load-bearing for correctness:
+Two safety invariants, both load-bearing for correctness -- both are
+about the *matching* step specifically, and deliberately don't apply to
+full=True's redetect step above, which is a different, explicitly
+destructive operation the person triggering it has already opted into:
 
-1. Auto-tagging only ever writes to faces where `person_id IS NULL`. It
-   never overwrites an existing tag, manual or auto -- a manual correction
-   can never be clobbered by a later refresh, and re-running this is cheap/
-   idempotent after the first pass (only genuinely new untagged faces, e.g.
-   from a later sync, do any work).
+1. Auto-tagging (_process_photo_faces) only ever writes to faces where
+   `person_id IS NULL`. It never overwrites an existing tag, manual or
+   auto -- a manual correction can never be clobbered by matching itself,
+   and an incremental (`full=False`) run is cheap/idempotent after the
+   first pass (only genuinely new untagged faces, e.g. from a later sync,
+   do any work).
 2. Reference embeddings (_reference_embeddings) are built *only* from
    `tag_source = 'manual'` faces, never from previously auto-matched ones.
    An incorrect auto-match must never become a future reference that
@@ -64,16 +98,16 @@ name the photo's *filename* and the individual's *name* (via
 operator debugging "why didn't this match" needs to go look at the actual
 photo and person, not resolve two ids by hand first.
 
-Candidate crops come straight from Florence-2's generic object-detection
-box (`sync.py`/`chat.detect_faces`), with no face *alignment* step (no
-eye/landmark-based rotation/scaling) before embedding -- we deliberately
-don't use facenet-pytorch's own `MTCNN` (see above), which normally
-provides that alignment as part of detecting+cropping. A loose or
-off-center box, or the lack of alignment, can suppress genuine
-same-person similarity scores across the board, not just for one unlucky
-photo -- if real same-person pairs are consistently scoring lower than
-expected, this is as likely an explanation as the threshold itself being
-wrong.
+Candidate crops come straight from face_detection.py's MTCNN box
+(`sync.py`/`face_detection.detect_faces`), with no face *alignment* step
+(no eye/landmark-based rotation/scaling) before embedding -- this module
+deliberately doesn't call MTCNN's own alignment-aware detect-and-crop path
+(see above), even though MTCNN is now in the pipeline for detection
+itself. A loose or off-center box, or the lack of alignment, can suppress
+genuine same-person similarity scores across the board, not just for one
+unlucky photo -- if real same-person pairs are consistently scoring lower
+than expected, this is as likely an explanation as the threshold itself
+being wrong.
 
 Whenever _process_photo_faces auto-tags at least one face in a photo, it
 also calls enrich.enrich_description(photo_id) once for that photo (not
@@ -90,15 +124,18 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from PIL import Image
+from PIL import Image, ImageOps
 
-from . import enrich, people, storage
-from .config import get_face_match_threshold
+from . import enrich, face_detection, people, storage
+from .config import get_face_match_threshold, get_max_concurrency
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENCY = 8
+# Read once at import time -- see config.get_max_concurrency()'s docstring
+# for why this isn't re-read per refresh run the way other LUMINARY_*
+# settings are read lazily elsewhere in this app.
+MAX_CONCURRENCY = get_max_concurrency()
 _executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
 
 _embedder_lock = threading.Lock()
@@ -247,6 +284,69 @@ def _reference_embeddings() -> dict[str, list[float]]:
         by_person.setdefault(row["person_id"], []).append(_embed(image))
 
     return {person_id: _mean_embedding(embeddings) for person_id, embeddings in by_person.items()}
+
+
+def _photos_with_tagged_faces() -> list[str]:
+    """Distinct ids of every photo with at least one tagged face (manual
+    or auto) -- read *before* _redetect_all_faces's storage.replace_faces
+    calls wipe every photo's faces (tags included), the only way to know
+    afterward which photos' "who's in this photo" facts just changed, so
+    enrich.enrich_description can be regenerated for them. Mirrors
+    people.delete_individual's own "read affected photo ids before the
+    bulk clear" pattern, just scoped to the whole library instead of one
+    individual."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT DISTINCT photo_id FROM faces WHERE person_id IS NOT NULL").fetchall()
+        return [row["photo_id"] for row in rows]
+
+
+def _list_photos() -> list[dict]:
+    with get_connection() as conn:
+        return [dict(row) for row in conn.execute("SELECT id, filename FROM photos").fetchall()]
+
+
+def _redetect_photo_faces(photo: dict) -> Optional[int]:
+    """full=True's per-photo redetect step: re-runs face_detection.
+    detect_faces against the *current* LUMINARY_FACE_DETECTION_THRESHOLD/
+    LUMINARY_FACE_MIN_SIZE for one already-indexed photo and replaces its
+    stored faces with the result (storage.replace_faces). Same EXIF-
+    transpose-then-RGB decode as people.crop_face_thumbnail/sync.py's own
+    detection step -- detect_faces's box coordinates are only meaningful
+    in that same pixel space.
+
+    storage.replace_faces deletes every one of this photo's existing face
+    rows first, manual or auto tags included, before inserting the fresh
+    ones -- same already-accepted "re-detection also wipes tags" behavior
+    sync.py's own content-change path has (see its module docstring). This
+    is the entire point of a full refresh: a box detected under the old
+    sensitivity is stale, and a tag pointing at it is exactly as stale.
+
+    Returns how many faces were (re)detected, or None if the original
+    couldn't be read/decoded this time -- in that case this photo's
+    *existing* faces are left completely alone (storage.replace_faces is
+    never called) rather than wiped with nothing to replace them, since
+    "detection didn't run" must not look the same as "detection ran and
+    found zero faces". Best-effort, same shape as sync.py's own per-file
+    error handling: logged, never fails the whole refresh."""
+    try:
+        original_bytes = storage.read_original_bytes(photo)
+    except Exception:
+        logger.warning("Could not read original for photo %s while redetecting faces", photo["id"], exc_info=True)
+        return None
+    if not original_bytes:
+        return None
+
+    try:
+        with Image.open(io.BytesIO(original_bytes)) as raw_image:
+            with ImageOps.exif_transpose(raw_image) as transposed:
+                image = transposed.convert("RGB")
+    except Exception:
+        logger.warning("Could not decode original for photo %s while redetecting faces", photo["id"], exc_info=True)
+        return None
+
+    boxes = face_detection.detect_faces(image)
+    storage.replace_faces(photo["id"], boxes)
+    return len(boxes)
 
 
 def _candidate_faces() -> list[dict]:
@@ -444,28 +544,91 @@ progress = _RefreshProgress()
 _thread: Optional[threading.Thread] = None
 
 
-def start_refresh() -> dict:
+def start_refresh(full: bool = False) -> dict:
     """Kick off a background refresh in its own thread/event loop if one
     isn't already running -- same rationale and shape as sync.start_sync()
     (decoupled from the API's own request-handling loop, try_start() flips
     to "running" synchronously before this returns). Returns the current
-    status snapshot either way."""
+    status snapshot either way.
+
+    `full` picks which of this module's two callers is asking -- see the
+    module docstring's "two callers ask for different scopes" section.
+    Default `False` (sync.py's post-sync trigger: incremental, only
+    still-untagged faces); routers/faces.py's button passes `True`
+    (re-detect every photo's faces against the current detection
+    settings first -- discarding every existing tag, manual or auto,
+    along with the stale boxes -- then re-match the whole library)."""
     global _thread
     if progress.try_start():
-        logger.info("Starting face refresh")
-        _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh()), daemon=True)
+        logger.info("Starting face refresh (full=%s)", full)
+        _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh(full=full)), daemon=True)
         _thread.start()
     else:
         logger.info("Face refresh already in progress; ignoring duplicate start request")
     return progress.snapshot()
 
 
-async def _run_refresh() -> None:
+async def _run_refresh(full: bool = False) -> None:
     loop = asyncio.get_running_loop()
+
+    if full:
+        # Fail before touching any photo, not partway through after some
+        # faces have already been wiped with nothing to replace them --
+        # see face_detection.ensure_configured()'s docstring.
+        try:
+            await loop.run_in_executor(_executor, face_detection.ensure_configured)
+        except face_detection.FaceDetectionNotConfigured as exc:
+            progress.fail(str(exc))
+            return
+        except Exception as exc:
+            logger.exception("Refresh faces failed loading the face detection model for a full refresh")
+            progress.fail(str(exc))
+            return
+
+        try:
+            affected_photo_ids = await loop.run_in_executor(_executor, _photos_with_tagged_faces)
+            photos = await loop.run_in_executor(_executor, _list_photos)
+        except Exception as exc:
+            logger.exception("Refresh faces failed listing photos for a full refresh")
+            progress.fail(str(exc))
+            return
+
+        redetect_semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+        redetected_photos = 0
+        redetected_faces = 0
+
+        async def redetect(photo: dict) -> None:
+            nonlocal redetected_photos, redetected_faces
+            async with redetect_semaphore:
+                count = await loop.run_in_executor(_executor, _redetect_photo_faces, photo)
+            if count is not None:
+                redetected_photos += 1
+                redetected_faces += count
+
+        try:
+            await asyncio.gather(*(redetect(photo) for photo in photos))
+        except Exception as exc:
+            logger.exception("Refresh faces failed redetecting faces for a full refresh")
+            progress.fail(str(exc))
+            return
+
+        logger.info(
+            "Full refresh: re-detected faces for %d of %d photo(s) (%d face(s) total) against the current "
+            "detection settings -- every tag in the library, manual or auto, was discarded along with the "
+            "old boxes; individuals need at least one face re-tagged before matching can find anything",
+            redetected_photos,
+            len(photos),
+            redetected_faces,
+        )
+        for photo_id in affected_photo_ids:
+            await loop.run_in_executor(_executor, enrich.enrich_description, photo_id)
 
     try:
         await loop.run_in_executor(_executor, _backfill_missing_reference_thumbnails)
         references = await loop.run_in_executor(_executor, _reference_embeddings)
+        candidates = await loop.run_in_executor(_executor, _candidate_faces)
+        individual_names = await loop.run_in_executor(_executor, _individual_names)
+        progress.set_total(len(candidates))
     except FaceRecognitionNotConfigured as exc:
         progress.fail(str(exc))
         return
@@ -475,15 +638,15 @@ async def _run_refresh() -> None:
         return
 
     if not references:
+        # total is already set above (e.g. a full refresh may have just
+        # redetected plenty of faces) even though there's nothing yet to
+        # match them against -- matched=0 here is a real, accurate result,
+        # not "returned before doing anything".
         logger.info("Refresh faces: no individuals have a manually tagged face yet -- nothing to match against")
         progress.finish(matched=0)
         return
 
     try:
-        candidates = await loop.run_in_executor(_executor, _candidate_faces)
-        individual_names = await loop.run_in_executor(_executor, _individual_names)
-        progress.set_total(len(candidates))
-
         by_photo: dict[str, list[dict]] = {}
         for face in candidates:
             by_photo.setdefault(face["photo_id"], []).append(face)

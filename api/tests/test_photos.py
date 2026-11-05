@@ -98,10 +98,10 @@ def test_delete_missing_photo_returns_404(client):
 
 
 def test_get_faces_returns_stored_boxes(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "two people")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
 
     write_image(tmp_path / "photos" / "sample.jpg")
     sync_and_wait(client)

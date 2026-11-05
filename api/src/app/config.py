@@ -75,6 +75,23 @@ def redact_uri(uri: str) -> str:
     return re.sub(r"//[^/@\s]+@", "//***@", uri)
 
 
+def get_max_concurrency() -> int:
+    """How many files/photos sync.py's indexing pipeline and recognition.py's
+    "Refresh Faces" fan out across at once (each module's own
+    ThreadPoolExecutor max_workers + asyncio.Semaphore bound -- see their
+    own MAX_CONCURRENCY). Read once at import time by both modules (that
+    constant is set from this at module load, not re-read per sync/refresh
+    run) -- unlike the lazily-read settings elsewhere in this file, there's
+    no need to change this mid-process, and the executor's pool size can
+    only be chosen once anyway. `8` was the original hardcoded value for
+    both and remains the default so unset reproduces that; a deployment
+    with less CPU to spare for background work (e.g. a local `make run-api`
+    sharing the machine with everything else you're doing) can lower it
+    without touching code -- see the Makefile's LUMINARY_MAX_CONCURRENCY
+    and the Helm chart's api.env.maxConcurrency."""
+    return int(os.environ.get("LUMINARY_MAX_CONCURRENCY", "8"))
+
+
 # --- Photo chat: path 1, any OpenAI-compatible multimodal endpoint --------
 
 
@@ -176,6 +193,47 @@ def get_embedding_device() -> str:
     """Mirrors get_florence_device() above -- "cpu" by default, "cuda"/
     "cuda:0" etc. if a GPU is available to the pod."""
     return os.environ.get("LUMINARY_EMBEDDING_DEVICE", "cpu")
+
+
+# --- Automatic face detection (sync.py's indexing pipeline, face_detection.py) ---
+
+
+def get_face_detection_threshold() -> float:
+    """Confidence threshold facenet-pytorch's MTCNN must clear to report a
+    detected face, applied uniformly across its 3-stage cascade (P-Net/
+    R-Net/O-Net) -- see face_detection.py's module docstring for why a
+    single value instead of per-stage tuning is good enough here. Lower
+    catches more faces (partial/angled/small, or in a crowded photo) at the
+    cost of more false positives; like LUMINARY_FACE_MATCH_THRESHOLD below,
+    there's no single verified-correct value across different libraries'
+    real photos. MTCNN's own published default for its final stage is 0.7;
+    this started lower (0.5, when detection first switched from Florence-2's
+    <OD> to MTCNN, to fix real faces going undetected) but that turned out
+    too permissive in practice -- too many non-face detections -- raised to
+    0.65, then 0.8, then 0.72, then 0.77, then 0.68, then 0.72, then back
+    up to 0.8 as the current starting point. Tune this against your own
+    library in either direction rather than assuming either number is
+    right for it."""
+    return float(os.environ.get("LUMINARY_FACE_DETECTION_THRESHOLD", "0.8"))
+
+
+def get_face_min_size() -> int:
+    """Minimum face size, in pixels, measured against MTCNN's own
+    internally-resized copy of the image (not the original photo's
+    resolution), for MTCNN to report a detection -- passed straight through
+    as its own min_face_size constructor kwarg. Mirrors
+    get_face_detection_threshold() above -- lower catches more faces
+    (small/distant subjects, group photos) at the cost of more false
+    positives and slower detection (MTCNN's image pyramid has to scan more
+    scales). facenet-pytorch's own MTCNN default is 20; confirmed too
+    permissive in practice (spurious small-box detections), raised to 100
+    then to 150 as the current starting point -- same "default was too
+    permissive, moved it, keep tuning from here" shape as
+    get_face_detection_threshold()'s own
+    0.5->0.65->0.8->0.72->0.77->0.68->0.72->0.8 move above. No
+    single verified-correct value across different libraries' real
+    photos -- tune against yours."""
+    return int(os.environ.get("LUMINARY_FACE_MIN_SIZE", "150"))
 
 
 # --- Automatic face recognition ("Refresh Faces", recognition.py) --------

@@ -308,6 +308,24 @@ body {
   color: #ffffff;
 }
 
+/* MTCNN's own per-box detection probability (faces.detection_confidence --
+   see face_detection.py's detect_faces docstring), shown for every face
+   box regardless of tag state -- bottom-anchored (unlike .photo-modal-
+   bbox-label's top: -1.5rem) specifically so it never overlaps the
+   tagged-name label a face box may also be showing. */
+.photo-modal-bbox-score {
+  position: absolute;
+  bottom: -1.3rem;
+  left: -2px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
 /* Right-click-and-hold-to-tag menu (PhotoModal.jsx's tagMenu state) --
    viewport-fixed and anchored at the mousedown position, offset slightly
    so the cursor doesn't sit directly on top of the first item. */

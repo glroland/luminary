@@ -88,6 +88,12 @@ spec:
               value: {{ .Values.env.florenceModel | quote }}
             - name: LUMINARY_FLORENCE_DEVICE
               value: {{ .Values.env.florenceDevice | quote }}
+            - name: LUMINARY_FACE_DETECTION_THRESHOLD
+              value: {{ .Values.env.faceDetectionThreshold | quote }}
+            - name: LUMINARY_FACE_MIN_SIZE
+              value: {{ .Values.env.faceMinSize | quote }}
+            - name: LUMINARY_MAX_CONCURRENCY
+              value: {{ .Values.env.maxConcurrency | quote }}
             - name: PORT
               value: {{ .Values.global.apiPort | quote }}
           volumeMounts:

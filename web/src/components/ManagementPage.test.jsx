@@ -171,6 +171,7 @@ describe("ManagementPage", () => {
     statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, error: null });
     statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, error: null });
     statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 3, error: null });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
@@ -297,6 +298,7 @@ describe("ManagementPage", () => {
       matched: 0,
       error: "face recognition requires torch/facenet-pytorch to be installed",
     });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
@@ -309,6 +311,50 @@ describe("ManagementPage", () => {
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+  });
+
+  it("asks for confirmation before running 'Refresh Faces', since it deletes all existing face tags", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const refreshMock = vi.spyOn(client, "refreshFaces").mockResolvedValue({
+      status: "running",
+      processed: 0,
+      total: 0,
+      matched: 0,
+      error: null,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /refresh faces/i }));
+      await Promise.resolve();
+    });
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(refreshMock).toHaveBeenCalled();
+  });
+
+  it("does not run 'Refresh Faces' when the confirmation is declined", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const refreshMock = vi.spyOn(client, "refreshFaces").mockResolvedValue({
+      status: "running",
+      processed: 0,
+      total: 0,
+      matched: 0,
+      error: null,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh faces/i }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(refreshMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /refresh faces/i })).toBeInTheDocument();
   });
 
   it("runs 'Refresh Descriptions' and reflects progress through to completion", async () => {

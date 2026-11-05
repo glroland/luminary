@@ -182,17 +182,22 @@ def init_db() -> None:
                 person_id TEXT,
                 thumbnail BYTEA,
                 tag_source TEXT,
-                match_confidence DOUBLE PRECISION
+                match_confidence DOUBLE PRECISION,
+                detection_confidence DOUBLE PRECISION
             )
             """
         )
         # Guards a database created before person_id/thumbnail/tag_source/
-        # match_confidence existed -- see db/create_tables.sql's matching
-        # ALTER TABLEs.
+        # match_confidence/detection_confidence existed -- see
+        # db/create_tables.sql's matching ALTER TABLEs. A face row that
+        # predates detection_confidence simply stays NULL forever (there's
+        # no stored probability to backfill it from) until a future sync/
+        # "Refresh Faces" redetects that photo.
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION")
+        conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION")
         # Backfill: any face tagged before tag_source existed was
         # necessarily tagged via the manual tag_face endpoint --
         # recognition.py's auto-tagging didn't exist yet to have done it.

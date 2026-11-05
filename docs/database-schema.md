@@ -70,6 +70,7 @@ Written exclusively by `storage.replace_faces`, called from
 | `thumbnail` | `BYTEA`            | yes      | A small (160×160 max) JPEG crop of *this* face, set alongside `person_id` whether the tag is manual or automatic — the management page's per-individual face list (`GET /api/individuals/{id}/faces`, `GET /api/faces/{id}/thumbnail`) reads this, one row per tagged face, unlike `individuals.representative_thumbnail` below which only ever holds the latest. Always `NULL` exactly when `person_id` is — `people.tag_face`/`untag_face`/`delete_individual`/`recognition.py`'s auto-tagging all keep the two in lockstep, clearing/setting both together. |
 | `tag_source` | `TEXT`            | yes      | `'manual'` (`people.tag_face`) or `'auto'` (`recognition.py`'s "Refresh Faces", matched by face-embedding similarity against that person's *manually* tagged faces only — see `recognition.py`'s module docstring for why auto matches never themselves become future reference faces). `NULL` exactly when `person_id` is. Drives the "auto-detected"/"auto" badges in `PhotoModal.jsx`'s "People in this photo" panel and `ManagementPage.jsx`'s per-face thumbnails. |
 | `match_confidence` | `DOUBLE PRECISION` | yes | Cosine similarity score from `recognition.py`'s match (0–1-ish, higher is more confident). `NULL` for manual tags and untagged faces. Stored for troubleshooting/future use; not currently surfaced in any API response or UI. |
+| `detection_confidence` | `DOUBLE PRECISION` | yes | MTCNN's own per-candidate detection probability (`face_detection.detect_faces`) — the same score `LUMINARY_FACE_DETECTION_THRESHOLD` is compared against to decide whether a box is reported at all, set for every freshly (re)detected row regardless of tag state. Unrelated to `match_confidence` above (a different, later score answering *whose* face this is, not *whether* it's a face). `NULL` for any row detected before this column existed — there's no stored probability to backfill it from, only a future sync/"Refresh Faces" redetect. Surfaced in `GET /api/photos/{id}/faces` (`FaceBox.detection_confidence`) and shown as a rounded percentage on every face box in `PhotoModal.jsx`'s "f" overlay. |
 
 **Backfill for faces tagged before `tag_source` existed**: a face tagged
 via `people.tag_face` *before* this column was added has `person_id` set
@@ -245,12 +246,41 @@ comment on the `facenet-pytorch` line).
 
 Two invariants worth knowing if you're touching this code:
 
-- **Never overwrites an existing tag.** Only faces with `person_id IS
-  NULL` are candidates; a manual correction can never be clobbered by a
-  later run, and re-running is cheap/idempotent after the first pass.
+- **Never overwrites an existing tag.** Matching only ever writes to faces
+  with `person_id IS NULL`; a manual correction can never be clobbered by
+  a later run, and an incremental run is cheap/idempotent after the first
+  pass.
 - **Reference embeddings come only from `tag_source = 'manual'` faces.**
   An auto-matched face is never itself used as a reference for future
   matches — otherwise one bad match could compound into more bad matches.
+
+`start_refresh(full=...)` has two callers with two very differently-scoped
+behaviors. `sync.py`'s post-sync trigger passes the default, `full=False`:
+incremental, candidates are only still-untagged (`person_id IS NULL`)
+faces, existing faces/tags are left completely alone.
+
+The standalone "Refresh Faces" **button** (`routers/faces.py`) passes
+`full=True`, which is a bigger, deliberately destructive operation: the
+premise (per whoever clicks it) is that `LUMINARY_FACE_DETECTION_
+THRESHOLD`/`LUMINARY_FACE_MIN_SIZE` just changed, so every existing face
+*box* — not just its tag — was detected under settings that no longer
+apply. Before matching starts, `_redetect_photo_faces` re-runs
+`face_detection.detect_faces` for every already-indexed photo against the
+*current* settings and replaces that photo's faces (`storage.
+replace_faces`, which deletes-then-reinserts with fresh ids — the exact
+same "re-detection also wipes tags" behavior `sync.py`'s own content-change
+path already has, just triggered by a settings change instead of a file
+change). That means a full refresh discards *every* tag in the library,
+manual or auto, along with the stale boxes — a box detected under the old
+sensitivity may not be the same face (or exist at all) under the new one,
+so a tag pointing at it is exactly as stale. `face_detection.
+ensure_configured()` is checked once, up front, before any photo is
+touched, so a missing torch/facenet-pytorch dependency fails the whole
+run before wiping anything, rather than discovering it photo-by-photo
+after some faces are already gone. This is a confirmed, deliberate
+trade-off: after a full refresh, every individual needs at least one face
+manually re-tagged again before `_reference_embeddings` has anything to
+match future candidates against.
 
 No embeddings are persisted anywhere — every run recomputes reference
 embeddings (from `faces.thumbnail` rows already in the database, no need

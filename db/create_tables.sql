@@ -212,7 +212,15 @@ CREATE TABLE IF NOT EXISTS faces (
     tag_source TEXT,
     -- Cosine similarity score from recognition.py's match, NULL for
     -- manual tags (and for untagged faces).
-    match_confidence DOUBLE PRECISION
+    match_confidence DOUBLE PRECISION,
+    -- MTCNN's own per-candidate detection probability (face_detection.
+    -- detect_faces -- the same score LUMINARY_FACE_DETECTION_THRESHOLD is
+    -- compared against to decide whether a box is reported at all), set
+    -- for every row since every row came from a detection pass. Unrelated
+    -- to match_confidence above -- that's recognition.py's later, separate
+    -- cosine-similarity score for *whose* face this is, not whether it's
+    -- a face at all.
+    detection_confidence DOUBLE PRECISION
 );
 
 -- Added after faces already existed in deployed databases -- IF NOT
@@ -222,6 +230,7 @@ ALTER TABLE faces ADD COLUMN IF NOT EXISTS person_id TEXT;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION;
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION;
 
 -- Backfill: any face tagged before tag_source existed was necessarily
 -- tagged via the manual tag_face endpoint (recognition.py's auto-tagging

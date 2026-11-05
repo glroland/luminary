@@ -93,6 +93,28 @@ env:
   # "cpu" or "cuda" (a GPU-scheduled node/runtime class is required for
   # "cuda"; not set up by this chart).
   florenceDevice: cpu
+  # --- Automatic face detection (sync.py's indexing pipeline) ------------
+  # Confidence threshold facenet-pytorch's MTCNN must clear to report a
+  # detected face -- lower catches more faces (partial/angled/small, or in
+  # a crowded photo) at the cost of more false positives. No single
+  # verified-correct value across different libraries' real photos; tune
+  # against yours. See face_detection.py's module docstring.
+  faceDetectionThreshold: "0.8"
+  # Smallest face, in pixels of MTCNN's internally-resized copy of the
+  # image (not the original photo's resolution), it will report -- lower
+  # catches smaller/more distant faces at the cost of more false positives
+  # and slower detection. facenet-pytorch's own MTCNN default (20) was
+  # confirmed too permissive in practice (spurious small-box detections);
+  # 150 is the current starting point. See config.get_face_min_size()'s
+  # docstring.
+  faceMinSize: "150"
+  # How many files/photos sync.py's indexing (face detection included) and
+  # recognition.py's "Refresh Faces" fan out across at once -- see
+  # config.get_max_concurrency()'s docstring. 8 was the original hardcoded
+  # value for both; kept as this chart's default since a k8s pod has
+  # dedicated CPU for this, unlike a local `make run-api` (whose own
+  # Makefile default is lower -- see LUMINARY_MAX_CONCURRENCY there).
+  maxConcurrency: "8"
 route:
   enabled: true
   host: ""

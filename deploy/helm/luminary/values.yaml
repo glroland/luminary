@@ -74,6 +74,8 @@ api:
     embeddingDevice: cpu
     florenceModel: microsoft/Florence-2-base
     florenceDevice: cpu
+    faceDetectionThreshold: "0.8"
+    faceMinSize: "150"
   route:
     enabled: true
     host: ""

@@ -17,31 +17,48 @@ import PhotoMap from "./PhotoMap.jsx";
 // Computes the <img>'s actual *visible* image content box -- which, under
 // object-fit: contain, can be smaller than the <img> element's own box
 // (letterboxed) when the element's aspect ratio doesn't match the photo's.
-// getBoundingClientRect() on the <img> itself would report the element's
-// box, not this, so box overlays positioned from that directly would be
-// offset by whatever letterboxing is present. Returned rect is relative to
-// `wrap` (the positioned ancestor box overlays are placed against).
-function measureVisibleImageRect(img, wrap) {
+// Box overlays positioned directly from the element's own box would be
+// offset by whatever letterboxing is present, hence this.
+//
+// Deliberately uses offsetWidth/offsetHeight/offsetLeft/offsetTop, not
+// getBoundingClientRect() -- those offset* properties are the element's
+// intrinsic *layout* box, untouched by the CSS `transform: scale()`
+// hover-zoom (.photo-modal-image-zoomed) applies to this exact element,
+// whereas getBoundingClientRect() reports the *painted*, transformed box.
+// An earlier version used getBoundingClientRect() and tried to dodge the
+// transform with timing (skip measuring while zoomed, re-measure once it
+// ends) -- that still broke, because ending the zoom animates back over
+// styles.css's `transition: transform 0.1s ease-out` rather than
+// snapping instantly, so a measurement taken right as the zoom ends (or
+// starts) could still land mid-transition and capture a partially-scaled
+// rect. offset* isn't just better-timed, it's unaffected by `transform`
+// (a paint-time effect, not a layout one) at any point in that
+// transition, so there's no timing to get right in the first place.
+// `img`'s offsetParent is `wrap` itself (position: relative, see
+// styles.css), so these are already relative to it, matching what the
+// absolutely-positioned box overlays need -- `wrap` itself is never
+// passed to or read here.
+function measureVisibleImageRect(img) {
   if (!img.naturalWidth || !img.naturalHeight) return null;
-  const elRect = img.getBoundingClientRect();
-  const wrapRect = wrap.getBoundingClientRect();
-  const elAspect = elRect.width / elRect.height;
+  const elWidth = img.offsetWidth;
+  const elHeight = img.offsetHeight;
+  const elAspect = elWidth / elHeight;
   const imgAspect = img.naturalWidth / img.naturalHeight;
 
   let width, height;
   if (imgAspect > elAspect) {
     // Image is relatively wider than its box -- letterboxed top/bottom.
-    width = elRect.width;
+    width = elWidth;
     height = width / imgAspect;
   } else {
     // Image is relatively taller than its box -- letterboxed left/right.
-    height = elRect.height;
+    height = elHeight;
     width = height * imgAspect;
   }
 
   return {
-    left: elRect.left - wrapRect.left + (elRect.width - width) / 2,
-    top: elRect.top - wrapRect.top + (elRect.height - height) / 2,
+    left: img.offsetLeft + (elWidth - width) / 2,
+    top: img.offsetTop + (elHeight - height) / 2,
     width,
     height,
   };
@@ -67,7 +84,6 @@ export default function PhotoModal({ photo, onClose }) {
   // image data (see chat.ChatReply; this is purely a frontend annotation).
   const [boxes, setBoxes] = useState([]);
   const imgRef = useRef(null);
-  const wrapRef = useRef(null);
   const modalRef = useRef(null);
 
   // Hover-zoom (magnifier): wherever the cursor sits over the image, that
@@ -88,8 +104,9 @@ export default function PhotoModal({ photo, onClose }) {
   // fullscreen natively, bypassing this component entirely -- still flips
   // the button's label back.
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // The <img>'s rendered visible-content box, in px relative to wrapRef --
-  // re-measured on load and on resize (see useEffect below). Box overlays
+  // The <img>'s rendered visible-content box, in px relative to the image
+  // wrap div (`measureVisibleImageRect`'s offsetParent) -- re-measured on
+  // load and on resize (see useEffect below). Box overlays
   // are positioned in pixels from this rather than CSS percentages of the
   // wrap: percentage *heights* only resolve against an ancestor with a
   // definite height, and object-fit: contain's letterboxing means the
@@ -150,8 +167,11 @@ export default function PhotoModal({ photo, onClose }) {
   }
 
   function updateImgRect() {
-    if (imgRef.current && wrapRef.current) {
-      setImgRect(measureVisibleImageRect(imgRef.current, wrapRef.current));
+    // No need to worry about hover-zoom's transform here at all -- see
+    // measureVisibleImageRect's own docstring for why offset*-based
+    // measurement is immune to it regardless of timing.
+    if (imgRef.current) {
+      setImgRect(measureVisibleImageRect(imgRef.current));
     }
   }
 
@@ -459,7 +479,7 @@ export default function PhotoModal({ photo, onClose }) {
         </div>
 
         <div className="photo-modal-image-pane">
-          <div className="photo-modal-image-wrap" ref={wrapRef}>
+          <div className="photo-modal-image-wrap">
             <img
               ref={imgRef}
               src={originalUrl(photo.id)}
@@ -494,6 +514,11 @@ export default function PhotoModal({ photo, onClose }) {
                     onContextMenu={box.id ? handleFaceContextMenu : undefined}
                   >
                     {taggedName && <span className="photo-modal-bbox-label">{taggedName}</span>}
+                    {box.detection_confidence != null && (
+                      <span className="photo-modal-bbox-score">
+                        {Math.round(box.detection_confidence * 100)}%
+                      </span>
+                    )}
                   </div>
                 );
               })}

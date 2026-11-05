@@ -31,11 +31,11 @@ def test_individual_thumbnail_404_before_any_tag(client):
 
 
 def _sync_one_detected_face(client, tmp_path, monkeypatch, box=None):
-    from app import chat
+    from app import chat, face_detection
 
     box = box or {"x1": 1.0, "y1": 1.0, "x2": 5.0, "y2": 5.0}
     monkeypatch.setattr(chat, "caption_image", lambda image: "a person")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [box])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [box])
 
     write_image(tmp_path / "photos" / "sample.jpg", size=(20, 20))
     sync_and_wait(client)
@@ -228,12 +228,12 @@ def test_delete_individual_triggers_description_enrichment_once_per_affected_pho
     # deleted -- enrich_description must be called once for that photo,
     # not once per face (it already reads every tagged individual for a
     # photo in one query, see enrich.py's module docstring).
-    from app import chat, enrich
+    from app import chat, enrich, face_detection
 
     box_a = {"x1": 1.0, "y1": 1.0, "x2": 5.0, "y2": 5.0}
     box_b = {"x1": 6.0, "y1": 6.0, "x2": 9.0, "y2": 9.0}
     monkeypatch.setattr(chat, "caption_image", lambda image: "two people")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [box_a, box_b])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [box_a, box_b])
     write_image(tmp_path / "photos" / "sample.jpg", size=(20, 20))
     sync_and_wait(client)
 

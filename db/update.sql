@@ -57,6 +57,17 @@
 --    opposed to `individuals`/`faces`, which tag a detected face) -- see
 --    tags.py/routers/tags.py and create_tables.sql's own comment on these
 --    two tables for the full reasoning.
+-- 6. Adds faces.detection_confidence: MTCNN's own per-candidate detection
+--    probability (face_detection.detect_faces), the same score
+--    LUMINARY_FACE_DETECTION_THRESHOLD is compared against to decide
+--    whether a box is reported at all -- distinct from the existing
+--    match_confidence column, a different, later score for *whose* face
+--    this is rather than *whether* it's a face. Only populated going
+--    forward, on the next (re)detection of each photo -- there's no
+--    backfill pass for faces already stored before this column existed
+--    (no stored probability to backfill it from). Surfaced in
+--    `GET /api/photos/{id}/faces` and shown on every face box in
+--    `PhotoModal.jsx`'s "f" overlay.
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -110,3 +121,5 @@ CREATE TABLE IF NOT EXISTS photo_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id);
+
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION;

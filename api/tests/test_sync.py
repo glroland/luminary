@@ -221,10 +221,10 @@ def test_sync_applies_exif_orientation_so_portrait_photos_arent_indexed_as_lands
 
 
 def test_sync_generates_vlm_description_via_florence_for_new_photos(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a red square on a plain background")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [])
 
     write_image(tmp_path / "photos" / "sample.jpg")
     sync_and_wait(client)
@@ -234,10 +234,10 @@ def test_sync_generates_vlm_description_via_florence_for_new_photos(client, tmp_
 
 
 def test_sync_triggers_description_enrichment_once_vlm_description_is_written(client, tmp_path, monkeypatch):
-    from app import chat, enrich
+    from app import chat, enrich, face_detection
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a red square on a plain background")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [])
     calls = []
     monkeypatch.setattr(enrich, "enrich_description", lambda photo_id: calls.append(photo_id))
 
@@ -308,10 +308,10 @@ def test_sync_backfills_missing_vlm_description_without_touching_an_existing_thu
     thumbnail_before = client.get(f"/api/photos/{photo_id}/thumbnail").content
     assert client.get(f"/api/photos/{photo_id}").json()["vlm_description"] is None
 
-    from app import chat
+    from app import chat, face_detection
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a backfilled description")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [])
 
     status = sync_and_wait(client)
     assert status["status"] == "completed"
@@ -325,12 +325,12 @@ def test_sync_backfills_missing_vlm_description_without_touching_an_existing_thu
 
 
 def test_sync_skips_reprocessing_a_fully_populated_unchanged_file(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
 
     caption_calls = []
     face_calls = []
     monkeypatch.setattr(chat, "caption_image", lambda image: caption_calls.append(1) or "a description")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: face_calls.append(1) or [])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: face_calls.append(1) or [])
 
     write_image(tmp_path / "photos" / "sample.jpg")
     sync_and_wait(client)
@@ -387,11 +387,11 @@ def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_vlm_de
 
 
 def test_sync_regenerates_vlm_description_when_a_file_changes_in_place(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
 
     captions = iter(["first caption", "second caption"])
     monkeypatch.setattr(chat, "caption_image", lambda image: next(captions))
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [])
 
     image_path = tmp_path / "photos" / "sample.jpg"
     write_image(image_path)
@@ -405,12 +405,12 @@ def test_sync_regenerates_vlm_description_when_a_file_changes_in_place(client, t
 
 
 def test_sync_stores_detected_faces_for_new_photos(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
     from app.storage import get_faces
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "two people on a beach")
     monkeypatch.setattr(
-        chat,
+        face_detection,
         "detect_faces",
         lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}, {"x1": 5.0, "y1": 6.0, "x2": 7.0, "y2": 8.0}],
     )
@@ -428,11 +428,11 @@ def test_sync_stores_detected_faces_for_new_photos(client, tmp_path, monkeypatch
 
 
 def test_sync_treats_zero_detected_faces_as_a_successful_result(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
     from app.storage import get_faces
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "an empty room")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [])
 
     write_image(tmp_path / "photos" / "sample.jpg")
     status = sync_and_wait(client)
@@ -444,7 +444,7 @@ def test_sync_treats_zero_detected_faces_as_a_successful_result(client, tmp_path
 
 
 def test_sync_does_not_store_vlm_description_or_faces_when_face_detection_fails(client, tmp_path, monkeypatch, caplog):
-    from app import chat
+    from app import chat, face_detection
     from app.storage import get_faces
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a description that should not be saved")
@@ -452,7 +452,7 @@ def test_sync_does_not_store_vlm_description_or_faces_when_face_detection_fails(
     def boom(image):
         raise RuntimeError("face model inference failed")
 
-    monkeypatch.setattr(chat, "detect_faces", boom)
+    monkeypatch.setattr(face_detection, "detect_faces", boom)
 
     write_image(tmp_path / "photos" / "sample.jpg")
 
@@ -474,7 +474,7 @@ def test_sync_does_not_store_vlm_description_or_faces_when_face_detection_fails(
 
 
 def test_sync_replaces_faces_rather_than_accumulating_when_a_file_changes_in_place(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
     from app.storage import get_faces
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a photo")
@@ -484,7 +484,7 @@ def test_sync_replaces_faces_rather_than_accumulating_when_a_file_changes_in_pla
             [{"x1": 9.0, "y1": 9.0, "x2": 10.0, "y2": 10.0}, {"x1": 11.0, "y1": 11.0, "x2": 12.0, "y2": 12.0}],
         ]
     )
-    monkeypatch.setattr(chat, "detect_faces", lambda image: next(face_results))
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: next(face_results))
 
     image_path = tmp_path / "photos" / "sample.jpg"
     write_image(image_path)
@@ -507,7 +507,7 @@ def test_sync_backfills_faces_alongside_a_missing_vlm_description(client, tmp_pa
     # Same scenario as the description-only backfill test, but checking
     # that faces -- which never got a chance to run at all the first time,
     # since florence was unconfigured -- get populated by the backfill too.
-    from app import chat
+    from app import chat, face_detection
     from app.storage import get_faces
 
     write_image(tmp_path / "photos" / "sample.jpg")
@@ -516,7 +516,7 @@ def test_sync_backfills_faces_alongside_a_missing_vlm_description(client, tmp_pa
     assert get_faces(photo_id) == []
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a backfilled description")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
 
     sync_and_wait(client)
 
@@ -526,11 +526,11 @@ def test_sync_backfills_faces_alongside_a_missing_vlm_description(client, tmp_pa
 
 
 def test_sync_deletes_faces_for_photos_removed_from_storage(client, tmp_path, monkeypatch):
-    from app import chat
+    from app import chat, face_detection
     from app.storage import get_faces
 
     monkeypatch.setattr(chat, "caption_image", lambda image: "a photo")
-    monkeypatch.setattr(chat, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [{"x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}])
 
     image_path = tmp_path / "photos" / "sample.jpg"
     write_image(image_path)

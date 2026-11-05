@@ -104,6 +104,15 @@ LUMINARY_FLORENCE_MODEL ?= microsoft/Florence-2-base
 # `make build-api LUMINARY_EMBEDDING_MODEL=...`.
 LUMINARY_EMBEDDING_MODEL ?= BAAI/bge-large-en-v1.5
 
+# How many files/photos sync.py's indexing (face detection included) and
+# recognition.py's "Refresh Faces" fan out across at once -- see
+# config.get_max_concurrency()'s docstring. Defaults to 4 here (lower than
+# the Helm chart's api.env.maxConcurrency=8) since a local `make run-api`
+# is typically sharing this machine's CPU with whatever else you're doing,
+# unlike a dedicated k8s pod. Override e.g.
+# `make run-api LUMINARY_MAX_CONCURRENCY=8`.
+LUMINARY_MAX_CONCURRENCY ?= 4
+
 # Env vars for run-api: points at LUMINARY_DATABASE_NAME (the dev database).
 LUMINARY_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
 	LUMINARY_DATABASE_PORT=$(LUMINARY_DATABASE_PORT) \
@@ -182,6 +191,7 @@ run-api:
 	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) $(LUMINARY_DATABASE_ENV) \
 		LUMINARY_OPENAI_BASE_URL=$(LUMINARY_OPENAI_BASE_URL) LUMINARY_OPENAI_MODEL=$(LUMINARY_OPENAI_MODEL) \
 		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
+		LUMINARY_MAX_CONCURRENCY=$(LUMINARY_MAX_CONCURRENCY) \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:

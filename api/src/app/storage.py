@@ -276,18 +276,26 @@ def purge_all() -> None:
 def get_faces(photo_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, x1, y1, x2, y2, person_id, tag_source FROM faces WHERE photo_id = %s", (photo_id,)
+            "SELECT id, x1, y1, x2, y2, person_id, tag_source, detection_confidence FROM faces WHERE photo_id = %s",
+            (photo_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
 
 def replace_faces(photo_id: str, boxes: list[dict]) -> None:
     """Replace every face row for `photo_id` with `boxes` (each an
-    {"x1","y1","x2","y2"} dict in the photo's own pixel coordinate space --
-    same convention as chat.ChatReply.boxes). Always deletes first, even
-    when `boxes` is empty: this is sync.py's Florence-2 face-detection step,
-    which is re-run from scratch (never incrementally) any time it runs at
-    all, so stale boxes from a previous photo version -- or from an earlier
+    {"x1","y1","x2","y2","detection_confidence"} dict in the photo's own
+    pixel coordinate space -- same x1/y1/x2/y2 convention as chat.
+    ChatReply.boxes, `detection_confidence` as returned by face_detection.
+    detect_faces -- see its own docstring). `detection_confidence` is
+    optional (`.get(...)`, defaulting to None) only so a caller that still
+    passes bare x1-y2 boxes (e.g. a test building one by hand) doesn't have
+    to add a field it may not have; every real caller (sync.py,
+    recognition.py's full-refresh redetect) gets it from face_detection.
+    detect_faces, which always includes it. Always deletes first, even
+    when `boxes` is empty: this is sync.py's face-detection step, which is
+    re-run from scratch (never incrementally) any time it runs at all, so
+    stale boxes from a previous photo version -- or from an earlier
     attempt that didn't finish successfully -- must not survive alongside
     (or instead of) a fresh result. See sync.py's module docstring for the
     full before/after-`description` ordering this is part of.
@@ -302,7 +310,19 @@ def replace_faces(photo_id: str, boxes: list[dict]) -> None:
         if boxes:
             with conn.cursor() as cursor:
                 cursor.executemany(
-                    "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (%s, %s, %s, %s, %s, %s)",
-                    [(str(uuid.uuid4()), photo_id, box["x1"], box["y1"], box["x2"], box["y2"]) for box in boxes],
+                    "INSERT INTO faces (id, photo_id, x1, y1, x2, y2, detection_confidence) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    [
+                        (
+                            str(uuid.uuid4()),
+                            photo_id,
+                            box["x1"],
+                            box["y1"],
+                            box["x2"],
+                            box["y2"],
+                            box.get("detection_confidence"),
+                        )
+                        for box in boxes
+                    ],
                 )
         conn.commit()
