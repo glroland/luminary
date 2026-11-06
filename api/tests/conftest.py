@@ -112,8 +112,12 @@ def sync_and_wait(client, timeout=5.0):
 
 def refresh_and_wait(client, timeout=5.0):
     """Same polling pattern as sync_and_wait, for recognition.py's
-    "Refresh Faces" job (POST /api/faces/refresh)."""
-    client.post("/api/faces/refresh")
+    destructive "Full Face Refresh" job (POST /api/faces/refresh?full=true)
+    -- the management page's danger-zone button. For the non-destructive,
+    incremental scope (the management page's own "Refresh Faces" button,
+    and what sync.py's post-sync trigger always uses), see
+    test_recognition.py's own `_incremental_refresh_and_wait`."""
+    client.post("/api/faces/refresh", params={"full": "true"})
     deadline = time.monotonic() + timeout
     status = {}
     while time.monotonic() < deadline:

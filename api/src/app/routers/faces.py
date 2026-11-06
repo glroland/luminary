@@ -11,15 +11,20 @@ router = APIRouter()
 
 
 @router.post("/faces/refresh", response_model=FaceRefreshStatus)
-def refresh_faces() -> dict:
-    # full=True: the button always does a full refresh -- re-detect every
+def refresh_faces(full: bool = False) -> dict:
+    # full=False (default): the management page's non-destructive
+    # "Refresh Faces" button -- only matches still-untagged faces against
+    # people already manually tagged, same scope as sync.py's own
+    # post-sync trigger, existing boxes/tags left completely alone.
+    #
+    # full=True: the management page's destructive "Full Face Refresh"
+    # button (in its danger zone, alongside purge) -- re-detects every
     # photo's faces against the current detection settings first
     # (discarding every existing tag, manual or auto, along with the
-    # stale boxes), then re-match the whole library, rather than only
-    # matching faces newly discovered since the last run. See
+    # stale boxes), then re-matches the whole library. See
     # recognition.py's module docstring ("two callers ask for different
-    # scopes") for why sync.py's own post-sync trigger doesn't pass this.
-    return recognition.start_refresh(full=True)
+    # scopes") for the full reasoning.
+    return recognition.start_refresh(full=full)
 
 
 @router.get("/faces/refresh/status", response_model=FaceRefreshStatus)

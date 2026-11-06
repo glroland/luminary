@@ -15,14 +15,13 @@ FACE_BOX = {"x1": 1.0, "y1": 1.0, "x2": 9.0, "y2": 9.0}
 def _incremental_refresh_and_wait(timeout=5.0):
     """Same polling shape as conftest.refresh_and_wait, but calls
     recognition.start_refresh() directly with full=False (the default) --
-    the incremental, non-destructive path sync.py's own post-sync trigger
-    uses. There's no HTTP endpoint for this scope on its own -- POST
-    /api/faces/refresh (and therefore conftest.refresh_and_wait) always
-    asks for full=True, which redetects every photo's faces and purges
-    every tag, manual or auto, before matching (see routers/faces.py and
-    recognition.py's module docstring). Tests that want to exercise the
-    matching algorithm itself in isolation from that redetect/purge use
-    this instead."""
+    the incremental, non-destructive path sync.py's own post-sync trigger,
+    and the management page's own "Refresh Faces" button, both use (the
+    latter via POST /api/faces/refresh with no `full` param, or
+    `full=false` explicitly -- see routers/faces.py). This helper bypasses
+    the HTTP layer entirely so these tests don't depend on that routing;
+    conftest.refresh_and_wait is the HTTP-level equivalent for the
+    destructive `full=true` scope specifically."""
     recognition.start_refresh()
     deadline = time.monotonic() + timeout
     status = {}
@@ -101,7 +100,7 @@ def test_init_db_backfills_tag_source_for_pre_existing_tags(client):
 
 def test_refresh_status_defaults_to_idle(client):
     status = client.get("/api/faces/refresh/status").json()
-    assert status == {"status": "idle", "processed": 0, "total": 0, "matched": 0, "error": None}
+    assert status == {"status": "idle", "processed": 0, "total": 0, "matched": 0, "error": None, "full": False}
 
 
 def test_refresh_with_no_manual_tags_does_nothing(client, tmp_path, monkeypatch):

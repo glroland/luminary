@@ -152,8 +152,11 @@ export function faceThumbnailUrl(faceId) {
   return `${API_BASE}/faces/${faceId}/thumbnail`;
 }
 
-export async function refreshFaces() {
-  return request("/faces/refresh", { method: "POST" });
+export async function refreshFaces(full = false) {
+  // full=false (default): non-destructive, match-only. full=true: the
+  // destructive redetect-then-match ("Full Face Refresh") -- see
+  // recognition.py's module docstring.
+  return request(`/faces/refresh?full=${full}`, { method: "POST" });
 }
 
 export async function fetchFaceRefreshStatus() {

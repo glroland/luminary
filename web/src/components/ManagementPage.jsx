@@ -38,10 +38,19 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   const [facesByIndividual, setFacesByIndividual] = useState({});
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
-  // "Refresh Faces" (recognition.py's auto-matching job) -- null means
-  // idle/no job ever started this page visit. Polling mirrors App.jsx's
+  // recognition.py's background face-matching job -- null means idle/no
+  // job ever started this page visit. Polling mirrors App.jsx's
   // pollSyncStatus/SyncStatus pattern, scoped locally to this page instead
   // of global app state, since it's specific to the individuals catalog.
+  // Both the non-destructive "Refresh Faces" button and the destructive
+  // "Full Face Refresh" button (down in the danger zone -- see
+  // routers/faces.py's `full` query param) share this single poll
+  // loop/state, since the backend only ever runs one such job at a time
+  // regardless of which button started it (recognition.py's
+  // `_RefreshProgress.try_start()`). `refreshStatus.full` -- set by the
+  // backend, not tracked separately here -- is what each button's render
+  // branch below checks to tell "my job" apart from "the other button's
+  // job" when deciding what to show.
   const [refreshStatus, setRefreshStatus] = useState(null);
   const refreshPollRef = useRef(null);
   // "Refresh Descriptions" (enrich.py's bulk enrich_description job) --
@@ -248,13 +257,27 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       .catch((err) => setPageError(err.message));
   }
 
+  // Non-destructive: matches still-untagged faces against people already
+  // tagged at least once, leaving every existing box/tag completely
+  // alone. Same scope sync.py's own post-sync trigger always uses
+  // (routers/faces.py's `full` query param defaults to false) -- safe to
+  // run any time, no confirmation needed.
+  function handleRefreshFaceMatches() {
+    refreshFaces(false)
+      .then((status) => {
+        setRefreshStatus(status);
+        pollRefreshStatus();
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
   // Re-detects every photo's faces against the current detection settings
   // and discards every existing face tag, manual or auto, along with the
   // stale boxes they were on (see recognition.py's module docstring) --
   // same "confirm the one destructive, irreversible, global action" shape
-  // as handlePurge above, just scoped to faces/tags rather than the whole
-  // database.
-  function handleRefreshFaces() {
+  // as handlePurge below, just scoped to faces/tags rather than the whole
+  // database. Lives in the danger zone for the same reason.
+  function handleFullFaceRefresh() {
     if (
       !window.confirm(
         "This re-detects faces in every photo and deletes all existing face tags -- manual and " +
@@ -264,7 +287,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     ) {
       return;
     }
-    refreshFaces()
+    refreshFaces(true)
       .then((status) => {
         setRefreshStatus(status);
         pollRefreshStatus();
@@ -428,8 +451,12 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
-            {!refreshStatus || refreshStatus.status === "idle" ? (
-              <button type="button" className="refresh-button" onClick={handleRefreshFaces}>
+            {refreshStatus && refreshStatus.full && refreshStatus.status === "running" ? (
+              <div className="sync-status" role="status" aria-live="polite">
+                A full face refresh is running…
+              </div>
+            ) : !refreshStatus || refreshStatus.status === "idle" || refreshStatus.full ? (
+              <button type="button" className="refresh-button" onClick={handleRefreshFaceMatches}>
                 Refresh Faces
               </button>
             ) : refreshStatus.status === "error" ? (
@@ -464,7 +491,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
           </div>
           <p className="management-refresh-description">
             Matches still-untagged faces against people you've already tagged at least once, and
-            auto-assigns the confident matches.
+            auto-assigns the confident matches. Leaves existing face detections and tags untouched.
           </p>
         </div>
 
@@ -767,6 +794,54 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
 
       <div className="management-danger-zone">
         <h3>Danger zone</h3>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            {refreshStatus && !refreshStatus.full && refreshStatus.status === "running" ? (
+              <div className="sync-status" role="status" aria-live="polite">
+                "Refresh Faces" is running…
+              </div>
+            ) : !refreshStatus || refreshStatus.status === "idle" || !refreshStatus.full ? (
+              <button type="button" className="management-purge" onClick={handleFullFaceRefresh}>
+                Full Face Refresh
+              </button>
+            ) : refreshStatus.status === "error" ? (
+              <div className="sync-status sync-status-error" role="status">
+                Refresh failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
+              </div>
+            ) : (
+              <div className="sync-status" role="status" aria-live="polite">
+                <span className="sync-status-label">
+                  {refreshStatus.status === "completed"
+                    ? `Done -- ${refreshStatus.matched} matched`
+                    : `Redetecting & matching faces… ${
+                        refreshStatus.total > 0
+                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
+                          : 0
+                      }%`}
+                </span>
+                <div className="sync-progress-track">
+                  <div
+                    className="sync-progress-fill"
+                    style={{
+                      width: `${
+                        refreshStatus.total > 0
+                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+          <p className="management-refresh-description">
+            Re-detects faces in every photo against the current detection settings, and deletes all
+            existing face tags -- manual and automatic -- along with them. You'll need to re-tag
+            individuals afterward before auto-matching can find anything. This cannot be undone.
+          </p>
+        </div>
+
         <p>
           Permanently deletes every photo, face, individual, and tag from the database. The
           original files on the photos backend are untouched and will be re-indexed on the next

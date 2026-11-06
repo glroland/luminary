@@ -6,21 +6,33 @@ the individuals a user has already manually tagged at least one face for
 confident enough. The goal is to need exactly one manual tag per person,
 not one per photo they appear in.
 
-start_refresh() has two callers: the standalone "Refresh Faces" button
-(routers/faces.py, for on-demand re-matching -- e.g. right after manually
-tagging someone, without waiting for/triggering a full resync) and, as of
-sync.py's _trigger_face_refresh, every successful "Refresh" (sync) too, so
-newly detected faces get matched without a second click. try_start()'s
-"already running" guard (below) makes the two mutually harmless -- whichever
-gets there first just gets polled to completion by the other.
+start_refresh() has three callers: the management page's own "Refresh
+Faces" button, under the "Refresh metadata" controls alongside sync/
+descriptions/locations (for on-demand re-matching -- e.g. right after
+manually tagging someone, without waiting for/triggering a full resync);
+that same page's "Full Face Refresh" button, deliberately kept down in
+its danger zone next to "Purge database" rather than next to the first
+one, since it's destructive in a way the first one isn't (see below); and,
+as of sync.py's _trigger_face_refresh, every successful "Refresh" (sync)
+too, so newly detected faces get matched without a second click. Both
+UI buttons go through the same route, `POST /api/faces/refresh`
+(routers/faces.py), distinguished by its `full` query param. try_start()'s
+"already running" guard (below) makes all three mutually harmless --
+whichever gets there first just gets polled to completion by the others;
+`FaceRefreshStatus.full` records which scope that in-flight (or
+most-recently-finished) run actually is, so a poller -- including the
+page resuming after a reload -- can tell which button's progress it's
+looking at without having to be the one that started it.
 
-The two callers ask for different scopes via start_refresh(full=...).
-sync.py's post-sync trigger always passes the default, `full=False`:
-incremental, only ever matching still-untagged faces (candidate_faces()'s
-`person_id IS NULL`), cheap/idempotent to run after every single sync.
+The two scopes are chosen via start_refresh(full=...). The management
+page's "Refresh Faces" button and sync.py's post-sync trigger both use
+the default, `full=False`: incremental, only ever matching still-untagged
+faces (candidate_faces()'s `person_id IS NULL`), cheap/idempotent to run
+any time, including after every single sync.
 
-routers/faces.py's button passes `full=True`, which is a fundamentally
-bigger operation: the premise (per the person clicking it) is that
+The management page's "Full Face Refresh" button passes `full=True`,
+which is a fundamentally bigger, destructive operation: the premise (per
+the person clicking it) is that
 LUMINARY_FACE_DETECTION_THRESHOLD/LUMINARY_FACE_MIN_SIZE were just
 changed, which means every existing face *box* in the library -- not just
 the person_id tags on them -- was detected under settings that no longer
@@ -484,13 +496,14 @@ class _RefreshProgress:
             "total": 0,
             "matched": 0,
             "error": None,
+            "full": False,
         }
 
     def snapshot(self) -> dict:
         with self._lock:
             return dict(self._state)
 
-    def try_start(self) -> bool:
+    def try_start(self, full: bool = False) -> bool:
         with self._lock:
             if self._state["status"] == "running":
                 return False
@@ -500,6 +513,15 @@ class _RefreshProgress:
                 "total": 0,
                 "matched": 0,
                 "error": None,
+                # Recorded (not just passed through locally) so a caller
+                # polling status -- including one that wasn't the caller that
+                # started this run, e.g. the frontend resuming after a page
+                # reload, or sync.py's own post-sync trigger's run being
+                # polled from the management page -- can tell which of the
+                # two very differently-scoped operations is actually in
+                # flight, rather than assuming based on who it thinks last
+                # clicked a button.
+                "full": full,
             }
             return True
 
@@ -519,6 +541,7 @@ class _RefreshProgress:
                 "total": 0,
                 "matched": 0,
                 "error": None,
+                "full": False,
             }
 
     def record(self, count: int) -> None:
@@ -559,7 +582,7 @@ def start_refresh(full: bool = False) -> dict:
     settings first -- discarding every existing tag, manual or auto,
     along with the stale boxes -- then re-match the whole library)."""
     global _thread
-    if progress.try_start():
+    if progress.try_start(full=full):
         logger.info("Starting face refresh (full=%s)", full)
         _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh(full=full)), daemon=True)
         _thread.start()

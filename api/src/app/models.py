@@ -170,6 +170,14 @@ class FaceRefreshStatus(BaseModel):
     total: int = 0  # candidate faces found at the start of this run
     matched: int = 0  # of those, how many got auto-tagged
     error: Optional[str] = None
+    # Which of the two differently-scoped operations this run is/was --
+    # False: incremental match-only (sync's post-sync trigger, and the
+    # management page's non-destructive "Refresh Faces" button). True: the
+    # destructive full redetect-then-match (the management page's "Full
+    # Face Refresh" button). Lets the frontend tell them apart when polling
+    # status it didn't itself just start (e.g. resuming after a page
+    # reload, or a sync-triggered run already in flight).
+    full: bool = False
 
 
 class Tag(BaseModel):
