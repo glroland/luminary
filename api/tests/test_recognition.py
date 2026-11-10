@@ -98,6 +98,45 @@ def test_init_db_backfills_tag_source_for_pre_existing_tags(client):
     assert faces_after[0]["tag_source"] == "manual"
 
 
+def test_init_db_backfills_face_detection_done_from_existing_faces(client):
+    """A photo indexed before `face_detection_done` existed has the column
+    at its blanket FALSE default regardless of whether detection actually
+    ran for it before -- database.init_db() must backfill it to TRUE for
+    any such photo that already has at least one row in `faces` (clear
+    evidence detection already ran), and leave it FALSE for a photo with
+    none, rather than forcing every already-indexed, face-bearing photo
+    through a pointless redetect on the next sync."""
+    from app.database import get_connection, init_db
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at) VALUES (%s, %s, %s, %s, %s)",
+            ("photo-with-face", "with-face.jpg", "image/jpeg", 1, "2024-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at) VALUES (%s, %s, %s, %s, %s)",
+            ("photo-without-face", "without-face.jpg", "image/jpeg", 1, "2024-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (%s, %s, 0, 0, 1, 1)",
+            ("face-z", "photo-with-face"),
+        )
+        conn.commit()
+
+    def _face_detection_done(photo_id: str) -> bool:
+        with get_connection() as conn:
+            row = conn.execute("SELECT face_detection_done FROM photos WHERE id = %s", (photo_id,)).fetchone()
+        return row["face_detection_done"]
+
+    assert _face_detection_done("photo-with-face") is False
+    assert _face_detection_done("photo-without-face") is False
+
+    init_db()
+
+    assert _face_detection_done("photo-with-face") is True
+    assert _face_detection_done("photo-without-face") is False
+
+
 def test_refresh_status_defaults_to_idle(client):
     status = client.get("/api/faces/refresh/status").json()
     assert status == {"status": "idle", "processed": 0, "total": 0, "matched": 0, "error": None, "full": False}

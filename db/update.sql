@@ -68,6 +68,19 @@
 --    (no stored probability to backfill it from). Surfaced in
 --    `GET /api/photos/{id}/faces` and shown on every face box in
 --    `PhotoModal.jsx`'s "f" overlay.
+-- 7. Adds photos.face_detection_done: a dedicated boolean recording
+--    whether sync.py's caption+face-detection pipeline, or recognition.py's
+--    full-refresh redetect, has actually run face detection for this
+--    photo -- see create_tables.sql's own comment on this column.
+--    Replaces the earlier `vlm_description IS NOT NULL` inference as the
+--    signal sync.py's incremental backfill checks. The column defaults
+--    FALSE, but every existing row is then backfilled: TRUE if the photo
+--    already has at least one row in `faces` (it clearly went through
+--    detection already), left FALSE otherwise (indistinguishable here
+--    from "detection genuinely found nobody" vs. "never ran" -- the next
+--    sync just (re)runs detection once for such a photo, same cost as
+--    any other "field missing, backfill it" case this file's migration 6
+--    above already has).
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -123,3 +136,9 @@ CREATE TABLE IF NOT EXISTS photo_tags (
 CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id);
 
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION;
+
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
+
+UPDATE photos SET face_detection_done = TRUE
+    WHERE NOT face_detection_done
+      AND EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id);

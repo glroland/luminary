@@ -369,7 +369,8 @@ def test_sync_backfills_missing_thumbnail_without_recapturing_an_existing_vlm_de
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE photos SET thumbnail = NULL, vlm_description = 'a pre-existing description' WHERE id = %s",
+            "UPDATE photos SET thumbnail = NULL, vlm_description = 'a pre-existing description', "
+            "face_detection_done = TRUE WHERE id = %s",
             (photo_id,),
         )
         conn.commit()

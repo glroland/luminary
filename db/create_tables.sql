@@ -58,13 +58,30 @@ CREATE TABLE IF NOT EXISTS photos (
     -- other free-text column here -- there's no reasonable length cap to
     -- apply to a place description. NULL exactly when latitude/longitude
     -- are (no GPS data), or if the reverse-geocode lookup failed.
-    location_name TEXT
+    location_name TEXT,
+    -- Whether sync.py's caption+face-detection pipeline (_run_florence_
+    -- pipeline) -- or recognition.py's full-refresh redetect
+    -- (_redetect_photo_faces) -- has successfully run face detection for
+    -- this photo at least once. sync.py's incremental backfill
+    -- (_sync_one_file's needs_florence) checks this directly rather than
+    -- inferring it from `vlm_description IS NOT NULL`, which conflated
+    -- "has a caption" with "has had faces detected". Set TRUE only once
+    -- faces are safely stored (never on a failed/unconfigured attempt --
+    -- see sync.py's module docstring), and reset to FALSE whenever a
+    -- photo's content changes, so a stale TRUE from the old content
+    -- never suppresses re-detection of the new content. DEFAULT FALSE is
+    -- only the starting point for a brand-new row -- see the backfill
+    -- UPDATE further down (once `faces` exists) for how a database
+    -- created before this column existed gets it set correctly for
+    -- already-indexed photos instead of being left at this default.
+    face_detection_done BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Added after photos already existed in deployed databases -- IF NOT
 -- EXISTS makes this a no-op against a database created after the column
 -- was already part of the CREATE TABLE above.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Embedding of `description` (not `vlm_description`), for similarity
 -- search (GET /api/photos/{id}/similar, storage.find_similar_photos) --
@@ -244,3 +261,18 @@ UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_sourc
 
 CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id);
+
+-- Backfill for photos.face_detection_done, now that `faces` exists: a
+-- photo that already has at least one detected face on record clearly
+-- already went through detection, so it's backfilled to TRUE rather than
+-- left at the column's blanket FALSE default (which would otherwise
+-- force every already-indexed, face-bearing photo through a pointless
+-- redetect on the next sync). A photo with zero faces on record is left
+-- at FALSE -- indistinguishable here from "detection genuinely found
+-- nobody" vs. "detection never ran" (no stored history to tell those
+-- apart) -- so it's treated the conservative way: the next sync just
+-- (re)runs detection once for such a photo. A no-op once applied -- safe
+-- to re-run.
+UPDATE photos SET face_detection_done = TRUE
+    WHERE NOT face_detection_done
+      AND EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id);

@@ -121,6 +121,21 @@ def init_db() -> None:
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS vlm_description TEXT")
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS description TEXT")
 
+        # Dedicated signal for "has sync.py's caption+face-detection
+        # pipeline (or recognition.py's full-refresh redetect) actually
+        # run for this photo" -- see sync.py's module docstring. Replaces
+        # the earlier `vlm_description IS NOT NULL` inference, which
+        # conflated "has a caption" with "has had faces detected". Added
+        # with DEFAULT FALSE so a brand-new row starts untrue until the
+        # pipeline actually runs; a database created before this column
+        # existed gets backfilled further down (once the `faces` table
+        # below is guaranteed to exist) based on whether each photo
+        # already has any detected faces on record, rather than being left
+        # at the blanket FALSE default for every pre-existing row.
+        conn.execute(
+            "ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+
         # Catalog of named individuals faces can be manually tagged as --
         # see people.py / routers/individuals.py.
         conn.execute(
@@ -210,6 +225,25 @@ def init_db() -> None:
         conn.execute("UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
+        # Backfill for photos.face_detection_done, now that `faces` is
+        # guaranteed to exist: a photo that already has at least one
+        # detected face on record clearly already went through detection,
+        # so it's backfilled to TRUE rather than left at the column's
+        # blanket FALSE default (which would otherwise force every
+        # already-indexed, face-bearing photo through a pointless redetect
+        # on the next sync). A photo with zero faces on record is left at
+        # FALSE -- indistinguishable here from "detection genuinely found
+        # nobody" vs. "detection never ran" (there's no stored history to
+        # tell those apart, same gap detection_confidence's own backfill
+        # note above has), so it's treated the conservative way: the next
+        # sync just (re)runs detection once for such a photo, same cost as
+        # any other "field missing, backfill it" case in this function. A
+        # no-op once applied -- safe to run on every startup.
+        conn.execute(
+            "UPDATE photos SET face_detection_done = TRUE "
+            "WHERE NOT face_detection_done AND EXISTS "
+            "(SELECT 1 FROM faces WHERE faces.photo_id = photos.id)"
+        )
         conn.commit()
 
         # photos.description_embedding (embeddings.py) -- for similarity

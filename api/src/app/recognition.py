@@ -339,7 +339,13 @@ def _redetect_photo_faces(photo: dict) -> Optional[int]:
     never called) rather than wiped with nothing to replace them, since
     "detection didn't run" must not look the same as "detection ran and
     found zero faces". Best-effort, same shape as sync.py's own per-file
-    error handling: logged, never fails the whole refresh."""
+    error handling: logged, never fails the whole refresh.
+
+    Also sets `photos.face_detection_done = TRUE` once the redetected
+    boxes are safely stored -- this is the other place (besides sync.py's
+    own pipeline) face detection can run for a photo, and sync.py's
+    incremental backfill (_sync_one_file's needs_florence) relies on this
+    flag being set wherever detection actually succeeds, not just there."""
     try:
         original_bytes = storage.read_original_bytes(photo)
     except Exception:
@@ -358,6 +364,9 @@ def _redetect_photo_faces(photo: dict) -> Optional[int]:
 
     boxes = face_detection.detect_faces(image)
     storage.replace_faces(photo["id"], boxes)
+    with get_connection() as conn:
+        conn.execute("UPDATE photos SET face_detection_done = TRUE WHERE id = %s", (photo["id"],))
+        conn.commit()
     return len(boxes)
 
 
