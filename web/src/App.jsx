@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Logo from "./components/Logo.jsx";
 import ManagementPage from "./components/ManagementPage.jsx";
-import { PageSizeSelect, PaginationNav } from "./components/Pagination.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
 import Sidebar, { SEARCH_THRESHOLD_OPTIONS } from "./components/Sidebar.jsx";
@@ -13,11 +13,12 @@ import {
   searchPhotos,
   startSync,
 } from "./api/client.js";
-import logo from "./assets/logo.svg";
+import { applyTheme, getStoredTheme } from "./theme.js";
 
 const POLL_INTERVAL_MS = 1000;
 const DONE_DISPLAY_MS = 2000;
-const PAGE_SIZE_OPTIONS = [15, 24, 48, 96, 200];
+// Placeholder tiles shown while the photo list is first loading.
+const SKELETON_TILE_COUNT = 24;
 
 // A photo's directory is everything in its (root-relative) filename
 // before the last "/" -- "" for one directly under the photos root.
@@ -119,18 +120,39 @@ export default function App() {
   const [searchResults, setSearchResults] = useState(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState(null);
-  // Pagination over visiblePhotos below (client-side -- the full list is
-  // already loaded into `photos`, same as the directory/individual
-  // filters). `page` is 1-based and clamped against the current
-  // pageSize/filter combination at render time rather than via an effect,
-  // so switching filters or page size never briefly shows a stale,
-  // out-of-range page.
-  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
-  const [page, setPage] = useState(1);
+  // Bumped by resetGrid() whenever the filter/sort/search changes, and
+  // used as PhotoGrid's `key` -- remounting it is what sends its
+  // infinite-scroll window (see PhotoGrid.jsx) back to the first batch.
+  // Deliberately *not* bumped when the photo list is merely reloaded
+  // (after a sync), so that doesn't throw away how far someone has
+  // scrolled.
+  const [gridGeneration, setGridGeneration] = useState(0);
+  // Viewport position of the tile that was clicked to open selectedPhoto,
+  // which PhotoModal's open animation scales up from; null when the photo
+  // was opened some other way (ManagementPage's "go to photo").
+  const [modalOrigin, setModalOrigin] = useState(null);
+  const [theme, setTheme] = useState(getStoredTheme);
   // Gallery sort order (date/filename/folder, see SortControl.jsx). Not
   // applied while a search is active -- see visiblePhotos below.
   const [sortOrder, setSortOrder] = useState(SORT_OPTIONS[0].value);
   const pollRef = useRef(null);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  // A new filter/sort is a new list: start it from the top, both the
+  // rendered window and the scroll position (otherwise the page stays
+  // scrolled deep into a list that now only has its first batch rendered).
+  function resetGrid() {
+    setGridGeneration((prev) => prev + 1);
+    if (window.scrollY > 0) window.scrollTo(0, 0);
+  }
+
+  function handleSelectPhoto(photo, origin) {
+    setModalOrigin(origin ?? null);
+    setSelectedPhoto(photo);
+  }
 
   const loadPhotos = useCallback(async () => {
     setIsLoading(true);
@@ -231,7 +253,7 @@ export default function App() {
     const photo = photos.find((candidate) => candidate.id === photoId);
     if (!photo) return;
     setView("gallery");
-    setSelectedPhoto(photo);
+    handleSelectPhoto(photo);
   }
 
   async function handleSearch() {
@@ -249,7 +271,7 @@ export default function App() {
       setSelectedIndividual(null);
       setSelectedDate(null);
       setView("gallery");
-      setPage(1);
+      resetGrid();
     } catch (err) {
       setSearchError(err.message);
     } finally {
@@ -267,31 +289,41 @@ export default function App() {
     setSearchError(null);
   }
 
-  const filteredPhotos =
-    selectedIndividual !== null
-      ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
-      : selectedDirectory !== null
-        ? photos.filter((photo) => {
-            const dir = directoryOf(photo.filename);
-            return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
-          })
-        : selectedDate !== null
+  // Memoised so the array keeps its identity across unrelated re-renders
+  // (sync-status polling, the modal opening) -- PhotoGrid's own memoised
+  // section grouping depends on that. Search results are already ordered
+  // most-similar-first by the API -- never re-sorted here (see
+  // SortControl.jsx's comment).
+  const visiblePhotos = useMemo(() => {
+    if (searchResults !== null) return searchResults;
+    const filtered =
+      selectedIndividual !== null
+        ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
+        : selectedDirectory !== null
           ? photos.filter((photo) => {
-              const key = dateKeyOf(photo.created_at);
-              return key !== null && (key === selectedDate || key.startsWith(`${selectedDate}-`));
+              const dir = directoryOf(photo.filename);
+              return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
             })
-          : photos;
+          : selectedDate !== null
+            ? photos.filter((photo) => {
+                const key = dateKeyOf(photo.created_at);
+                return key !== null && (key === selectedDate || key.startsWith(`${selectedDate}-`));
+              })
+            : [...photos];
+    return filtered.sort((a, b) => comparePhotos(a, b, sortOrder));
+  }, [photos, searchResults, selectedIndividual, individualPhotoIds, selectedDirectory, selectedDate, sortOrder]);
 
-  // Search results are already ordered most-similar-first by the API --
-  // never re-sorted here (see SortControl.jsx's comment).
-  const visiblePhotos =
+  // Section headers in the grid follow the sort: by month for the date
+  // sorts, by folder for the folder sorts, none for filename sorts or
+  // search results (relevance order) -- see PhotoGrid.jsx's `groupBy`.
+  const groupBy =
     searchResults !== null
-      ? searchResults
-      : [...filteredPhotos].sort((a, b) => comparePhotos(a, b, sortOrder));
-
-  const totalPages = Math.max(1, Math.ceil(visiblePhotos.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const paginatedPhotos = visiblePhotos.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+      ? null
+      : sortOrder.startsWith("date")
+        ? "month"
+        : sortOrder.startsWith("folder")
+          ? "folder"
+          : null;
 
   return (
     <div className="app">
@@ -310,7 +342,7 @@ export default function App() {
           setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
-          setPage(1);
+          resetGrid();
         }}
         individuals={individuals}
         selectedIndividual={selectedIndividual}
@@ -320,7 +352,7 @@ export default function App() {
           setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
-          setPage(1);
+          resetGrid();
         }}
         selectedDate={selectedDate}
         onSelectDate={(dateKey) => {
@@ -329,7 +361,7 @@ export default function App() {
           setSelectedIndividual(null);
           setSearchResults(null);
           setView("gallery");
-          setPage(1);
+          resetGrid();
         }}
         onAllImages={() => {
           setSelectedDirectory(null);
@@ -337,7 +369,7 @@ export default function App() {
           setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
-          setPage(1);
+          resetGrid();
         }}
         onManage={() => setView("manage")}
         searchQuery={searchQuery}
@@ -365,38 +397,40 @@ export default function App() {
               <span />
             </span>
           </button>
-          <img className="app-logo" src={logo} alt="Luminary" />
+          <Logo />
           {/* Right-aligned header controls (margin-left: auto pushes this
-              group against the header's right edge, after the logo) --
-              only meaningful for the gallery view once photos are loaded,
-              same gating the toolbar/Pagination previously had below the
-              grid. Left-to-right: sort, per-page, pagination nav. */}
-          {view === "gallery" && !isLoading && (
-            <div className="app-header-controls">
-              {searchResults === null && (
-                <SortControl
-                  value={sortOrder}
-                  onChange={(value) => {
-                    setSortOrder(value);
-                    setPage(1);
-                  }}
-                />
-              )}
-              {visiblePhotos.length > 0 && (
-                <>
-                  <PageSizeSelect
-                    pageSize={pageSize}
-                    pageSizeOptions={PAGE_SIZE_OPTIONS}
-                    onPageSizeChange={(size) => {
-                      setPageSize(size);
-                      setPage(1);
+              group against the header's right edge, after the logo). The
+              photo count and sort only apply to the gallery view once
+              photos are loaded; the theme toggle is always there. */}
+          <div className="app-header-controls">
+            {view === "gallery" && !isLoading && (
+              <>
+                {visiblePhotos.length > 0 && (
+                  <span className="photo-count">
+                    {visiblePhotos.length.toLocaleString()} {visiblePhotos.length === 1 ? "photo" : "photos"}
+                  </span>
+                )}
+                {searchResults === null && (
+                  <SortControl
+                    value={sortOrder}
+                    onChange={(value) => {
+                      setSortOrder(value);
+                      resetGrid();
                     }}
                   />
-                  <PaginationNav page={currentPage} totalPages={totalPages} onPageChange={setPage} />
-                </>
-              )}
-            </div>
-          )}
+                )}
+              </>
+            )}
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            >
+              <span aria-hidden="true">{theme === "dark" ? "\u2600" : "\u263E"}</span>
+            </button>
+          </div>
         </header>
         {error && (
           <p className="error" role="alert">
@@ -421,20 +455,34 @@ export default function App() {
               setSearchResults(null);
               setIndividuals([]);
               setSelectedPhoto(null);
-              setPage(1);
+              resetGrid();
               loadPhotos();
             }}
           />
         ) : isLoading ? (
-          <p>Loading photos...</p>
+          <div className="photo-grid" aria-label="Loading photos" aria-busy="true">
+            {Array.from({ length: SKELETON_TILE_COUNT }, (_, index) => (
+              <div key={index} className="photo-skeleton" />
+            ))}
+          </div>
         ) : (
           <PhotoGrid
-            photos={paginatedPhotos}
-            onSelect={setSelectedPhoto}
+            key={gridGeneration}
+            photos={visiblePhotos}
+            groupBy={groupBy}
+            onSelect={handleSelectPhoto}
             emptyMessage={searchResults !== null ? "No photos match your search." : "No photos yet."}
           />
         )}
-        <PhotoModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} />
+        {/* `photos` here is the list the arrow keys/filmstrip step through:
+            whatever the gallery is currently showing, in its order. */}
+        <PhotoModal
+          photo={selectedPhoto}
+          photos={visiblePhotos}
+          origin={modalOrigin}
+          onNavigate={setSelectedPhoto}
+          onClose={() => setSelectedPhoto(null)}
+        />
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import {
   fetchTags,
   individualThumbnailUrl,
   originalUrl,
+  thumbnailUrl,
   tagFace,
   tagPhoto,
   untagPhoto,
@@ -78,7 +79,23 @@ function boxStyle(box, photo, imgRect) {
   };
 }
 
-export default function PhotoModal({ photo, onClose }) {
+// How many neighbours the filmstrip shows on each side of the open photo.
+const FILMSTRIP_RADIUS = 7;
+
+// `photos`/`onNavigate` are optional and together enable stepping to the
+// neighbouring photos (arrow keys, the edge buttons, the filmstrip):
+// `photos` is the ordered list being browsed and `onNavigate(photo)` asks
+// the parent to make another one of them the open photo. Without them --
+// or when the open photo isn't in that list (e.g. opened from the Manage
+// page while the gallery is filtered to something else) -- the modal
+// shows just the one photo, as it always did. `origin` ({x, y} in viewport
+// px, optional) is where the open animation scales up from; see
+// styles.css's .photo-modal.
+export default function PhotoModal({ photo, onClose, photos = null, onNavigate = null, origin = null }) {
+  const photoIndex = photo && photos && onNavigate ? photos.findIndex((candidate) => candidate.id === photo.id) : -1;
+  const previousPhoto = photoIndex > 0 ? photos[photoIndex - 1] : null;
+  const nextPhoto = photoIndex !== -1 && photoIndex < photos.length - 1 ? photos[photoIndex + 1] : null;
+
   // Box(es) located by the florence chat backend for the current turn --
   // drawn as a temporary overlay on the image, never baked into any stored
   // image data (see chat.ChatReply; this is purely a frontend annotation).
@@ -260,14 +277,33 @@ export default function PhotoModal({ photo, onClose }) {
     if (!photo) return;
 
     function handleKeyDown(event) {
-      if (event.key.toLowerCase() !== "f") return;
-      // Don't hijack "f" while the user is typing a chat message (or any
-      // other editable control inside the modal).
+      // Don't hijack keys while the user is typing a chat message (or in
+      // any other editable control inside the modal) -- "f" is a letter,
+      // and the arrow keys move the text cursor / change a <select>.
       const target = event.target;
       const isEditable =
         target instanceof HTMLElement &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
       if (isEditable) return;
+
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const destination = event.key === "ArrowLeft" ? previousPhoto : nextPhoto;
+        if (destination) {
+          event.preventDefault();
+          onNavigate(destination);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        // In fullscreen, Esc belongs to the browser (it exits fullscreen);
+        // only a second press, back in the windowed modal, closes it.
+        if (!document.fullscreenElement) onClose();
+        return;
+      }
+      if (event.key.toLowerCase() !== "f") return;
 
       // Face boxes are positioned from imgRect, not the live (possibly
       // scaled) image -- leaving a hover-zoom engaged while they're shown
@@ -279,7 +315,7 @@ export default function PhotoModal({ photo, onClose }) {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [photo]);
+  }, [photo, previousPhoto, nextPhoto, onNavigate, onClose]);
 
   // Same reasoning as the "f" handler above, for the other source of box
   // overlays: a chat reply landing while the image is still zoomed in from
@@ -459,8 +495,15 @@ export default function PhotoModal({ photo, onClose }) {
     (tag) => !(photoTags ?? []).some((applied) => applied.id === tag.id)
   );
 
+  const filmstripStart = Math.max(0, photoIndex - FILMSTRIP_RADIUS);
+  const filmstrip = photoIndex === -1 ? [] : photos.slice(filmstripStart, photoIndex + FILMSTRIP_RADIUS + 1);
+
   return (
-    <div className="photo-modal-backdrop" onClick={onClose}>
+    <div
+      className="photo-modal-backdrop"
+      onClick={onClose}
+      style={origin ? { "--modal-origin-x": `${origin.x}px`, "--modal-origin-y": `${origin.y}px` } : undefined}
+    >
       <div className="photo-modal" ref={modalRef} onClick={(event) => event.stopPropagation()}>
         <div className="photo-modal-toolbar">
           <button type="button" className="close-button" onClick={toggleFullscreen}>
@@ -481,6 +524,10 @@ export default function PhotoModal({ photo, onClose }) {
         <div className="photo-modal-image-pane">
           <div className="photo-modal-image-wrap">
             <img
+              // Keyed so each photo gets a fresh element: the fade-in
+              // replays, and the previous photo doesn't linger on screen
+              // while the next original is still downloading.
+              key={photo.id}
               ref={imgRef}
               src={originalUrl(photo.id)}
               alt={photo.filename}
@@ -522,6 +569,26 @@ export default function PhotoModal({ photo, onClose }) {
                   </div>
                 );
               })}
+            {previousPhoto && (
+              <button
+                type="button"
+                className="photo-modal-nav photo-modal-nav-prev"
+                onClick={() => onNavigate(previousPhoto)}
+                aria-label="Previous photo"
+              >
+                <span aria-hidden="true">&lsaquo;</span>
+              </button>
+            )}
+            {nextPhoto && (
+              <button
+                type="button"
+                className="photo-modal-nav photo-modal-nav-next"
+                onClick={() => onNavigate(nextPhoto)}
+                aria-label="Next photo"
+              >
+                <span aria-hidden="true">&rsaquo;</span>
+              </button>
+            )}
             {showFaces && (
               <p className="photo-modal-faces-hint">
                 {facesError
@@ -534,6 +601,22 @@ export default function PhotoModal({ photo, onClose }) {
               </p>
             )}
           </div>
+          {filmstrip.length > 1 && (
+            <div className="photo-modal-filmstrip">
+              {filmstrip.map((candidate) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  className={`photo-modal-filmstrip-item${candidate.id === photo.id ? " photo-modal-filmstrip-item-current" : ""}`}
+                  onClick={() => onNavigate(candidate)}
+                  aria-label={`View ${candidate.filename}`}
+                  aria-current={candidate.id === photo.id ? "true" : undefined}
+                >
+                  <img src={thumbnailUrl(candidate.id)} alt="" loading="lazy" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="photo-modal-sidebar">

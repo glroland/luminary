@@ -665,6 +665,35 @@ cached) is also per-pod, in-memory state — same caveat.
   components call through it, never `fetch` directly. `API_BASE` defaults to
   `/api` (same-origin via the nginx proxy in prod, or Vite's dev proxy
   locally) and can be overridden with `VITE_API_BASE_URL`.
+- **Theming**: every colour in `styles.css` is a CSS custom property
+  defined in the two token blocks at the top of the file (`:root` = dark,
+  the default; `:root[data-theme="light"]` = light) — don't hardcode a hex
+  value in a rule, add or reuse a token. The handful of literal colours
+  left are deliberate: things drawn *on a photo* (bounding boxes, the tile
+  caption gradient, the modal's nav buttons) that must look the same in
+  either theme. `theme.js` reads/writes the choice (`localStorage`,
+  `data-theme` on `<html>`); `main.jsx` applies it before first render and
+  the header's toggle button in `App.jsx` flips it. The logo is an inline
+  SVG component (`Logo.jsx`), not `<img src="assets/logo.svg">`, so its
+  colours can follow the theme too.
+- **Gallery** (`PhotoGrid.jsx`/`PhotoCard.jsx`): `App.jsx` hands
+  `PhotoGrid` the *whole* filtered+sorted list (`visiblePhotos`, memoised)
+  — there is no pagination. `PhotoGrid` renders the first `BATCH_SIZE` and
+  reveals another batch whenever an `IntersectionObserver` sentinel at the
+  bottom comes into view; that window is local state, so `App.jsx` bumps
+  `gridGeneration` (PhotoGrid's `key`, via `resetGrid()`) on every
+  filter/sort/search change to restart it from the top — but deliberately
+  not when the list is merely reloaded after a sync. `groupBy` (chosen by
+  `App.jsx` from the sort order: `"month"` for date sorts, `"folder"` for
+  folder sorts, `null` for filename sorts and search results) splits the
+  grid into sections with sticky headers; sections are runs of
+  *consecutive* photos, so it's only valid when the list is sorted by the
+  same thing. A tile has no filename caption (the filename is only the
+  thumbnail's alt text, which is also how tests find a tile); everything
+  shown on hover — frame, zoom, date/location strip, and the description
+  tooltip after a 1s rest — is plain CSS on `.photo-card:hover`, with no
+  hover state or timers in React. While the list is first loading,
+  `App.jsx` renders shimmering `.photo-skeleton` tiles in its place.
 - `App.jsx` holds top-level state: the photo list, loading/error, sync
   status, which top-level `view` is showing (`"gallery"` | `"manage"`),
   whether the sidebar is open, and the currently-selected directory filter
@@ -751,7 +780,15 @@ cached) is also per-pod, in-memory state — same caveat.
 - `PhotoModal.jsx` (opened by clicking a photo card) is a two-pane layout
   filling most of the viewport (`.photo-modal`: 94vw × 92vh) — a large
   image pane plus a sidebar composing `PhotoMap.jsx` and `PhotoChat.jsx`.
-  Stacks vertically under 700px width.
+  Stacks vertically under 700px width. It opens by scaling up out of the
+  clicked tile (`origin` prop → `--modal-origin-x/y`, see the comment on
+  `.photo-modal` in `styles.css`, whose 3vw/4vh offsets are tied to the
+  modal's size). The optional `photos`/`onNavigate` props (`App.jsx`
+  passes `visiblePhotos`) enable stepping between photos: left/right arrow
+  keys, edge buttons, and a filmstrip of neighbours under the image.
+  Escape closes it. All of the modal's key handling ("f" included) lives
+  in one `keydown` listener that ignores keys typed into an input/
+  textarea/select — add new shortcuts there, behind that same guard.
 
   Pressing "f" also drives manual face tagging (`people.py`'s backend --
   see its CLAUDE.md entry above): once face boxes are shown, right-mouse-

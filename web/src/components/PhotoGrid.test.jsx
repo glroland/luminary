@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as client from "../api/client.js";
-import PhotoGrid from "./PhotoGrid.jsx";
+import PhotoGrid, { BATCH_SIZE } from "./PhotoGrid.jsx";
 
 vi.mock("../api/client.js", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -46,7 +46,8 @@ describe("PhotoGrid", () => {
 
     fireEvent.click(screen.getByAltText("beach.jpg"));
 
-    expect(onSelect).toHaveBeenCalledWith(PHOTOS[0]);
+    // Second argument: the clicked tile's centre, for the modal's open animation.
+    expect(onSelect).toHaveBeenCalledWith(PHOTOS[0], { x: expect.any(Number), y: expect.any(Number) });
   });
 
   it("opens a tag menu on right-click, fetching the catalog and the photo's current tags", async () => {
@@ -147,5 +148,115 @@ describe("PhotoGrid", () => {
 
     await waitFor(() => expect(client.fetchPhotoTags).toHaveBeenCalledWith("2"));
     expect(document.querySelector(".tag-menu")).toBeInTheDocument();
+  });
+
+  it("renders no filename caption, and puts the description in a tooltip", () => {
+    render(
+      <PhotoGrid
+        photos={[{ id: "1", filename: "beach.jpg", description: "A sandy beach at sunset." }, PHOTOS[1]]}
+        onSelect={() => {}}
+      />
+    );
+
+    expect(screen.queryByText("beach.jpg")).not.toBeInTheDocument();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("A sandy beach at sunset.");
+    // Only the photo that has a description gets one.
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+  });
+
+  it("shows the date and location in each tile's hover caption", () => {
+    render(
+      <PhotoGrid
+        photos={[
+          { id: "1", filename: "beach.jpg", created_at: "2019-03-10T12:00:00", location_name: "Boone, North Carolina" },
+        ]}
+        onSelect={() => {}}
+      />
+    );
+
+    const overlay = document.querySelector(".photo-card-overlay");
+    expect(overlay).toHaveTextContent(/2019/);
+    expect(overlay).toHaveTextContent("Boone, North Carolina");
+  });
+
+  it("marks a tile loaded once its thumbnail arrives", () => {
+    render(<PhotoGrid photos={PHOTOS} onSelect={() => {}} />);
+    const img = screen.getByAltText("beach.jpg");
+    expect(img.closest(".photo-card")).not.toHaveClass("photo-card-loaded");
+
+    fireEvent.load(img);
+
+    expect(img.closest(".photo-card")).toHaveClass("photo-card-loaded");
+  });
+
+  it("groups consecutive photos into sections with a header and a count", () => {
+    render(
+      <PhotoGrid
+        groupBy="folder"
+        photos={[
+          { id: "1", filename: "trip/a.jpg" },
+          { id: "2", filename: "trip/b.jpg" },
+          { id: "3", filename: "c.jpg" },
+        ]}
+        onSelect={() => {}}
+      />
+    );
+
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    expect(headings.map((heading) => heading.textContent)).toEqual(["trip2", "(Root)1"]);
+    expect(within(headings[0].closest("section")).getAllByRole("img")).toHaveLength(2);
+  });
+
+  describe("infinite scroll", () => {
+    let observers;
+
+    beforeEach(() => {
+      observers = [];
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          constructor(callback) {
+            this.callback = callback;
+            this.disconnected = false;
+            observers.push(this);
+          }
+          observe() {}
+          disconnect() {
+            this.disconnected = true;
+          }
+        }
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function scrollToBottom() {
+      const live = observers.filter((observer) => !observer.disconnected);
+      act(() => live.forEach((observer) => observer.callback([{ isIntersecting: true }])));
+    }
+
+    const many = Array.from({ length: BATCH_SIZE + 5 }, (_, index) => ({
+      id: String(index),
+      filename: `photo-${index}.jpg`,
+    }));
+
+    it("renders one batch, then the rest when the bottom scrolls into view", () => {
+      render(<PhotoGrid photos={many} onSelect={() => {}} />);
+      expect(screen.getAllByRole("img")).toHaveLength(BATCH_SIZE);
+      expect(screen.queryByAltText(`photo-${BATCH_SIZE}.jpg`)).not.toBeInTheDocument();
+
+      scrollToBottom();
+
+      expect(screen.getAllByRole("img")).toHaveLength(BATCH_SIZE + 5);
+      // Nothing left to load: the sentinel is gone.
+      expect(document.querySelector(".photo-grid-sentinel")).not.toBeInTheDocument();
+    });
+
+    it("doesn't observe anything when the whole list fits in the first batch", () => {
+      render(<PhotoGrid photos={PHOTOS} onSelect={() => {}} />);
+      expect(observers).toHaveLength(0);
+    });
   });
 });

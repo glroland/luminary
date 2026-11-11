@@ -630,4 +630,78 @@ describe("PhotoModal", () => {
       expect(screen.queryByText("Vacation")).not.toBeInTheDocument();
     });
   });
+
+  describe("navigating between photos", () => {
+    const PHOTOS = [
+      { ...PHOTO, id: "0", filename: "first.jpg" },
+      PHOTO,
+      { ...PHOTO, id: "2", filename: "last.jpg" },
+    ];
+
+    it("has no navigation controls without a photo list", async () => {
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+
+      expect(screen.queryByRole("button", { name: /next photo/i })).not.toBeInTheDocument();
+      expect(document.querySelector(".photo-modal-filmstrip")).not.toBeInTheDocument();
+    });
+
+    it("moves to the neighbouring photos with the arrow keys and the edge buttons", async () => {
+      const onNavigate = vi.fn();
+      render(<PhotoModal photo={PHOTO} photos={PHOTOS} onNavigate={onNavigate} onClose={() => {}} />);
+      await flush();
+
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      expect(onNavigate).toHaveBeenLastCalledWith(PHOTOS[2]);
+      fireEvent.keyDown(window, { key: "ArrowLeft" });
+      expect(onNavigate).toHaveBeenLastCalledWith(PHOTOS[0]);
+
+      fireEvent.click(screen.getByRole("button", { name: /next photo/i }));
+      expect(onNavigate).toHaveBeenLastCalledWith(PHOTOS[2]);
+      fireEvent.click(screen.getByRole("button", { name: /previous photo/i }));
+      expect(onNavigate).toHaveBeenLastCalledWith(PHOTOS[0]);
+    });
+
+    it("stops at the ends of the list", async () => {
+      const onNavigate = vi.fn();
+      render(<PhotoModal photo={PHOTOS[0]} photos={PHOTOS} onNavigate={onNavigate} onClose={() => {}} />);
+      await flush();
+
+      expect(screen.queryByRole("button", { name: /previous photo/i })).not.toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "ArrowLeft" });
+      expect(onNavigate).not.toHaveBeenCalled();
+    });
+
+    it("leaves the arrow keys alone while typing in a field", async () => {
+      const onNavigate = vi.fn();
+      render(<PhotoModal photo={PHOTO} photos={PHOTOS} onNavigate={onNavigate} onClose={() => {}} />);
+      pressF(); // reveals the "People" section's add-person input
+      await flush();
+
+      fireEvent.keyDown(screen.getAllByRole("textbox")[0], { key: "ArrowRight" });
+      expect(onNavigate).not.toHaveBeenCalled();
+    });
+
+    it("shows a filmstrip of the surrounding photos, marking the open one", async () => {
+      const onNavigate = vi.fn();
+      render(<PhotoModal photo={PHOTO} photos={PHOTOS} onNavigate={onNavigate} onClose={() => {}} />);
+      await flush();
+
+      const items = document.querySelectorAll(".photo-modal-filmstrip-item");
+      expect(items).toHaveLength(3);
+      expect(screen.getByRole("button", { name: "View beach.jpg" })).toHaveAttribute("aria-current", "true");
+
+      fireEvent.click(screen.getByRole("button", { name: "View last.jpg" }));
+      expect(onNavigate).toHaveBeenCalledWith(PHOTOS[2]);
+    });
+
+    it("closes on Escape", async () => {
+      const onClose = vi.fn();
+      render(<PhotoModal photo={PHOTO} onClose={onClose} />);
+      await flush();
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
 });
