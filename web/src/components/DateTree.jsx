@@ -55,7 +55,13 @@ function DateNode({ dateKey, node, path, depth, selectedDate, onSelectDate }) {
 
   return (
     <li>
-      <div className={`directory-tree-item${isActive ? " directory-tree-item-active" : ""}`}>
+      <div
+        className={`directory-tree-item${isActive ? " directory-tree-item-active" : ""}`}
+        // The photo count is a data attribute styles.css renders with
+        // ::after, not text in the DOM, so the label button's accessible
+        // name (and what tests match on) stays just the label.
+        data-count={node.count ? node.count.toLocaleString() : undefined}
+      >
         {hasChildren ? (
           <button
             type="button"
@@ -64,7 +70,7 @@ function DateNode({ dateKey, node, path, depth, selectedDate, onSelectDate }) {
             aria-label={expanded ? "Collapse" : "Expand"}
             aria-expanded={expanded}
           >
-            {expanded ? "−" : "+"}
+            ›
           </button>
         ) : (
           <span className="directory-tree-toggle-spacer" aria-hidden="true" />

@@ -291,6 +291,32 @@ describe("Sidebar", () => {
     renderSidebar({ open: true, searchError: "Search backend failed" });
     expect(screen.getByRole("alert")).toHaveTextContent("Search backend failed");
   });
+
+  it("carries photo counts on All Images and on folder rows (subfolders included)", () => {
+    renderSidebar({
+      photos: [
+        { id: "1", filename: "trip/a.jpg", created_at: "2023-07-04T12:00:00" },
+        { id: "2", filename: "trip/day2/b.jpg", created_at: "2023-07-05T12:00:00" },
+        { id: "3", filename: "c.jpg", created_at: "2019-01-01T12:00:00" },
+      ],
+    });
+
+    expect(screen.getByText("All Images")).toHaveAttribute("data-count", "3");
+
+    fireEvent.click(screen.getByRole("button", { name: /^by folder$/i }));
+    expect(screen.getByText("trip").closest(".directory-tree-item")).toHaveAttribute("data-count", "2");
+    expect(screen.getByText("(Root)").closest(".directory-tree-item")).toHaveAttribute("data-count", "1");
+
+    fireEvent.click(screen.getByRole("button", { name: /^by date$/i }));
+    expect(screen.getByText("2023").closest(".directory-tree-item")).toHaveAttribute("data-count", "2");
+  });
+
+  it("shows an initial in place of the avatar for an individual with no tagged face", () => {
+    renderSidebar({ individuals: [{ id: "p9", name: "zoe", has_representative_thumbnail: false }] });
+    fireEvent.click(screen.getByRole("button", { name: /^by individual$/i }));
+
+    expect(document.querySelector(".sidebar-individual-initial")).toHaveTextContent("Z");
+  });
 });
 
 function propsFor(overrides) {

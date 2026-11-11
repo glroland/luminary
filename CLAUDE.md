@@ -727,6 +727,22 @@ cached) is also per-pod, in-memory state — same caveat.
   directory's label selects it; clicking its separate chevron toggle
   expands/collapses without selecting, so browsing the tree and filtering
   the grid are independent actions.
+- Sidebar presentation (`Sidebar.jsx`/`DirectoryTree.jsx`/`DateTree.jsx`):
+  section headers, "All Images" and "Manage" carry a small inline SVG icon
+  (`Sidebar.jsx`'s `Icon`, always `aria-hidden`); expand toggles are a
+  single "›" glyph that `styles.css` rotates off the button's own
+  `aria-expanded` rather than swapping +/− text. Per-row photo counts
+  (`buildTree`/`buildDateTree` accumulate `count` on every node, subfolders
+  included, matching what selecting that row filters to) are a `data-count`
+  attribute rendered by a CSS `::after`, deliberately *not* text in the
+  DOM: a row's accessible name stays just its label, and a count like "4"
+  can't collide with a day-of-month label of "4". The sidebar's contents
+  keep a fixed 280px width while the `<aside>` animates open/closed — keep
+  that in step with `.sidebar-open`'s width. The "Search" section is
+  rendered in `.sidebar-footer`, pinned above "Manage", not in the
+  scrolling `<nav>` with the other sections. The site icon is
+  `web/public/favicon.svg` — the logo's circle mark, a third copy of that
+  artwork alongside `Logo.jsx` and `assets/logo.svg`.
 - `SyncStatus.jsx` itself is unchanged by the above move: it renders a
   plain button when idle, or (while a backend sync is running/just
   finished) a small progress bar polled from `GET /api/sync/status` every
