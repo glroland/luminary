@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ THUMBNAIL_SIZE = (320, 320)
 # photo's thumbnail bytes get read off disk just to list filenames.
 METADATA_COLUMNS = (
     "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude, "
-    "location_name, vlm_description, description"
+    "location_name, vlm_description, description, checksum"
 )
 
 # Protocols whose fsspec filesystem accepts plain `username`/`password`
@@ -62,6 +63,18 @@ def _iter_file(fs: fsspec.AbstractFileSystem, path: str, chunk_size: int = 1024 
     with fs.open(path, "rb") as f:
         while chunk := f.read(chunk_size):
             yield chunk
+
+
+def compute_checksum(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    """SHA-256 hex digest of the file's raw bytes, reusing _iter_file so a
+    large original is streamed in chunks rather than read into memory all
+    at once. Called from sync.py whenever a photo's `checksum` column is
+    missing or its content has changed -- see _sync_one_file's
+    `needs_checksum`."""
+    hasher = hashlib.sha256()
+    for chunk in _iter_file(fs, path):
+        hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _dms_to_decimal(dms, ref) -> Optional[float]:
@@ -271,6 +284,44 @@ def purge_all() -> None:
         conn.execute("DELETE FROM tags")
         conn.execute("DELETE FROM photos")
         conn.commit()
+
+
+def find_duplicate_photos() -> list[dict]:
+    """Groups indexed photos by `checksum` (see sync.py's `needs_checksum`/
+    storage.compute_checksum) to find byte-identical files -- backs the
+    management page's "Identify Duplicates" button
+    (GET /api/photos/duplicates/csv). Rows with a NULL checksum (not yet
+    computed, or the file couldn't be read) are excluded from every group,
+    not just ignored individually -- a checksum-less photo should never be
+    reported as a duplicate, or as the original anything else is a
+    duplicate of, since there's nothing to confirm the match.
+
+    Within each group of 2+ photos sharing a checksum, the one with the
+    earliest (created_at, filename) is treated as "the original" and
+    every *other* file in that group is reported as a duplicate of it --
+    (created_at, filename) is just a stable, deterministic tie-breaker,
+    not a claim that this file is somehow more authoritative. The
+    original's own filename is deliberately never returned in the
+    "duplicate" position of any row, including rows for other members of
+    the same group: there's always exactly one original per group, by
+    construction. A group of 3+ identical files produces one row per
+    extra copy, all pointing back at the same original. Returns [] if no
+    two indexed photos share a checksum (or no photo has one yet)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT array_agg(filename ORDER BY created_at, filename) AS filenames
+            FROM photos
+            WHERE checksum IS NOT NULL
+            GROUP BY checksum
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+    duplicates = []
+    for row in rows:
+        original, *copies = row["filenames"]
+        duplicates.extend({"original": original, "duplicate": copy} for copy in copies)
+    return duplicates
 
 
 def get_faces(photo_id: str) -> list[dict]:

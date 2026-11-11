@@ -4,6 +4,7 @@ import {
   createTag,
   deleteIndividual,
   deleteTag,
+  downloadDuplicatesCsv,
   faceThumbnailUrl,
   fetchDescriptionRefreshStatus,
   fetchFaceRefreshStatus,
@@ -63,6 +64,14 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   const [locationRefreshStatus, setLocationRefreshStatus] = useState(null);
   const locationRefreshPollRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
+
+  // "Identify Duplicates" -- a synchronous CSV download (storage.
+  // find_duplicate_photos via GET /api/photos/duplicates/csv), not a
+  // background job like the three refreshes above, so there's no status
+  // to poll: just an in-flight flag (to disable the button/show progress
+  // text while the request is out) and an error slot.
+  const [duplicatesLoading, setDuplicatesLoading] = useState(false);
+  const [duplicatesError, setDuplicatesError] = useState(null);
 
   // Tag catalog (tags.py/routers/tags.py) -- a separate full-CRUD list
   // from the individuals catalog above, shown with its photo count only
@@ -293,6 +302,14 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         pollRefreshStatus();
       })
       .catch((err) => setPageError(err.message));
+  }
+
+  function handleIdentifyDuplicates() {
+    setDuplicatesLoading(true);
+    setDuplicatesError(null);
+    downloadDuplicatesCsv()
+      .catch((err) => setDuplicatesError(err.message))
+      .finally(() => setDuplicatesLoading(false));
   }
 
   function handleAdd(event) {
@@ -583,7 +600,31 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
             before that detail was added.
           </p>
         </div>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            <button
+              type="button"
+              className="refresh-button"
+              onClick={handleIdentifyDuplicates}
+              disabled={duplicatesLoading}
+            >
+              {duplicatesLoading ? "Preparing CSV…" : "Identify Duplicates"}
+            </button>
+          </div>
+          <p className="management-refresh-description">
+            Downloads a CSV of byte-identical photos, found by comparing checksums -- one row per
+            duplicate file, with the original it duplicates in the first column. Run the sync above
+            first if any photos have not been checksummed yet.
+          </p>
+        </div>
       </div>
+
+      {duplicatesError && (
+        <p role="alert" className="error">
+          {duplicatesError}
+        </p>
+      )}
 
       {pageError && (
         <p role="alert" className="error">

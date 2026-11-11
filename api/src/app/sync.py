@@ -219,7 +219,7 @@ def _load_existing() -> dict:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, filename, size_bytes, face_detection_done,
+            SELECT id, filename, size_bytes, face_detection_done, checksum,
                    (thumbnail IS NOT NULL) AS has_thumbnail
             FROM photos
             """
@@ -231,22 +231,27 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     """Reconcile a single discovered file against its DB row (if any).
     Returns "unchanged", "inserted", or "updated".
 
-    "Unchanged" -- skip entirely, no file open, no thumbnail/caption/face
-    work -- is the fast path a repeat sync of a large, mostly-static
-    library should hit for nearly every file: it requires both that size
-    matches the DB row (the file's content presumably hasn't changed)
-    *and* that its thumbnail/vlm_description are already populated. A full
-    reprocess (clearing and recomputing everything) only happens for a
-    genuinely new or changed file. A file whose content is unchanged but
-    is missing a derived field -- e.g. indexed before `vlm_description`
-    existed, or before Florence-2 chat was configured, or the thumbnail
-    failed on a transient read error -- gets a narrower "backfill": the
-    image is opened once, but each piece of work (thumbnailing,
-    captioning+face-detection) only runs for the field that's actually
-    missing, so e.g. adding captions to an already-thumbnailed library
-    doesn't redundantly re-thumbnail every photo, and a library sync
-    without Florence-2 configured doesn't re-open every file every time
-    just to confirm there's still no caption.
+    "Unchanged" -- skip entirely, no file open, no thumbnail/caption/face/
+    checksum work -- is the fast path a repeat sync of a large,
+    mostly-static library should hit for nearly every file: it requires
+    both that size matches the DB row (the file's content presumably
+    hasn't changed) *and* that its thumbnail/vlm_description/checksum are
+    already populated. A full reprocess (clearing and recomputing
+    everything) only happens for a genuinely new or changed file. A file
+    whose content is unchanged but is missing a derived field -- e.g.
+    indexed before `vlm_description`/`checksum` existed, or before
+    Florence-2 chat was configured, or the thumbnail failed on a transient
+    read error -- gets a narrower "backfill": the image is opened once,
+    but each piece of work (thumbnailing, captioning+face-detection,
+    checksumming) only runs for the field that's actually missing, so e.g.
+    adding captions to an already-thumbnailed library doesn't redundantly
+    re-thumbnail every photo, and a library sync without Florence-2
+    configured doesn't re-open every file every time just to confirm
+    there's still no caption. `checksum` (storage.compute_checksum, a
+    SHA-256 of the raw bytes) is read via its own full pass over the file
+    independent of the image-decode step, since it isn't actually an image
+    operation -- a corrupt/undecodable file can still get a checksum even
+    when its thumbnail/dimensions can't be extracted.
 
     `photos.face_detection_done` is the signal for "has face detection
     already run" for this photo -- see _run_florence_pipeline, which is
@@ -260,6 +265,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     content_changed = not existing_row or existing_row["size_bytes"] != size
     needs_thumbnail = content_changed or not existing_row["has_thumbnail"]
     needs_florence = content_changed or not existing_row["face_detection_done"]
+    needs_checksum = content_changed or not existing_row["checksum"]
 
     # Logged for every discovered file, not just changed ones, so a repeat
     # "Refresh" is auditable file-by-file -- which of the three outcomes
@@ -279,17 +285,19 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             existing_row["size_bytes"],
             size,
         )
-    elif needs_thumbnail or needs_florence:
+    elif needs_thumbnail or needs_florence or needs_checksum:
         missing = []
         if needs_thumbnail:
             missing.append("thumbnail")
         if needs_florence:
             missing.append("caption/face detection")
+        if needs_checksum:
+            missing.append("checksum")
         logger.info("%s: no content change, but backfilling missing %s", path, " and ".join(missing))
     else:
         logger.info("%s: no change detected", path)
 
-    if existing_row and not content_changed and not needs_thumbnail and not needs_florence:
+    if existing_row and not content_changed and not needs_thumbnail and not needs_florence and not needs_checksum:
         return "unchanged"
 
     fields: dict = {}
@@ -319,7 +327,15 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             vlm_description=None,
             description=None,
             face_detection_done=False,
+            checksum=None,
         )
+
+    if needs_checksum:
+        # Independent of the image-decode block below: a checksum is a
+        # hash of the raw bytes, not something that requires the file to
+        # be a decodable image, so it's computed (and can succeed/fail)
+        # on its own rather than being folded into that try/except.
+        fields["checksum"] = _compute_checksum(fs, path, relative_path)
 
     rgb_image = None
     try:
@@ -499,6 +515,20 @@ def _describe_location(latitude: float, longitude: float, relative_path: str) ->
         return geocode.reverse_geocode(latitude, longitude)
     except Exception:
         logger.warning("Could not reverse-geocode %r's GPS coordinates", relative_path, exc_info=True)
+        return None
+
+
+def _compute_checksum(fs, path: str, relative_path: str) -> Optional[str]:
+    """Best-effort SHA-256 of the file's raw bytes (storage.compute_checksum)
+    -- same error-handling shape as _generate_vlm_description/_detect_faces/
+    _describe_location above: any failure (e.g. the backend becomes
+    unreachable mid-sync) is logged and swallowed, leaving `checksum` NULL
+    so this file is retried on the next sync rather than failing the whole
+    run."""
+    try:
+        return storage.compute_checksum(fs, path)
+    except Exception:
+        logger.warning("Could not compute checksum for %r", relative_path, exc_info=True)
         return None
 
 

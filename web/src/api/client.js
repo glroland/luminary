@@ -217,6 +217,40 @@ export async function untagPhoto(photoId, tagId) {
   await request(`/photos/${photoId}/tags/${tagId}`, { method: "DELETE" });
 }
 
+// Downloads GET /api/photos/duplicates/csv as a file, rather than
+// navigating/opening a new tab -- fetched as a blob and handed to the
+// browser via a throwaway <a download> element (clicked programmatically,
+// then removed) so the response's Content-Disposition filename is
+// honored without ever leaving the page. Doesn't go through request()
+// above since that assumes a JSON (or empty 204) body.
+export async function downloadDuplicatesCsv() {
+  let response;
+  try {
+    response = await fetch(`${API_BASE}/photos/duplicates/csv`);
+  } catch {
+    throw new Error("Could not connect to the API. Is it running?");
+  }
+
+  if (!response.ok) {
+    const isJson = (response.headers.get("content-type") || "").includes("application/json");
+    const data = isJson ? await response.json().catch(() => null) : null;
+    throw new Error(data?.detail || `Could not connect to the API (HTTP ${response.status}).`);
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "duplicate_photos.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }

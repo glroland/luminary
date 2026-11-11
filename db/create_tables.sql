@@ -83,6 +83,16 @@ CREATE TABLE IF NOT EXISTS photos (
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- SHA-256 hex digest of the file's raw bytes (storage.compute_checksum),
+-- for reliably telling whether two files are byte-identical -- unlike
+-- size_bytes, a collision here is cryptographically implausible.
+-- (Re)computed by sync.py whenever content_changed, or backfilled lazily
+-- whenever a sync encounters a row where this is still NULL (e.g. a
+-- database indexed before this column existed) -- same "field missing,
+-- backfill it" shape as vlm_description/thumbnail above, not a one-time
+-- UPDATE here, since computing it requires reading the file itself.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS checksum TEXT;
+
 -- Embedding of `description` (not `vlm_description`), for similarity
 -- search (GET /api/photos/{id}/similar, storage.find_similar_photos) --
 -- see embeddings.py's module docstring for the full reasoning.

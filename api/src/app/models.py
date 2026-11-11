@@ -32,6 +32,12 @@ class Photo(BaseModel):
     # docstring for every point that (re)triggers it) -- a stale-but-
     # present value is kept on a later failure rather than cleared.
     description: Optional[str] = None
+    # SHA-256 hex digest of the file's raw bytes (storage.compute_checksum)
+    # -- lets two files be compared for byte-for-byte equality reliably,
+    # unlike size_bytes alone. Null until a sync has computed it (see
+    # sync.py's `needs_checksum`), which happens for every new/changed file
+    # and is lazily backfilled for any already-indexed photo missing it.
+    checksum: Optional[str] = None
 
 
 class PhotoList(BaseModel):

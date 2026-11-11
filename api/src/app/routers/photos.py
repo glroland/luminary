@@ -1,3 +1,5 @@
+import csv
+import io
 import logging
 
 from fastapi import APIRouter, HTTPException, Response
@@ -34,6 +36,30 @@ def search_photos(q: str, threshold: float = 0.5) -> dict:
         logger.exception("Description search failed for query %r", q)
         raise HTTPException(status_code=502, detail="Search backend failed")
     return {"results": results}
+
+
+@router.get("/photos/duplicates/csv")
+def get_duplicate_photos_csv() -> Response:
+    """Backs the management page's "Identify Duplicates" button. Returns a
+    CSV listing every duplicate file found by storage.find_duplicate_photos
+    (byte-identical via `photos.checksum`) -- one row per duplicate, never
+    for the original it's a duplicate of. `filename` already holds the
+    path relative to the photos root (e.g. "vacation/2019/beach.jpg"), so
+    no separate "path" column is needed for either side. Registered before
+    "/photos/{photo_id}" below, same collision-avoidance reasoning as
+    "/photos/search" above -- both are nested under "/photos", and a
+    literal path registered after a dynamic "{photo_id}" segment would
+    never be reached."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Original Image", "Duplicate Image"])
+    for row in storage.find_duplicate_photos():
+        writer.writerow([row["original"], row["duplicate"]])
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="duplicate_photos.csv"'},
+    )
 
 
 @router.post("/photos")

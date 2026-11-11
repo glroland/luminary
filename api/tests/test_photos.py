@@ -37,6 +37,36 @@ def test_list_get_and_delete_photo(client, tmp_path):
     assert client.get("/api/photos").json() == {"photos": []}
 
 
+def test_duplicate_photos_csv_lists_each_duplicate_against_the_earliest_original(client, tmp_path):
+    photos_dir = tmp_path / "photos"
+    write_image(photos_dir / "first.jpg", size=(10, 10), color="red")
+    sync_and_wait(client)  # indexes first.jpg with an earlier created_at than the second sync below
+
+    write_image(photos_dir / "second.jpg", size=(10, 10), color="red")  # byte-identical to first.jpg
+    write_image(photos_dir / "unique.jpg", size=(20, 20), color="blue")
+    sync_and_wait(client)
+
+    response = client.get("/api/photos/duplicates/csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"] == 'attachment; filename="duplicate_photos.csv"'
+
+    rows = response.text.strip().splitlines()
+    assert rows[0] == "Original Image,Duplicate Image"
+    assert rows[1:] == ["first.jpg,second.jpg"]  # unique.jpg has no duplicate, so no row for it
+
+
+def test_duplicate_photos_csv_has_only_a_header_when_there_are_no_duplicates(client, tmp_path):
+    write_image(tmp_path / "photos" / "only.jpg")
+    sync_and_wait(client)
+
+    response = client.get("/api/photos/duplicates/csv")
+
+    assert response.status_code == 200
+    assert response.text.strip().splitlines() == ["Original Image,Duplicate Image"]
+
+
 def test_delete_removes_index_entry_but_not_the_source_file(client, tmp_path):
     image_path = tmp_path / "photos" / "sample.jpg"
     write_image(image_path)

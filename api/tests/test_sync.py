@@ -77,6 +77,85 @@ def test_sync_updates_rows_for_files_changed_in_place(client, tmp_path):
     assert photo["height"] == 40
 
 
+def test_sync_stores_checksum_for_new_photos(client, tmp_path):
+    import hashlib
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["checksum"] == hashlib.sha256(image_path.read_bytes()).hexdigest()
+
+
+def test_sync_recomputes_checksum_when_a_file_changes_in_place(client, tmp_path):
+    import hashlib
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    checksum_before = client.get(f"/api/photos/{photo_id}").json()["checksum"]
+
+    write_image(image_path, size=(40, 40))
+    sync_and_wait(client)
+
+    photo = client.get(f"/api/photos/{photo_id}").json()
+    assert photo["checksum"] == hashlib.sha256(image_path.read_bytes()).hexdigest()
+    assert photo["checksum"] != checksum_before
+
+
+def test_sync_backfills_missing_checksum_without_touching_an_existing_thumbnail(client, tmp_path):
+    # Simulates a library indexed before the checksum column existed: the
+    # thumbnail is already there, only the checksum is missing. The repeat
+    # sync below must add it without burning the cost of re-thumbnailing.
+    import hashlib
+
+    from app.database import get_connection
+
+    image_path = tmp_path / "photos" / "sample.jpg"
+    write_image(image_path)
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    thumbnail_before = client.get(f"/api/photos/{photo_id}/thumbnail").content
+
+    with get_connection() as conn:
+        conn.execute("UPDATE photos SET checksum = NULL WHERE id = %s", (photo_id,))
+        conn.commit()
+    assert client.get(f"/api/photos/{photo_id}").json()["checksum"] is None
+
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["updated"] == 1
+    assert status["inserted"] == 0
+
+    photo = client.get(f"/api/photos/{photo_id}").json()
+    assert photo["checksum"] == hashlib.sha256(image_path.read_bytes()).hexdigest()
+    assert photo["id"] == photo_id  # same row, not a new insert
+    assert client.get(f"/api/photos/{photo_id}/thumbnail").content == thumbnail_before
+
+
+def test_sync_logs_but_does_not_fail_when_checksum_computation_raises(client, tmp_path, monkeypatch, caplog):
+    from app import storage
+
+    def boom(fs, path):
+        raise RuntimeError("backend unreachable mid-read")
+
+    monkeypatch.setattr(storage, "compute_checksum", boom)
+    write_image(tmp_path / "photos" / "sample.jpg")
+
+    with caplog.at_level(logging.WARNING, logger="app.sync"):
+        status = sync_and_wait(client)
+
+    assert status["status"] == "completed"
+    photo = client.get("/api/photos").json()["photos"][0]
+    assert photo["checksum"] is None
+    assert any(
+        record.levelno == logging.WARNING and "sample.jpg" in record.message
+        for record in caplog.records
+    )
+
+
 def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path, monkeypatch):
     from app import geocode
 

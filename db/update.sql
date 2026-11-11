@@ -81,6 +81,15 @@
 --    sync just (re)runs detection once for such a photo, same cost as
 --    any other "field missing, backfill it" case this file's migration 6
 --    above already has).
+-- 8. Adds photos.checksum: a SHA-256 hex digest of the file's raw bytes
+--    (storage.compute_checksum), for reliably telling whether two files
+--    are byte-identical (unlike size_bytes, which only rules duplicates
+--    out, never confirms them). Only an ADD COLUMN here -- there's
+--    nothing to backfill it from with plain SQL, since computing it
+--    requires reading the file itself; sync.py's own `needs_checksum`
+--    lazily backfills any row where this is still NULL on its next sync,
+--    same shape as the vlm_description/thumbnail backfills already in
+--    this app.
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -142,3 +151,5 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL
 UPDATE photos SET face_detection_done = TRUE
     WHERE NOT face_detection_done
       AND EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id);
+
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS checksum TEXT;

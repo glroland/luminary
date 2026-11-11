@@ -535,6 +535,33 @@ describe("ManagementPage", () => {
     expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
   });
 
+  it("downloads a duplicates CSV when 'Identify Duplicates' is clicked", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const downloadMock = vi.spyOn(client, "downloadDuplicatesCsv").mockResolvedValue();
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /identify duplicates/i }));
+
+    expect(downloadMock).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /identify duplicates/i })).not.toBeDisabled()
+    );
+  });
+
+  it("shows an error if the duplicates CSV download fails", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "downloadDuplicatesCsv").mockRejectedValue(new Error("Could not connect to the API."));
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /identify duplicates/i }));
+
+    await waitFor(() => expect(screen.getByText("Could not connect to the API.")).toBeInTheDocument());
+  });
+
   describe("tags", () => {
     const VACATION = { id: "t1", name: "Vacation", created_at: "2024-01-01T00:00:00Z", photo_count: 3 };
     const PETS = { id: "t2", name: "Pets", created_at: "2024-01-01T00:00:00Z", photo_count: 1 };

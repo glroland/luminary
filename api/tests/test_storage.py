@@ -68,6 +68,31 @@ def test_no_credentials_set_forwards_nothing(monkeypatch):
     assert kwargs == {}
 
 
+def test_compute_checksum_returns_sha256_hex_digest():
+    import hashlib
+
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("/sample.bin", b"hello world")
+
+    assert storage.compute_checksum(fs, "/sample.bin") == hashlib.sha256(b"hello world").hexdigest()
+
+
+def test_compute_checksum_differs_for_different_content():
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("/a.bin", b"content a")
+    fs.pipe_file("/b.bin", b"content b")
+
+    assert storage.compute_checksum(fs, "/a.bin") != storage.compute_checksum(fs, "/b.bin")
+
+
+def test_compute_checksum_matches_for_identical_content_at_different_paths():
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file("/a.bin", b"identical bytes")
+    fs.pipe_file("/b.bin", b"identical bytes")
+
+    assert storage.compute_checksum(fs, "/a.bin") == storage.compute_checksum(fs, "/b.bin")
+
+
 def _insert_bare_photo_row(photo_id: str) -> None:
     from app.database import get_connection
 
@@ -77,6 +102,53 @@ def _insert_bare_photo_row(photo_id: str) -> None:
             (photo_id, "a.jpg", "image/jpeg", 1, "2024-01-01T00:00:00"),
         )
         conn.commit()
+
+
+def _insert_photo_with_checksum(photo_id: str, filename: str, checksum, created_at="2024-01-01T00:00:00") -> None:
+    from app.database import get_connection
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, checksum) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (photo_id, filename, "image/jpeg", 1, created_at, checksum),
+        )
+        conn.commit()
+
+
+def test_find_duplicate_photos_returns_nothing_when_no_checksums_match(client):
+    _insert_photo_with_checksum("p1", "a.jpg", "checksum-a")
+    _insert_photo_with_checksum("p2", "b.jpg", "checksum-b")
+
+    assert storage.find_duplicate_photos() == []
+
+
+def test_find_duplicate_photos_ignores_rows_with_a_null_checksum(client):
+    _insert_photo_with_checksum("p1", "a.jpg", None)
+    _insert_photo_with_checksum("p2", "b.jpg", None)
+
+    assert storage.find_duplicate_photos() == []
+
+
+def test_find_duplicate_photos_pairs_each_duplicate_with_the_earliest_original(client):
+    _insert_photo_with_checksum("p1", "folder/second.jpg", "same", created_at="2024-02-01T00:00:00")
+    _insert_photo_with_checksum("p2", "folder/first.jpg", "same", created_at="2024-01-01T00:00:00")
+    _insert_photo_with_checksum("p3", "unrelated.jpg", "different")
+
+    assert storage.find_duplicate_photos() == [
+        {"original": "folder/first.jpg", "duplicate": "folder/second.jpg"}
+    ]
+
+
+def test_find_duplicate_photos_reports_every_extra_copy_against_the_same_original(client):
+    _insert_photo_with_checksum("p1", "c.jpg", "same", created_at="2024-01-03T00:00:00")
+    _insert_photo_with_checksum("p2", "a.jpg", "same", created_at="2024-01-01T00:00:00")
+    _insert_photo_with_checksum("p3", "b.jpg", "same", created_at="2024-01-02T00:00:00")
+
+    assert storage.find_duplicate_photos() == [
+        {"original": "a.jpg", "duplicate": "b.jpg"},
+        {"original": "a.jpg", "duplicate": "c.jpg"},
+    ]
 
 
 def _without_id(faces: list[dict]) -> list[dict]:
