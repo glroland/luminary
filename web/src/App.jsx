@@ -26,6 +26,26 @@ function directoryOf(filename) {
   return slash === -1 ? "" : filename.slice(0, slash);
 }
 
+// A photo's full date key, "YYYY-MM-DD", derived from created_at -- the
+// same zero-padded shape Sidebar.jsx's buildDateTree groups photos into
+// (year -> month -> day). Null for a missing/unparseable created_at (such
+// a photo never matches a date filter, same as how one with no filename
+// directory can still match the "" root of the folder tree, but there's
+// no equivalent root bucket for dates since every photo either has one or
+// doesn't). Because every segment is fixed-width and "-"-separated, a
+// plain startsWith against a shorter selectedDate (just the year, or
+// year-month) can't accidentally match a different year/month -- the
+// separator always lands on a boundary.
+function dateKeyOf(createdAt) {
+  if (!createdAt) return null;
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // Comparator backing SortControl.jsx's options. Folder sort breaks ties by
 // filename (rather than leaving same-folder photos in whatever order they
 // arrived in) so the result is still deterministic within a folder.
@@ -63,11 +83,19 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // null means no filter (all photos); otherwise a directory path as it
   // appears in photo.filename, matched by directoryOf() below including
-  // its subdirectories. Mutually exclusive with selectedIndividual/
-  // searchResults below -- the sidebar's four parent sections (see
-  // Sidebar.jsx) are alternative ways to narrow the same grid, not
-  // combinable filters.
+  // its subdirectories. "" is distinct from null -- it's the sidebar's
+  // fixed "(Root)" entry, which narrows to photos with no directory
+  // component at all (directoryOf() === ""), since those have no segment
+  // of their own to select from the folder tree otherwise. Mutually
+  // exclusive with selectedIndividual/searchResults below -- the
+  // sidebar's parent sections (see Sidebar.jsx) are alternative ways to
+  // narrow the same grid, not combinable filters.
   const [selectedDirectory, setSelectedDirectory] = useState(null);
+  // null means no date filter; otherwise a dateKeyOf()-shaped string at
+  // whichever granularity was clicked in the sidebar's "By Date" tree --
+  // "2024" (year), "2024-05" (year-month), or "2024-05-14" (a single day).
+  // Mutually exclusive with the other filters above, same convention.
+  const [selectedDate, setSelectedDate] = useState(null);
   // The catalogued-individuals list for the sidebar's "Individuals"
   // section; ManagementPage owns the full CRUD lifecycle for these, this
   // is just a read-only copy kept here so Sidebar can render it without
@@ -215,10 +243,11 @@ export default function App() {
       const results = await searchPhotos(query, searchThreshold);
       setSearchResults(results);
       // Same "selecting one filter clears the others" rule the other
-      // three sidebar sections already follow (see onSelectDirectory/
-      // onSelectIndividual/onAllImages below).
+      // sidebar sections already follow (see onSelectDirectory/
+      // onSelectIndividual/onSelectDate/onAllImages below).
       setSelectedDirectory(null);
       setSelectedIndividual(null);
+      setSelectedDate(null);
       setView("gallery");
       setPage(1);
     } catch (err) {
@@ -241,12 +270,17 @@ export default function App() {
   const filteredPhotos =
     selectedIndividual !== null
       ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
-      : selectedDirectory === null
-        ? photos
-        : photos.filter((photo) => {
+      : selectedDirectory !== null
+        ? photos.filter((photo) => {
             const dir = directoryOf(photo.filename);
             return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
-          });
+          })
+        : selectedDate !== null
+          ? photos.filter((photo) => {
+              const key = dateKeyOf(photo.created_at);
+              return key !== null && (key === selectedDate || key.startsWith(`${selectedDate}-`));
+            })
+          : photos;
 
   // Search results are already ordered most-similar-first by the API --
   // never re-sorted here (see SortControl.jsx's comment).
@@ -273,6 +307,7 @@ export default function App() {
         onSelectDirectory={(directory) => {
           setSelectedDirectory(directory);
           setSelectedIndividual(null);
+          setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
           setPage(1);
@@ -282,6 +317,16 @@ export default function App() {
         onSelectIndividual={(personId) => {
           setSelectedIndividual(personId);
           setSelectedDirectory(null);
+          setSelectedDate(null);
+          setSearchResults(null);
+          setView("gallery");
+          setPage(1);
+        }}
+        selectedDate={selectedDate}
+        onSelectDate={(dateKey) => {
+          setSelectedDate(dateKey);
+          setSelectedDirectory(null);
+          setSelectedIndividual(null);
           setSearchResults(null);
           setView("gallery");
           setPage(1);
@@ -289,6 +334,7 @@ export default function App() {
         onAllImages={() => {
           setSelectedDirectory(null);
           setSelectedIndividual(null);
+          setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
           setPage(1);
@@ -371,6 +417,7 @@ export default function App() {
             onPurged={() => {
               setSelectedDirectory(null);
               setSelectedIndividual(null);
+              setSelectedDate(null);
               setSearchResults(null);
               setIndividuals([]);
               setSelectedPhoto(null);

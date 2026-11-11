@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { individualThumbnailUrl } from "../api/client.js";
+import DateTree from "./DateTree.jsx";
 import DirectoryTree from "./DirectoryTree.jsx";
 
 // A few reasonable cosine-similarity cutoffs for the search section's
@@ -30,6 +31,28 @@ function buildTree(photos) {
       node.children[part] ??= { children: {} };
       node = node.children[part];
     }
+  }
+  return root;
+}
+
+// Builds a nested {children: {key: node}} tree, year -> month -> day, from
+// each photo's created_at -- same "derived from the photos themselves, not
+// a dedicated API concept" reasoning as buildTree above. Keys are
+// zero-padded strings ("05", not "5") so DateTree.jsx's lexical sort and
+// App.jsx's "-"-joined dateKeyOf/startsWith filtering agree with each
+// other; photos with no (or unparseable) created_at are left out of the
+// tree entirely rather than grouped under some placeholder bucket.
+function buildDateTree(photos) {
+  const root = { children: {} };
+  for (const photo of photos) {
+    const date = new Date(photo.created_at);
+    if (Number.isNaN(date.getTime())) continue;
+    const year = String(date.getFullYear());
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    root.children[year] ??= { children: {} };
+    root.children[year].children[month] ??= { children: {} };
+    root.children[year].children[month].children[day] ??= { children: {} };
   }
   return root;
 }
@@ -139,17 +162,20 @@ function SearchSection({
 // and clickable regardless of open/closed state, which it couldn't do as
 // part of this collapsing <aside>.
 //
-// Four parent sections narrow the photo grid, mutually exclusive with each
+// Five parent sections narrow the photo grid, mutually exclusive with each
 // other (selecting one clears any other filter -- see App.jsx's
-// handleSelectDirectory/handleSelectIndividual/handleAllImages/
-// handleSearch): "All Images" clears every filter, "Folders" filters by
-// directory (via DirectoryTree, built from the photos' own paths),
-// "Individuals" filters to photos containing a selected catalogued
-// person, and "Search" (below Individuals) narrows to photos whose
-// description is similar enough to a free-text query (embeddings.py's
-// similarity search), sorted most-similar first -- that ordering comes
-// from the API response itself (GET /api/photos/search), not anything
-// sorted client-side here.
+// handleSelectDirectory/handleSelectIndividual/handleSelectDate/
+// handleAllImages/handleSearch): "All Images" clears every filter, "By
+// Folder" filters by directory (via DirectoryTree, built from the photos'
+// own paths), "By Individual" filters to photos containing a selected
+// catalogued person, "By Date" (below By Individual) filters by the
+// photo's created_at via a year -> month -> day tree (DateTree, built from
+// the photos' own created_at the same way the folder tree is built from
+// their filenames -- there's no dedicated "date" concept in the API
+// either), and "Search" narrows to photos whose description is similar
+// enough to a free-text query (embeddings.py's similarity search), sorted
+// most-similar first -- that ordering comes from the API response itself
+// (GET /api/photos/search), not anything sorted client-side here.
 export default function Sidebar({
   open,
   photos,
@@ -158,6 +184,8 @@ export default function Sidebar({
   individuals,
   selectedIndividual,
   onSelectIndividual,
+  selectedDate,
+  onSelectDate,
   onAllImages,
   onManage,
   searchQuery = "",
@@ -171,10 +199,13 @@ export default function Sidebar({
   searchError = null,
 }) {
   const tree = useMemo(() => buildTree(photos), [photos]);
-  const [foldersExpanded, setFoldersExpanded] = useState(true);
-  const [individualsExpanded, setIndividualsExpanded] = useState(true);
+  const dateTree = useMemo(() => buildDateTree(photos), [photos]);
+  const [foldersExpanded, setFoldersExpanded] = useState(false);
+  const [individualsExpanded, setIndividualsExpanded] = useState(false);
+  const [datesExpanded, setDatesExpanded] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(true);
-  const noFilter = selectedDirectory === null && selectedIndividual === null && !searchActive;
+  const noFilter =
+    selectedDirectory === null && selectedIndividual === null && selectedDate === null && !searchActive;
 
   return (
     <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
@@ -187,7 +218,25 @@ export default function Sidebar({
           All Images
         </button>
 
-        <Section title="Folders" expanded={foldersExpanded} onToggle={() => setFoldersExpanded((prev) => !prev)}>
+        <Section title="By Folder" expanded={foldersExpanded} onToggle={() => setFoldersExpanded((prev) => !prev)}>
+          {/* A photo placed directly under the photos root (no "/" in its
+              filename) has no segment to appear as in buildTree's nested
+              map, so it would otherwise have no way to be selected from
+              this tree at all -- unlike every subfolder, which always gets
+              its own node. This fixed entry (selectedDirectory === "",
+              distinct from null's "no filter") is the only way to narrow
+              the grid to just those root-level photos, and it's always
+              shown, even when the tree below is empty. */}
+          <ul className="directory-tree">
+            <li>
+              <div className={`directory-tree-item${selectedDirectory === "" ? " directory-tree-item-active" : ""}`}>
+                <span className="directory-tree-toggle-spacer" aria-hidden="true" />
+                <button type="button" className="directory-tree-label" onClick={() => onSelectDirectory("")}>
+                  (Root)
+                </button>
+              </div>
+            </li>
+          </ul>
           <DirectoryTree
             node={tree}
             path={null}
@@ -197,7 +246,7 @@ export default function Sidebar({
         </Section>
 
         <Section
-          title="Individuals"
+          title="By Individual"
           expanded={individualsExpanded}
           onToggle={() => setIndividualsExpanded((prev) => !prev)}
         >
@@ -223,6 +272,10 @@ export default function Sidebar({
               ))}
             </ul>
           )}
+        </Section>
+
+        <Section title="By Date" expanded={datesExpanded} onToggle={() => setDatesExpanded((prev) => !prev)}>
+          <DateTree node={dateTree} path={null} selectedDate={selectedDate} onSelectDate={onSelectDate} />
         </Section>
 
         <Section title="Search" expanded={searchExpanded} onToggle={() => setSearchExpanded((prev) => !prev)}>

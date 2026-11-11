@@ -113,6 +113,7 @@ describe("App", () => {
     expect(screen.getByText("party.jpg")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^by individual$/i }));
     fireEvent.click(screen.getByText("Alice"));
 
     await waitFor(() => expect(screen.queryByText("party.jpg")).not.toBeInTheDocument());
