@@ -31,8 +31,10 @@
   --tooltip-text: #0b0f17;
   --shimmer: rgba(255, 255, 255, 0.07);
   --hover: rgba(255, 255, 255, 0.06);
-  --logo-ring: #9cc3f5;
-  --logo-ray: #5b9be6;
+  --logo-text-from: #ff8a1f;
+  --logo-text-to: #fff3ae;
+  --logo-text-glow: rgba(255, 120, 20, 0.55);
+  --logo-flame-opacity: 0.85;
 }
 
 :root[data-theme="light"] {
@@ -59,8 +61,10 @@
   --tooltip-text: #ffffff;
   --shimmer: rgba(22, 58, 107, 0.08);
   --hover: rgba(22, 58, 107, 0.06);
-  --logo-ring: #163a6b;
-  --logo-ray: #2f6fb8;
+  --logo-text-from: #b92b06;
+  --logo-text-to: #f08c00;
+  --logo-text-glow: rgba(255, 120, 20, 0.3);
+  --logo-flame-opacity: 0.6;
 }
 
 body {
@@ -100,25 +104,55 @@ textarea {
 }
 
 .app-logo {
-  height: 48px;
+  height: 56px;
   width: auto;
   display: block;
+  /* The halo and the wordmark's glow both reach past their own boxes. */
+  overflow: visible;
 }
 
-.app-logo-ring {
-  stroke: var(--logo-ring);
+/* The wordmark's gradient, hottest at the base of the letters: white-hot
+   to orange on the dark theme, a deeper orange to red on the light one so
+   it still reads against white (gradient stops take their colour from
+   these classes so it can follow the theme tokens). */
+.app-logo-text-from {
+  stop-color: var(--logo-text-from);
 }
 
-.app-logo-rays {
-  stroke: var(--logo-ray);
-}
-
-.app-logo-core {
-  fill: var(--accent);
+.app-logo-text-to {
+  stop-color: var(--logo-text-to);
 }
 
 .app-logo-text {
-  fill: var(--text);
+  filter: drop-shadow(0 0 6px var(--logo-text-glow));
+}
+
+/* The flame copy of the lettering behind it (Logo.jsx) -- fainter on the
+   light theme, where full-strength orange would muddy the letters. */
+.app-logo-flames {
+  opacity: var(--logo-flame-opacity);
+}
+
+/* The candle's glow breathes slowly. */
+.app-logo-halo {
+  transform-origin: 36px 46px;
+  animation: logo-flicker 4s ease-in-out infinite;
+}
+
+@keyframes logo-flicker {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  45% {
+    opacity: 0.72;
+    transform: scale(0.94);
+  }
+  60% {
+    opacity: 0.9;
+    transform: scale(0.98);
+  }
 }
 
 .theme-toggle {

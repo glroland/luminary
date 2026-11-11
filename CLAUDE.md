@@ -673,9 +673,9 @@ cached) is also per-pod, in-memory state — same caveat.
   caption gradient, the modal's nav buttons) that must look the same in
   either theme. `theme.js` reads/writes the choice (`localStorage`,
   `data-theme` on `<html>`); `main.jsx` applies it before first render and
-  the header's toggle button in `App.jsx` flips it. The logo is an inline
-  SVG component (`Logo.jsx`), not `<img src="assets/logo.svg">`, so its
-  colours can follow the theme too.
+  the header's toggle button in `App.jsx` flips it. The logo (`Logo.jsx`) is
+  an inline SVG component, not an image file, so the wordmark's colours
+  can follow the theme too.
 - **Gallery** (`PhotoGrid.jsx`/`PhotoCard.jsx`): `App.jsx` hands
   `PhotoGrid` the *whole* filtered+sorted list (`visiblePhotos`, memoised)
   — there is no pagination. `PhotoGrid` renders the first `BATCH_SIZE` and
@@ -741,8 +741,8 @@ cached) is also per-pod, in-memory state — same caveat.
   that in step with `.sidebar-open`'s width. The "Search" section is
   rendered in `.sidebar-footer`, pinned above "Manage", not in the
   scrolling `<nav>` with the other sections. The site icon is
-  `web/public/favicon.svg` — the logo's circle mark, a third copy of that
-  artwork alongside `Logo.jsx` and `assets/logo.svg`.
+  `web/public/favicon.svg` — the logo's lantern without the wordmark, a
+  hand-kept copy of `Logo.jsx`'s `LanternArt`; change both together.
 - `SyncStatus.jsx` itself is unchanged by the above move: it renders a
   plain button when idle, or (while a backend sync is running/just
   finished) a small progress bar polled from `GET /api/sync/status` every
