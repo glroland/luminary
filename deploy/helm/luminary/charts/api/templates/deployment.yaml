@@ -101,16 +101,31 @@ spec:
               mountPath: /data
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          # Startup gets its own probe so liveness doesn't start counting
+          # until the app is actually up: up to 30 x 10s = 5 minutes to
+          # pass once, after which liveness/readiness take over. All three
+          # use a 30s timeout because a sync running CPU face detection can
+          # saturate the pod and slow /api/health well past the 1s default.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: {{ .Values.global.apiPort }}
+            periodSeconds: 10
+            timeoutSeconds: 30
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /api/health
               port: {{ .Values.global.apiPort }}
-            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 30
           livenessProbe:
             httpGet:
               path: /api/health
               port: {{ .Values.global.apiPort }}
-            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 3
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}

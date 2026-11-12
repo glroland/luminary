@@ -67,15 +67,14 @@ def _sync_two_photos(client, tmp_path, monkeypatch, color_a, color_b):
     return photos, face_a, face_b
 
 
-def test_init_db_backfills_tag_source_for_pre_existing_tags(client):
+def test_backfill_data_backfills_tag_source_for_pre_existing_tags(client):
     """A face tagged before tag_source existed has person_id set but
-    tag_source NULL -- database.init_db() (already called once by
-    TestClient's lifespan via the `client` fixture) must backfill
-    tag_source='manual' for it on every startup, or
+    tag_source NULL -- database.backfill_data() (run on a background thread
+    after every startup) must backfill tag_source='manual' for it, or
     recognition._reference_embeddings() (which only considers
     tag_source='manual' faces) would never see it, silently leaving
     "Refresh Faces" with nothing to match against."""
-    from app.database import get_connection, init_db
+    from app.database import backfill_data, get_connection
 
     person_id = client.post("/api/individuals", json={"name": "Rita"}).json()["id"]
     with get_connection() as conn:
@@ -92,21 +91,21 @@ def test_init_db_backfills_tag_source_for_pre_existing_tags(client):
     faces_before = client.get("/api/photos/photo-y/faces").json()["faces"]
     assert faces_before[0]["tag_source"] is None
 
-    init_db()
+    backfill_data()
 
     faces_after = client.get("/api/photos/photo-y/faces").json()["faces"]
     assert faces_after[0]["tag_source"] == "manual"
 
 
-def test_init_db_backfills_face_detection_done_from_existing_faces(client):
+def test_backfill_data_backfills_face_detection_done_from_existing_faces(client):
     """A photo indexed before `face_detection_done` existed has the column
     at its blanket FALSE default regardless of whether detection actually
-    ran for it before -- database.init_db() must backfill it to TRUE for
+    ran for it before -- database.backfill_data() must backfill it to TRUE for
     any such photo that already has at least one row in `faces` (clear
     evidence detection already ran), and leave it FALSE for a photo with
     none, rather than forcing every already-indexed, face-bearing photo
     through a pointless redetect on the next sync."""
-    from app.database import get_connection, init_db
+    from app.database import backfill_data, get_connection
 
     with get_connection() as conn:
         conn.execute(
@@ -131,10 +130,69 @@ def test_init_db_backfills_face_detection_done_from_existing_faces(client):
     assert _face_detection_done("photo-with-face") is False
     assert _face_detection_done("photo-without-face") is False
 
-    init_db()
+    backfill_data()
 
     assert _face_detection_done("photo-with-face") is True
     assert _face_detection_done("photo-without-face") is False
+
+
+def test_backfill_data_processes_every_batch(client, monkeypatch):
+    """backfill_data() commits in batches of BACKFILL_BATCH_SIZE so a large
+    library's first run neither holds one huge transaction nor loses all
+    progress if interrupted -- it must keep going until every matching row
+    is done, not stop after the first batch."""
+    from app import database
+    from app.database import backfill_data, get_connection
+
+    monkeypatch.setattr(database, "BACKFILL_BATCH_SIZE", 2)
+    with get_connection() as conn:
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO photos (id, filename, content_type, size_bytes, created_at) VALUES (%s, %s, %s, %s, %s)",
+                (f"photo-{i}", f"{i}.jpg", "image/jpeg", 1, "2024-01-01T00:00:00"),
+            )
+            conn.execute(
+                "INSERT INTO faces (id, photo_id, x1, y1, x2, y2) VALUES (%s, %s, 0, 0, 1, 1)",
+                (f"face-{i}", f"photo-{i}"),
+            )
+        conn.commit()
+
+    backfill_data()
+
+    with get_connection() as conn:
+        remaining = conn.execute("SELECT COUNT(*) AS n FROM photos WHERE NOT face_detection_done").fetchone()["n"]
+    assert remaining == 0
+
+
+def test_startup_does_not_wait_for_backfill(monkeypatch):
+    """The lifespan must hand row-level backfills to a background thread,
+    not run them inline -- inline, a large library's first backfill held
+    startup past the liveness probe and crash-looped the pod."""
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from app import main as main_module
+
+    release = threading.Event()
+    calls = []
+
+    def slow_backfill():
+        calls.append(1)
+        release.wait(timeout=30)
+
+    def start_backfill():
+        thread = threading.Thread(target=slow_backfill, daemon=True)
+        thread.start()
+        return thread
+
+    monkeypatch.setattr(main_module, "start_backfill", start_backfill)
+    try:
+        with TestClient(main_module.app) as test_client:
+            assert test_client.get("/api/health").status_code == 200
+            assert calls == [1]
+    finally:
+        release.set()
 
 
 def test_refresh_status_defaults_to_idle(client):

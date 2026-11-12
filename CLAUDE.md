@@ -158,7 +158,16 @@ Postgres) lives in `storage.py`/`sync.py`:
   pooling), row factory set to `psycopg.rows.dict_row` so query results
   come back as plain dicts (matching `storage.py`/`sync.py`'s `dict(row)`
   calls, carried over from the pre-Postgres `sqlite3.Row` behavior);
-  `init_db()` creates the `photos`/`faces` tables if missing. Connection
+  `init_db()` creates the `photos`/`faces` tables if missing. `init_db()` is
+  schema-only (fast, idempotent DDL) and is the only database work the
+  lifespan does before the app starts serving; row-level backfills for
+  columns added later (`faces.tag_source`, `photos.face_detection_done`)
+  live in `backfill_data()`, which `main.py`'s lifespan starts on a
+  background thread (`start_backfill()`) and which commits in batches of
+  `BACKFILL_BATCH_SIZE`. Don't put a per-row `UPDATE` back in `init_db()`.
+  When one ran inline there, a large library's first startup outlasted the
+  liveness probe. The pod was killed mid-transaction, the work rolled back,
+  and every restart began again from zero: a crash loop. Connection
   parameters come from `config.get_database_host/_port/_name/_user/
   _password()` — a remote server provisioned via `db/`'s SQL (see the
   README's "Database" section and `make db`/`make db-recreate`), not

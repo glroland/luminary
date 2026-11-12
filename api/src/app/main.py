@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import get_cors_origins, get_photos_uri, redact_uri
-from .database import init_db
+from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .routers import descriptions, faces, health, individuals, locations, photos, sync, tags
 
@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Luminary API; photos backend: %s", redact_uri(get_photos_uri()))
+    # Schema only (fast, idempotent DDL) -- row-level backfills run on a
+    # background thread instead, so a large library can't hold startup past
+    # the liveness probe. See database.backfill_data().
     init_db()
+    start_backfill()
     yield
     logger.info("Shutting down Luminary API")
 

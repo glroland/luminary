@@ -1,4 +1,5 @@
 import logging
+import threading
 from contextlib import contextmanager
 
 import psycopg
@@ -224,37 +225,11 @@ def init_db() -> None:
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION")
-        # Backfill: any face tagged before tag_source existed was
-        # necessarily tagged via the manual tag_face endpoint --
-        # recognition.py's auto-tagging didn't exist yet to have done it.
-        # Without this, such a row has person_id set but tag_source still
-        # NULL, so recognition._reference_embeddings() (which filters on
-        # tag_source = 'manual') finds no reference faces at all and
-        # "Refresh Faces" silently reports "nothing to match against" even
-        # with plenty of manually tagged faces. A no-op once backfilled --
-        # safe to run on every startup.
-        conn.execute("UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
-        # Backfill for photos.face_detection_done, now that `faces` is
-        # guaranteed to exist: a photo that already has at least one
-        # detected face on record clearly already went through detection,
-        # so it's backfilled to TRUE rather than left at the column's
-        # blanket FALSE default (which would otherwise force every
-        # already-indexed, face-bearing photo through a pointless redetect
-        # on the next sync). A photo with zero faces on record is left at
-        # FALSE -- indistinguishable here from "detection genuinely found
-        # nobody" vs. "detection never ran" (there's no stored history to
-        # tell those apart, same gap detection_confidence's own backfill
-        # note above has), so it's treated the conservative way: the next
-        # sync just (re)runs detection once for such a photo, same cost as
-        # any other "field missing, backfill it" case in this function. A
-        # no-op once applied -- safe to run on every startup.
-        conn.execute(
-            "UPDATE photos SET face_detection_done = TRUE "
-            "WHERE NOT face_detection_done AND EXISTS "
-            "(SELECT 1 FROM faces WHERE faces.photo_id = photos.id)"
-        )
+        # Row-level data backfills (tag_source, face_detection_done) are
+        # deliberately *not* here -- see backfill_data() below for why they
+        # must stay off the startup path.
         conn.commit()
 
         # photos.description_embedding (embeddings.py) -- for similarity
@@ -316,3 +291,88 @@ def init_db() -> None:
                 exc,
             )
     logger.info("Database ready at %s:%s/%s", get_database_host(), get_database_port(), get_database_name())
+
+
+# Rows updated per transaction by backfill_data(). Each batch commits on its
+# own, so progress survives a pod restart midway and no single transaction
+# holds row locks on a large slice of `photos` for long (a concurrent sync
+# writing to those same rows would otherwise wait on it).
+BACKFILL_BATCH_SIZE = 500
+
+
+def backfill_data() -> None:
+    """Row-level data backfills for columns added after a database was first
+    indexed. Kept out of init_db() and run on a background thread after the
+    app is already serving (main.py's lifespan, via start_backfill()) --
+    unlike init_db()'s DDL, these touch every matching row, and on a large
+    library the first run can take far longer than the liveness probe allows.
+    When this ran synchronously in init_db(), the pod was killed mid-UPDATE,
+    the transaction rolled back, and the next start began from zero again: a
+    crash loop that never converged. Each statement is idempotent (a no-op
+    once applied), so running this on every startup is safe and cheap after
+    the first time.
+
+    Until this finishes, the only effect is that a sync may redo face
+    detection for a photo it would otherwise have skipped -- wasteful, never
+    incorrect -- so nothing waits on it."""
+    # Any face tagged before tag_source existed was necessarily tagged via
+    # the manual tag_face endpoint -- recognition.py's auto-tagging didn't
+    # exist yet to have done it. Without this, such a row has person_id set
+    # but tag_source still NULL, so recognition._reference_embeddings()
+    # (which filters on tag_source = 'manual') finds no reference faces at
+    # all and "Refresh Faces" silently reports "nothing to match against"
+    # even with plenty of manually tagged faces.
+    _backfill_in_batches(
+        "faces.tag_source",
+        "UPDATE faces SET tag_source = 'manual' WHERE id IN ("
+        "SELECT id FROM faces WHERE person_id IS NOT NULL AND tag_source IS NULL LIMIT %s)",
+    )
+    # A photo that already has at least one detected face on record clearly
+    # already went through detection, so it's backfilled to TRUE rather than
+    # left at the column's blanket FALSE default (which would otherwise force
+    # every already-indexed, face-bearing photo through a pointless redetect
+    # on the next sync). A photo with zero faces on record is left at FALSE
+    # -- indistinguishable here from "detection genuinely found nobody" vs.
+    # "detection never ran" (there's no stored history to tell those apart),
+    # so it's treated the conservative way: the next sync just (re)runs
+    # detection once for such a photo.
+    _backfill_in_batches(
+        "photos.face_detection_done",
+        "UPDATE photos SET face_detection_done = TRUE WHERE id IN ("
+        "SELECT id FROM photos WHERE NOT face_detection_done AND EXISTS "
+        "(SELECT 1 FROM faces WHERE faces.photo_id = photos.id) LIMIT %s)",
+    )
+
+
+def _backfill_in_batches(label: str, statement: str) -> None:
+    """Runs `statement` (an UPDATE limited to %s rows that stops matching
+    rows once it has updated them) repeatedly, one commit per batch, until a
+    batch updates nothing."""
+    total = 0
+    while True:
+        with get_connection() as conn:
+            updated = conn.execute(statement, (BACKFILL_BATCH_SIZE,)).rowcount
+            conn.commit()
+        total += updated
+        if updated < BACKFILL_BATCH_SIZE:
+            break
+        logger.info("Backfilling %s: %d rows so far", label, total)
+    if total:
+        logger.info("Backfilled %s for %d rows", label, total)
+
+
+def start_backfill() -> threading.Thread:
+    """Runs backfill_data() on a daemon thread so the API can start serving
+    (and pass its health checks) immediately. A failure is logged, never
+    raised -- every backfilled column only makes later work cheaper, so the
+    app keeps running without it and the next startup retries."""
+
+    def run() -> None:
+        try:
+            backfill_data()
+        except Exception:
+            logger.exception("Background data backfill failed; it will be retried on the next startup")
+
+    thread = threading.Thread(target=run, name="db-backfill", daemon=True)
+    thread.start()
+    return thread

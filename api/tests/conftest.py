@@ -62,6 +62,15 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("LUMINARY_OPENAI_MODEL", raising=False)
     monkeypatch.delenv("LUMINARY_OPENAI_BASE_URL", raising=False)
 
+    # The lifespan kicks off database.backfill_data() on a background
+    # thread; left running, it could touch rows a test inserts right after
+    # the truncate below (e.g. flip face_detection_done before the test
+    # asserts its pre-backfill value). Tests that exercise the backfill
+    # call database.backfill_data() directly instead.
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module, "start_backfill", lambda: None)
+
     sync_progress.reset()
     refresh_progress.reset()
     description_progress.reset()
