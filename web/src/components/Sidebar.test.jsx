@@ -158,7 +158,7 @@ describe("Sidebar", () => {
   it("lists tags under By Tag, placed between By Individual and By Date", () => {
     renderSidebar({ open: true });
     const headers = screen
-      .getAllByRole("button", { name: /^by / })
+      .getAllByRole("button", { name: /^by /i })
       .map((button) => button.textContent.replace("›", "").trim());
     expect(headers).toEqual(["By Folder", "By Individual", "By Tag", "By Date"]);
     expandSection(/^by tag$/i);

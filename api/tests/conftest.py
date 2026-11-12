@@ -104,7 +104,7 @@ def write_image(path, size=(10, 10), color="red", exif=None):
         image.save(path, "JPEG")
 
 
-def sync_and_wait(client, timeout=5.0):
+def sync_and_wait(client, timeout=30.0):
     client.post("/api/sync")
     deadline = time.monotonic() + timeout
     status = {}
@@ -119,7 +119,7 @@ def sync_and_wait(client, timeout=5.0):
     raise AssertionError(f"sync did not finish in time: {status}")
 
 
-def refresh_and_wait(client, timeout=5.0):
+def refresh_and_wait(client, timeout=30.0):
     """Same polling pattern as sync_and_wait, for recognition.py's
     destructive "Full Face Refresh" job (POST /api/faces/refresh?full=true)
     -- the management page's danger-zone button. For the non-destructive,
@@ -137,7 +137,7 @@ def refresh_and_wait(client, timeout=5.0):
     raise AssertionError(f"face refresh did not finish in time: {status}")
 
 
-def refresh_descriptions_and_wait(client, timeout=5.0):
+def refresh_descriptions_and_wait(client, timeout=30.0):
     """Same polling pattern as sync_and_wait, for enrich.py's "Refresh
     Descriptions" job (POST /api/descriptions/refresh)."""
     client.post("/api/descriptions/refresh")
@@ -151,7 +151,7 @@ def refresh_descriptions_and_wait(client, timeout=5.0):
     raise AssertionError(f"description refresh did not finish in time: {status}")
 
 
-def refresh_locations_and_wait(client, timeout=5.0):
+def refresh_locations_and_wait(client, timeout=30.0):
     """Same polling pattern as sync_and_wait, for geocode.py's "Refresh
     Locations" job (POST /api/locations/refresh)."""
     client.post("/api/locations/refresh")

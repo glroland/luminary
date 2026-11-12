@@ -153,14 +153,18 @@ def test_find_duplicate_photos_reports_every_extra_copy_against_the_same_origina
 
 def _without_id(faces: list[dict]) -> list[dict]:
     """get_faces now also returns `id`/`person_id`/`tag_source` (see
-    people.py's manual face tagging and recognition.py's auto-matching) --
-    these tests only care about the box coordinates, so strip the
-    generated id and assert the tag fields separately/implicitly via this
-    helper always expecting them untagged (None)."""
+    people.py's manual face tagging and recognition.py's auto-matching) and
+    `detection_confidence` (face_detection.py's per-box score) -- these
+    tests only care about the box coordinates, so strip the generated id
+    and assert the other fields separately/implicitly via this helper,
+    always expecting them unset (None): the boxes here are bare x1-y2
+    dicts, untagged and with no confidence of their own."""
+    extra = ("id", "person_id", "tag_source", "detection_confidence")
     for face in faces:
         assert face["person_id"] is None
         assert face["tag_source"] is None
-    return [{k: v for k, v in face.items() if k not in ("id", "person_id", "tag_source")} for face in faces]
+        assert face["detection_confidence"] is None
+    return [{k: v for k, v in face.items() if k not in extra} for face in faces]
 
 
 def test_replace_faces_stores_and_fully_replaces_boxes(client):
