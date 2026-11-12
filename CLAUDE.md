@@ -743,6 +743,9 @@ cached) is also per-pod, in-memory state — same caveat.
   scrolling `<nav>` with the other sections. The site icon is
   `web/public/favicon.svg` — the logo's lantern without the wordmark, a
   hand-kept copy of `Logo.jsx`'s `LanternArt`; change both together.
+  The wordmark's cursive face is Dancing Script, bundled through the
+  `@fontsource/dancing-script` package (SIL OFL) rather than relying on a
+  system cursive font, which differs wildly between operating systems.
 - `SyncStatus.jsx` itself is unchanged by the above move: it renders a
   plain button when idle, or (while a backend sync is running/just
   finished) a small progress bar polled from `GET /api/sync/status` every

@@ -1,3 +1,8 @@
+// Bundled (not a system font) so the cursive looks the same on every
+// machine -- system cursive faces vary wildly by OS. Only the one weight
+// and the Latin subset the wordmark actually uses.
+import "@fontsource/dancing-script/latin-700.css";
+
 // The Luminary mark and wordmark: a luminaria -- a paper-bag lantern with a
 // candle inside, light spilling through a star cut into its face -- next
 // to the name, lettered as if it were alight.
@@ -51,21 +56,28 @@ export function LanternArt() {
 }
 
 // Shared by the wordmark's two layers so they sit exactly on top of each
-// other. The face is the same system UI one as the rest of the app
-// (styles.css's :root font-family), set heavy and slightly tight.
+// other. Dancing Script (SIL Open Font License), a joined cursive.
 //
 // y is the text baseline, chosen so the capital "L" is vertically centred
-// on the lantern: the bag runs from y=17 to y=73 (centre 45) and this
-// face's cap height is roughly 0.72em, i.e. ~29 units at this size, so
-// the baseline sits half of that below centre. Re-derive it if either the
-// bag or the font size changes.
+// on the lantern: the bag runs from y=17 to y=73 (centre 45). At this size
+// this face's "L" inks from 39.7 units above the baseline to 4.8 below it
+// (canvas measureText's actualBoundingBoxAscent/Descent), so its middle is
+// 17.5 above the baseline. Re-measure if the bag, the font, or the size
+// changes.
+//
+// Widened with textLength/lengthAdjust rather than letter-spacing: spacing
+// out a joined script breaks the strokes connecting its letters, whereas
+// this stretches the glyphs themselves (about 12% wider than the font's
+// natural ~200 units here), so the joins stay intact. x leaves a clear gap
+// after the bag's right edge (x=62).
 const WORDMARK_PROPS = {
-  x: 78,
-  y: 59.5,
-  fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-  fontSize: 40,
+  x: 88,
+  y: 62.5,
+  textLength: 224,
+  lengthAdjust: "spacingAndGlyphs",
+  fontFamily: "'Dancing Script', cursive",
+  fontSize: 55,
   fontWeight: 700,
-  letterSpacing: -0.8,
 };
 
 export default function Logo() {
@@ -79,7 +91,7 @@ export default function Logo() {
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   return (
-    <svg className="app-logo" viewBox="0 0 252 80" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Luminary">
+    <svg className="app-logo" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Luminary">
       <defs>
         {/* Hot at the base of the letters, cooling toward their tops. */}
         <linearGradient id="logo-wordmark" x1="0" y1="0" x2="0" y2="1">
