@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { thumbnailUrl } from "../api/client.js";
 
+// Keep in step with .photo-card-tooltip's width/offset in styles.css.
+const TOOLTIP_WIDTH_PX = 280;
+const TOOLTIP_GAP_PX = 10;
+
 function formatDate(createdAt) {
   const date = new Date(createdAt);
   if (!createdAt || Number.isNaN(date.getTime())) return null;
@@ -32,8 +36,25 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
     onSelect(photo, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
   }
 
+  // The tooltip sits beside the tile: to its right, unless there isn't
+  // room before the viewport edge (a tile in the rightmost column), in
+  // which case it flips to the left. Written straight onto the element as
+  // a data attribute rather than React state, so hovering still never
+  // re-renders anything; styles.css keys the placement off it.
+  function handleMouseEnter(event) {
+    const card = event.currentTarget;
+    const rect = card.getBoundingClientRect();
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    card.dataset.tooltipSide =
+      rect.right + TOOLTIP_GAP_PX + TOOLTIP_WIDTH_PX > viewportWidth ? "left" : "right";
+  }
+
   return (
-    <div className={`photo-card${loaded ? " photo-card-loaded" : ""}`} onContextMenu={onContextMenu}>
+    <div
+      className={`photo-card${loaded ? " photo-card-loaded" : ""}`}
+      onContextMenu={onContextMenu}
+      onMouseEnter={handleMouseEnter}
+    >
       <div className="photo-card-media" onClick={handleClick}>
         <img
           ref={(img) => {
@@ -53,11 +74,10 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
           </div>
         )}
       </div>
-      {photo.description && (
-        <div className="photo-card-tooltip" role="tooltip">
-          {photo.description}
-        </div>
-      )}
+      <div className="photo-card-tooltip" role="tooltip">
+        <div className="photo-card-tooltip-path">{photo.filename}</div>
+        {photo.description && <div className="photo-card-tooltip-description">{photo.description}</div>}
+      </div>
     </div>
   );
 }

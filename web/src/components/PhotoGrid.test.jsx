@@ -150,18 +150,45 @@ describe("PhotoGrid", () => {
     expect(document.querySelector(".tag-menu")).toBeInTheDocument();
   });
 
-  it("renders no filename caption, and puts the description in a tooltip", () => {
+  it("renders no filename caption, and puts the path and description in a tooltip", () => {
     render(
       <PhotoGrid
-        photos={[{ id: "1", filename: "beach.jpg", description: "A sandy beach at sunset." }, PHOTOS[1]]}
+        photos={[
+          { id: "1", filename: "vacation/beach.jpg", description: "A sandy beach at sunset." },
+          { id: "2", filename: "vacation/dunes.jpg" },
+        ]}
         onSelect={() => {}}
       />
     );
 
-    expect(screen.queryByText("beach.jpg")).not.toBeInTheDocument();
-    expect(screen.getByRole("tooltip")).toHaveTextContent("A sandy beach at sunset.");
-    // Only the photo that has a description gets one.
-    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    const [withDescription, withoutDescription] = screen.getAllByRole("tooltip");
+    // The path appears only inside the tooltip, not as a tile caption.
+    expect(screen.getAllByText("vacation/beach.jpg")).toHaveLength(1);
+    expect(withDescription).toContainElement(screen.getByText("vacation/beach.jpg"));
+    expect(withDescription).toHaveTextContent("A sandy beach at sunset.");
+    // A photo without a description still gets a tooltip with its path.
+    expect(withoutDescription).toHaveTextContent("vacation/dunes.jpg");
+    expect(withoutDescription.querySelector(".photo-card-tooltip-description")).toBeNull();
+  });
+
+  it("flips the tooltip to the left of a tile at the right edge of the viewport", () => {
+    render(<PhotoGrid photos={[{ id: "1", filename: "beach.jpg" }]} onSelect={() => {}} />);
+    const card = document.querySelector(".photo-card");
+
+    card.getBoundingClientRect = () => ({ left: 0, right: 200, top: 0, bottom: 200, width: 200, height: 200 });
+    fireEvent.mouseEnter(card);
+    expect(card.dataset.tooltipSide).toBe("right");
+
+    card.getBoundingClientRect = () => ({
+      left: window.innerWidth - 200,
+      right: window.innerWidth,
+      top: 0,
+      bottom: 200,
+      width: 200,
+      height: 200,
+    });
+    fireEvent.mouseEnter(card);
+    expect(card.dataset.tooltipSide).toBe("left");
   });
 
   it("shows the date and location in each tile's hover caption", () => {

@@ -380,12 +380,17 @@ textarea {
 /* Description tooltip, shown after the pointer has rested on the card for
    1s (the transition-delay on :hover). Leaving the card hides it at once,
    since the non-hover rule has no delay. pointer-events: none so it never
-   intercepts clicks meant for the card underneath it. */
+   intercepts clicks meant for the card underneath it.
+   Placed beside the tile, top-aligned with it: to the right by default,
+   flipped to the left when PhotoCard.jsx's mouseenter handler finds no
+   room on the right (data-tooltip-side="left"). The 280px width and 10px
+   gap are mirrored in PhotoCard.jsx's TOOLTIP_WIDTH_PX/TOOLTIP_GAP_PX. */
 .photo-card-tooltip {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  right: 0;
+  top: 0;
+  left: calc(100% + 10px);
+  width: 280px;
+  box-sizing: border-box;
   z-index: 10;
   padding: 0.5rem 0.6rem;
   background: var(--tooltip-bg);
@@ -398,6 +403,20 @@ textarea {
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.15s ease, visibility 0s linear 0.15s;
+}
+
+.photo-card[data-tooltip-side="left"] .photo-card-tooltip {
+  left: auto;
+  right: calc(100% + 10px);
+}
+
+.photo-card-tooltip-path {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.photo-card-tooltip-description {
+  margin-top: 0.35rem;
 }
 
 .photo-card:hover .photo-card-tooltip {

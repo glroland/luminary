@@ -701,7 +701,11 @@ cached) is also per-pod, in-memory state — same caveat.
   thumbnail's alt text, which is also how tests find a tile); everything
   shown on hover — frame, zoom, date/location strip, and the description
   tooltip after a 1s rest — is plain CSS on `.photo-card:hover`, with no
-  hover state or timers in React. While the list is first loading,
+  hover state or timers in React. The tooltip (path, then description if
+  any) sits beside the tile, to its right, or to its left when there's no
+  room before the viewport edge. A `mouseenter` handler measures this and
+  writes it straight to `data-tooltip-side` on the card. It deliberately
+  doesn't use React state, so hovering still never re-renders anything. While the list is first loading,
   `App.jsx` renders shimmering `.photo-skeleton` tiles in its place.
 - `App.jsx` holds top-level state: the photo list, loading/error, sync
   status, which top-level `view` is showing (`"gallery"` | `"manage"`),
