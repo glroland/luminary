@@ -6,7 +6,7 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import tags
-from ..models import CreateTagRequest, Tag, TagList
+from ..models import CreateTagRequest, Tag, TaggedPhotoIds, TagList
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,15 @@ def update_tag(tag_id: str, body: CreateTagRequest) -> dict:
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
     return tag
+
+
+@router.get("/tags/{tag_id}/photos", response_model=TaggedPhotoIds)
+def get_tagged_photo_ids(tag_id: str) -> dict:
+    """Backs the sidebar's "By Tag" filter: ids of every photo with this tag."""
+    photo_ids = tags.list_tagged_photo_ids(tag_id)
+    if photo_ids is None:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    return {"photo_ids": photo_ids}
 
 
 @router.get("/tags/{tag_id}/photos/csv")

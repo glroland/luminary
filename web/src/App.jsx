@@ -10,6 +10,8 @@ import {
   fetchIndividuals,
   fetchPhotos,
   fetchSyncStatus,
+  fetchTagPhotoIds,
+  fetchTags,
   searchPhotos,
   startSync,
 } from "./api/client.js";
@@ -107,6 +109,16 @@ export default function App() {
   // whenever the selection changes).
   const [selectedIndividual, setSelectedIndividual] = useState(null);
   const [individualPhotoIds, setIndividualPhotoIds] = useState(null);
+  // The sidebar's "By Tag" section: the tag list (with photo counts), the
+  // selected tag id (null = no tag filter), and that tag's photo ids --
+  // same shape as selectedIndividual/individualPhotoIds above. tagsVersion
+  // is bumped by every loadTags() so the selected tag's ids are re-fetched
+  // too (a photo may have been tagged/untagged in the modal or the
+  // management page since they were last fetched).
+  const [tags, setTags] = useState([]);
+  const [selectedTag, setSelectedTag] = useState(null);
+  const [tagPhotoIds, setTagPhotoIds] = useState(null);
+  const [tagsVersion, setTagsVersion] = useState(0);
   // The sidebar's "Search" section (free-text similarity search over
   // photos.description, see enrich.py/embeddings.py). searchQuery/
   // searchThreshold are just the controlled form fields; searchResults is
@@ -173,6 +185,18 @@ export default function App() {
       .catch((err) => setError(err.message));
   }, []);
 
+  const loadTags = useCallback(() => {
+    fetchTags()
+      .then((list) => {
+        setTags(list);
+        // A selected tag deleted since (on the management page) can't
+        // filter anything any more -- drop the filter rather than 404.
+        setSelectedTag((prev) => (prev !== null && !list.some((tag) => tag.id === prev) ? null : prev));
+        setTagsVersion((prev) => prev + 1);
+      })
+      .catch((err) => setError(err.message));
+  }, []);
+
   const pollSyncStatus = useCallback(() => {
     clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
@@ -200,6 +224,7 @@ export default function App() {
   useEffect(() => {
     loadPhotos();
     loadIndividuals();
+    loadTags();
     fetchSyncStatus()
       .then((status) => {
         if (status.status === "running") {
@@ -209,7 +234,7 @@ export default function App() {
       })
       .catch(() => {});
     return () => clearInterval(pollRef.current);
-  }, [loadPhotos, loadIndividuals, pollSyncStatus]);
+  }, [loadPhotos, loadIndividuals, loadTags, pollSyncStatus]);
 
   // Fetches the selected individual's tagged photo ids whenever the
   // selection changes -- the faces endpoint, not a bulk photos-by-person
@@ -232,6 +257,25 @@ export default function App() {
       cancelled = true;
     };
   }, [selectedIndividual]);
+
+  // Same as the individual effect above, for the selected tag.
+  useEffect(() => {
+    if (selectedTag === null) {
+      setTagPhotoIds(null);
+      return;
+    }
+    let cancelled = false;
+    fetchTagPhotoIds(selectedTag)
+      .then((ids) => {
+        if (!cancelled) setTagPhotoIds(new Set(ids));
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTag, tagsVersion]);
 
   async function handleRefresh() {
     try {
@@ -269,6 +313,7 @@ export default function App() {
       // onSelectIndividual/onSelectDate/onAllImages below).
       setSelectedDirectory(null);
       setSelectedIndividual(null);
+      setSelectedTag(null);
       setSelectedDate(null);
       setView("gallery");
       resetGrid();
@@ -299,7 +344,9 @@ export default function App() {
     const filtered =
       selectedIndividual !== null
         ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
-        : selectedDirectory !== null
+        : selectedTag !== null
+          ? photos.filter((photo) => tagPhotoIds?.has(photo.id))
+          : selectedDirectory !== null
           ? photos.filter((photo) => {
               const dir = directoryOf(photo.filename);
               return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
@@ -311,7 +358,17 @@ export default function App() {
               })
             : [...photos];
     return filtered.sort((a, b) => comparePhotos(a, b, sortOrder));
-  }, [photos, searchResults, selectedIndividual, individualPhotoIds, selectedDirectory, selectedDate, sortOrder]);
+  }, [
+    photos,
+    searchResults,
+    selectedIndividual,
+    individualPhotoIds,
+    selectedTag,
+    tagPhotoIds,
+    selectedDirectory,
+    selectedDate,
+    sortOrder,
+  ]);
 
   // Section headers in the grid follow the sort: by month for the date
   // sorts, by folder for the folder sorts, none for filename sorts or
@@ -339,6 +396,7 @@ export default function App() {
         onSelectDirectory={(directory) => {
           setSelectedDirectory(directory);
           setSelectedIndividual(null);
+          setSelectedTag(null);
           setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
@@ -348,7 +406,19 @@ export default function App() {
         selectedIndividual={selectedIndividual}
         onSelectIndividual={(personId) => {
           setSelectedIndividual(personId);
+          setSelectedTag(null);
           setSelectedDirectory(null);
+          setSelectedDate(null);
+          setSearchResults(null);
+          setView("gallery");
+          resetGrid();
+        }}
+        tags={tags}
+        selectedTag={selectedTag}
+        onSelectTag={(tagId) => {
+          setSelectedTag(tagId);
+          setSelectedDirectory(null);
+          setSelectedIndividual(null);
           setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
@@ -359,6 +429,7 @@ export default function App() {
           setSelectedDate(dateKey);
           setSelectedDirectory(null);
           setSelectedIndividual(null);
+          setSelectedTag(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -366,6 +437,7 @@ export default function App() {
         onAllImages={() => {
           setSelectedDirectory(null);
           setSelectedIndividual(null);
+          setSelectedTag(null);
           setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
@@ -446,14 +518,17 @@ export default function App() {
               // The individuals catalog may have changed (added/renamed/
               // deleted) while on this page -- refresh the sidebar's copy.
               loadIndividuals();
+              loadTags();
             }}
             onNavigateToPhoto={handleNavigateToPhoto}
             onPurged={() => {
               setSelectedDirectory(null);
               setSelectedIndividual(null);
+              setSelectedTag(null);
               setSelectedDate(null);
               setSearchResults(null);
               setIndividuals([]);
+              setTags([]);
               setSelectedPhoto(null);
               resetGrid();
               loadPhotos();
@@ -481,7 +556,11 @@ export default function App() {
           photos={visiblePhotos}
           origin={modalOrigin}
           onNavigate={setSelectedPhoto}
-          onClose={() => setSelectedPhoto(null)}
+          onClose={() => {
+            setSelectedPhoto(null);
+            // Tags may have been added/removed on this photo in the modal.
+            loadTags();
+          }}
         />
       </div>
     </div>

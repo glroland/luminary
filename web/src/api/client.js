@@ -204,6 +204,12 @@ export async function deleteTag(tagId) {
   await request(`/tags/${tagId}`, { method: "DELETE" });
 }
 
+// The sidebar's "By Tag" filter: ids of every photo with this tag attached.
+export async function fetchTagPhotoIds(tagId) {
+  const data = await request(`/tags/${tagId}/photos`);
+  return data.photo_ids;
+}
+
 export async function fetchPhotoTags(photoId) {
   const data = await request(`/photos/${photoId}/tags`);
   return data.tags;

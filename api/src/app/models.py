@@ -200,6 +200,12 @@ class TagList(BaseModel):
     tags: list[Tag]
 
 
+class TaggedPhotoIds(BaseModel):
+    # The sidebar's "By Tag" filter -- just ids, since the frontend already
+    # has every photo's metadata loaded and filters that list itself.
+    photo_ids: list[str]
+
+
 class CreateTagRequest(BaseModel):
     name: str
 

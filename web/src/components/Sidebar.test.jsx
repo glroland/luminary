@@ -12,6 +12,11 @@ const INDIVIDUALS = [
   { id: "p2", name: "Bob", has_representative_thumbnail: true },
 ];
 
+const TAGS = [
+  { id: "t1", name: "Favorites", created_at: "2024-01-01T00:00:00Z", photo_count: 3 },
+  { id: "t2", name: "Empty", created_at: "2024-01-01T00:00:00Z", photo_count: 0 },
+];
+
 function renderSidebar(overrides = {}) {
   const props = {
     open: false,
@@ -21,6 +26,9 @@ function renderSidebar(overrides = {}) {
     individuals: INDIVIDUALS,
     selectedIndividual: null,
     onSelectIndividual: vi.fn(),
+    tags: TAGS,
+    selectedTag: null,
+    onSelectTag: vi.fn(),
     selectedDate: null,
     onSelectDate: vi.fn(),
     onAllImages: vi.fn(),
@@ -145,6 +153,32 @@ describe("Sidebar", () => {
     expandSection(/^by individual$/i);
     fireEvent.click(screen.getByText("Alice"));
     expect(props.onSelectIndividual).toHaveBeenCalledWith("p1");
+  });
+
+  it("lists tags under By Tag, placed between By Individual and By Date", () => {
+    renderSidebar({ open: true });
+    const headers = screen
+      .getAllByRole("button", { name: /^by / })
+      .map((button) => button.textContent.replace("›", "").trim());
+    expect(headers).toEqual(["By Folder", "By Individual", "By Tag", "By Date"]);
+    expandSection(/^by tag$/i);
+    expect(screen.getByText("Favorites").closest(".directory-tree-item")).toHaveAttribute("data-count", "3");
+    expect(screen.getByText("Empty").closest(".directory-tree-item")).not.toHaveAttribute("data-count");
+  });
+
+  it("shows an empty-state message when there are no tags", () => {
+    renderSidebar({ open: true, tags: [] });
+    expandSection(/^by tag$/i);
+    expect(screen.getByText(/no tags created yet/i)).toBeInTheDocument();
+  });
+
+  it("calls onSelectTag when a tag is clicked, and marks it active once selected", () => {
+    const props = renderSidebar({ open: true, selectedTag: "t1" });
+    expandSection(/^by tag$/i);
+    fireEvent.click(screen.getByText("Favorites"));
+    expect(props.onSelectTag).toHaveBeenCalledWith("t1");
+    expect(screen.getByText("Favorites").closest(".directory-tree-item")).toHaveClass("directory-tree-item-active");
+    expect(screen.getByText("All Images")).not.toHaveClass("sidebar-all-images-active");
   });
 
   it("marks the selected individual active", () => {

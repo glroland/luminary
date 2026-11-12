@@ -173,6 +173,24 @@ def test_tagged_photos_csv_for_tag_with_no_photos_is_header_only(client):
     assert response.text.splitlines() == ["Path"]
 
 
+def test_tagged_photo_ids_lists_only_tagged_photos(client, tmp_path):
+    write_image(tmp_path / "photos" / "a.jpg")
+    write_image(tmp_path / "photos" / "untagged.jpg")
+    sync_and_wait(client)
+    photos = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+    tag_id = client.post("/api/tags", json={"name": "Filter"}).json()["id"]
+    client.post(f"/api/photos/{photos['a.jpg']}/tags/{tag_id}")
+
+    response = client.get(f"/api/tags/{tag_id}/photos")
+    assert response.status_code == 200
+    assert response.json() == {"photo_ids": [photos["a.jpg"]]}
+
+
+def test_tagged_photo_ids_for_unknown_tag_returns_404(client):
+    response = client.get("/api/tags/does-not-exist/photos")
+    assert response.status_code == 404
+
+
 def test_tagged_photos_csv_for_unknown_tag_returns_404(client):
     response = client.get("/api/tags/does-not-exist/photos/csv")
     assert response.status_code == 404

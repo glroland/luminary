@@ -749,7 +749,13 @@ cached) is also per-pod, in-memory state — same caveat.
   included, matching what selecting that row filters to) are a `data-count`
   attribute rendered by a CSS `::after`, deliberately *not* text in the
   DOM: a row's accessible name stays just its label, and a count like "4"
-  can't collide with a day-of-month label of "4". The sidebar's contents
+  can't collide with a day-of-month label of "4".
+  "By Tag" (between "By Individual" and "By Date") lists `GET /api/tags`
+  with each tag's `photo_count`; selecting one fetches
+  `GET /api/tags/{id}/photos` (ids only) and `App.jsx` filters the loaded
+  list by it, same shape as "By Individual". `App.jsx` reloads tags (and
+  re-fetches the selected tag's ids) when the photo modal closes or the
+  management page is left, since tags change in both places. The sidebar's contents
   keep a fixed 280px width while the `<aside>` animates open/closed — keep
   that in step with `.sidebar-open`'s width. The "Search" section is
   rendered in `.sidebar-footer`, pinned above "Manage", not in the

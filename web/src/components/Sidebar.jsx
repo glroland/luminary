@@ -78,6 +78,7 @@ const ICON_PATHS = {
   grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   person: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0",
+  tag: "M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9zM7.5 7.5h.01",
   calendar: "M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM4 10h16M8 3v4M16 3v4",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
   sliders: "M4 7h10M18 7h2M4 17h2M10 17h10M16 4v6M8 14v6",
@@ -212,7 +213,8 @@ function SearchSection({
 // handleAllImages/handleSearch): "All Images" clears every filter, "By
 // Folder" filters by directory (via DirectoryTree, built from the photos'
 // own paths), "By Individual" filters to photos containing a selected
-// catalogued person, "By Date" (below By Individual) filters by the
+// catalogued person, "By Tag" (below By Individual) filters to photos with
+// a selected tag attached, "By Date" (below By Tag) filters by the
 // photo's created_at via a year -> month -> day tree (DateTree, built from
 // the photos' own created_at the same way the folder tree is built from
 // their filenames -- there's no dedicated "date" concept in the API
@@ -228,6 +230,9 @@ export default function Sidebar({
   individuals,
   selectedIndividual,
   onSelectIndividual,
+  tags = [],
+  selectedTag = null,
+  onSelectTag = () => {},
   selectedDate,
   onSelectDate,
   onAllImages,
@@ -246,10 +251,15 @@ export default function Sidebar({
   const dateTree = useMemo(() => buildDateTree(photos), [photos]);
   const [foldersExpanded, setFoldersExpanded] = useState(false);
   const [individualsExpanded, setIndividualsExpanded] = useState(false);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
   const [datesExpanded, setDatesExpanded] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(true);
   const noFilter =
-    selectedDirectory === null && selectedIndividual === null && selectedDate === null && !searchActive;
+    selectedDirectory === null &&
+    selectedIndividual === null &&
+    selectedTag === null &&
+    selectedDate === null &&
+    !searchActive;
 
   return (
     <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
@@ -323,6 +333,28 @@ export default function Sidebar({
                     )}
                     {individual.name}
                   </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        <Section title="By Tag" icon="tag" expanded={tagsExpanded} onToggle={() => setTagsExpanded((prev) => !prev)}>
+          {tags.length === 0 ? (
+            <p className="sidebar-individuals-empty">No tags created yet.</p>
+          ) : (
+            <ul className="directory-tree">
+              {tags.map((tag) => (
+                <li key={tag.id}>
+                  <div
+                    className={`directory-tree-item${selectedTag === tag.id ? " directory-tree-item-active" : ""}`}
+                    data-count={tag.photo_count > 0 ? tag.photo_count.toLocaleString() : undefined}
+                  >
+                    <span className="directory-tree-toggle-spacer" aria-hidden="true" />
+                    <button type="button" className="directory-tree-label" onClick={() => onSelectTag(tag.id)}>
+                      {tag.name}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>

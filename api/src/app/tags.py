@@ -116,6 +116,20 @@ def list_tagged_filenames(tag_id: str) -> Optional[list[str]]:
         return [row["filename"] for row in rows]
 
 
+def list_tagged_photo_ids(tag_id: str) -> Optional[list[str]]:
+    """Ids of every photo with this tag attached -- backs the sidebar's
+    "By Tag" filter, which narrows the already-loaded photo list client-side
+    (same shape as "By Individual" using a person's faces' photo_ids).
+    Returns None if the tag doesn't exist, same as list_tagged_filenames."""
+    with get_connection() as conn:
+        if not conn.execute("SELECT 1 FROM tags WHERE id = %s", (tag_id,)).fetchone():
+            return None
+        rows = conn.execute(
+            "SELECT photo_id FROM photo_tags WHERE tag_id = %s", (tag_id,)
+        ).fetchall()
+        return [row["photo_id"] for row in rows]
+
+
 def list_tags_for_photo(photo_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(

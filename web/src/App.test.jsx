@@ -8,6 +8,7 @@ describe("App", () => {
     vi.restoreAllMocks();
     vi.spyOn(client, "fetchSyncStatus").mockResolvedValue({ status: "idle" });
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+    vi.spyOn(client, "fetchTags").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -123,6 +124,31 @@ describe("App", () => {
     // "All Images" clears the filter again.
     fireEvent.click(screen.getByText("All Images"));
     await waitFor(() => expect(screen.getByAltText("party.jpg")).toBeInTheDocument());
+  });
+
+  it("narrows the grid to a tag's photos when selected in the sidebar", async () => {
+    vi.spyOn(client, "fetchPhotos").mockResolvedValue([
+      { id: "1", filename: "beach.jpg", width: 100, height: 100, created_at: new Date().toISOString() },
+      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: new Date().toISOString() },
+    ]);
+    vi.spyOn(client, "fetchTags").mockResolvedValue([
+      { id: "t1", name: "Favorites", created_at: new Date().toISOString(), photo_count: 1 },
+    ]);
+    const fetchTagPhotoIds = vi.spyOn(client, "fetchTagPhotoIds").mockResolvedValue(["2"]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^by tag$/i }));
+    fireEvent.click(screen.getByText("Favorites"));
+
+    await waitFor(() => expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument());
+    expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
+    expect(fetchTagPhotoIds).toHaveBeenCalledWith("t1");
+
+    fireEvent.click(screen.getByText("All Images"));
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
   });
 
   it("shows skeleton tiles while the photo list is loading", async () => {
