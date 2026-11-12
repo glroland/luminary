@@ -604,6 +604,34 @@ describe("ManagementPage", () => {
       await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
     });
 
+    it("downloads a tag's photo list CSV via the List button, placed before Rename", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([VACATION]);
+      const downloadMock = vi.spyOn(client, "downloadTagCsv").mockResolvedValue();
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      const row = screen.getByText("Vacation").closest("li");
+      const labels = within(row).getAllByRole("button").map((button) => button.textContent);
+      expect(labels.indexOf("List")).toBe(labels.indexOf("Rename") - 1);
+
+      fireEvent.click(within(row).getByRole("button", { name: "List" }));
+      expect(downloadMock).toHaveBeenCalledWith(VACATION);
+    });
+
+    it("shows an error if a tag's CSV download fails", async () => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+      client.fetchTags.mockResolvedValue([VACATION]);
+      vi.spyOn(client, "downloadTagCsv").mockRejectedValue(new Error("Tag not found"));
+
+      render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+      await waitFor(() => expect(screen.getByText("Vacation")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "List" }));
+      await waitFor(() => expect(screen.getByText("Tag not found")).toBeInTheDocument());
+    });
+
     it("renames a tag", async () => {
       vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
       client.fetchTags.mockResolvedValue([VACATION]);

@@ -96,6 +96,26 @@ def delete_tag(tag_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def list_tagged_filenames(tag_id: str) -> Optional[list[str]]:
+    """Every photo's filename (its path relative to the photos root) with
+    this tag attached, sorted -- backs the management page's per-tag "List"
+    CSV download. Returns None if the tag doesn't exist, so the router can
+    tell "unknown tag" (404) apart from "tag with no photos" (empty CSV)."""
+    with get_connection() as conn:
+        if not conn.execute("SELECT 1 FROM tags WHERE id = %s", (tag_id,)).fetchone():
+            return None
+        rows = conn.execute(
+            """
+            SELECT p.filename FROM photo_tags pt
+            JOIN photos p ON p.id = pt.photo_id
+            WHERE pt.tag_id = %s
+            ORDER BY p.filename
+            """,
+            (tag_id,),
+        ).fetchall()
+        return [row["filename"] for row in rows]
+
+
 def list_tags_for_photo(photo_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(

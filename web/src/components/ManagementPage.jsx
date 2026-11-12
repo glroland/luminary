@@ -5,6 +5,7 @@ import {
   deleteIndividual,
   deleteTag,
   downloadDuplicatesCsv,
+  downloadTagCsv,
   faceThumbnailUrl,
   fetchDescriptionRefreshStatus,
   fetchFaceRefreshStatus,
@@ -413,6 +414,12 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       .catch((err) => setTagsError(err.message));
   }
 
+  function handleListTag(tag) {
+    downloadTagCsv(tag)
+      .then(() => setTagsError(null))
+      .catch((err) => setTagsError(err.message));
+  }
+
   function handleDeleteTag(tagId) {
     deleteTag(tagId)
       .then(() => {
@@ -818,6 +825,9 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
                     </>
                   ) : (
                     <>
+                      <button type="button" onClick={() => handleListTag(tag)}>
+                        List
+                      </button>
                       <button type="button" onClick={() => startRenameTag(tag)}>
                         Rename
                       </button>

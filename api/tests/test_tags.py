@@ -147,3 +147,32 @@ def test_deleting_a_photo_removes_its_tags(client, tmp_path):
     # gone (same as how deleting an individual doesn't delete faces, only
     # their person_id -- here it's the join row that's cleaned up).
     assert client.get("/api/tags").json()["tags"][0]["photo_count"] == 0
+
+
+def test_tagged_photos_csv_lists_paths_of_tagged_photos_only(client, tmp_path):
+    write_image(tmp_path / "photos" / "trips" / "b.jpg")
+    write_image(tmp_path / "photos" / "a.jpg")
+    write_image(tmp_path / "photos" / "untagged.jpg")
+    sync_and_wait(client)
+    photos = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+    tag_id = client.post("/api/tags", json={"name": "Export"}).json()["id"]
+    client.post(f"/api/photos/{photos['trips/b.jpg']}/tags/{tag_id}")
+    client.post(f"/api/photos/{photos['a.jpg']}/tags/{tag_id}")
+
+    response = client.get(f"/api/tags/{tag_id}/photos/csv")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+    assert response.text.splitlines() == ["Path", "a.jpg", "trips/b.jpg"]
+
+
+def test_tagged_photos_csv_for_tag_with_no_photos_is_header_only(client):
+    tag_id = client.post("/api/tags", json={"name": "Empty"}).json()["id"]
+    response = client.get(f"/api/tags/{tag_id}/photos/csv")
+    assert response.status_code == 200
+    assert response.text.splitlines() == ["Path"]
+
+
+def test_tagged_photos_csv_for_unknown_tag_returns_404(client):
+    response = client.get("/api/tags/does-not-exist/photos/csv")
+    assert response.status_code == 404

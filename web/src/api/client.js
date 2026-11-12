@@ -217,16 +217,15 @@ export async function untagPhoto(photoId, tagId) {
   await request(`/photos/${photoId}/tags/${tagId}`, { method: "DELETE" });
 }
 
-// Downloads GET /api/photos/duplicates/csv as a file, rather than
-// navigating/opening a new tab -- fetched as a blob and handed to the
-// browser via a throwaway <a download> element (clicked programmatically,
-// then removed) so the response's Content-Disposition filename is
-// honored without ever leaving the page. Doesn't go through request()
-// above since that assumes a JSON (or empty 204) body.
-export async function downloadDuplicatesCsv() {
+// Downloads a CSV endpoint as a file, rather than navigating/opening a new
+// tab -- fetched as a blob and handed to the browser via a throwaway
+// <a download> element (clicked programmatically, then removed) so the
+// download happens without ever leaving the page. Doesn't go through
+// request() above since that assumes a JSON (or empty 204) body.
+async function downloadCsv(path, filename) {
   let response;
   try {
-    response = await fetch(`${API_BASE}/photos/duplicates/csv`);
+    response = await fetch(`${API_BASE}${path}`);
   } catch {
     throw new Error("Could not connect to the API. Is it running?");
   }
@@ -242,13 +241,26 @@ export async function downloadDuplicatesCsv() {
   try {
     const link = document.createElement("a");
     link.href = url;
-    link.download = "duplicate_photos.csv";
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+export async function downloadDuplicatesCsv() {
+  await downloadCsv("/photos/duplicates/csv", "duplicate_photos.csv");
+}
+
+// The per-tag "List" button on the management page: every path+filename
+// with this tag attached. The download is named after the tag (reduced to
+// filename-safe characters) so several tags' lists don't all land as the
+// same file.
+export async function downloadTagCsv(tag) {
+  const slug = tag.name.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "tag";
+  await downloadCsv(`/tags/${tag.id}/photos/csv`, `${slug}.csv`);
 }
 
 export function thumbnailUrl(photoId) {

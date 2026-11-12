@@ -1,7 +1,9 @@
+import csv
+import io
 import logging
 
 import psycopg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from .. import tags
 from ..models import CreateTagRequest, Tag, TagList
@@ -39,6 +41,25 @@ def update_tag(tag_id: str, body: CreateTagRequest) -> dict:
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
     return tag
+
+
+@router.get("/tags/{tag_id}/photos/csv")
+def get_tagged_photos_csv(tag_id: str) -> Response:
+    """Backs the management page's per-tag "List" button: a one-column CSV
+    of every tagged photo's path+filename relative to the photos root."""
+    filenames = tags.list_tagged_filenames(tag_id)
+    if filenames is None:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Path"])
+    for filename in filenames:
+        writer.writerow([filename])
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="tagged_photos.csv"'},
+    )
 
 
 @router.delete("/tags/{tag_id}", status_code=204)
