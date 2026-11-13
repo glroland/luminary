@@ -64,6 +64,7 @@ from .config import (
     get_openai_base_url,
     get_openai_model,
     get_openai_streaming,
+    get_openai_verify_ssl,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,21 @@ def _log_upstream_error_body(exc: Exception) -> None:
         pass
 
 
+def build_openai_client(openai_cls, api_key: str):
+    """Construct the openai client, honoring LUMINARY_OPENAI_VERIFY_SSL.
+    Shared with enrich.py. `openai_cls` is passed in (rather than imported
+    here) so callers keep their own lazy `from openai import OpenAI`.
+    `http_client` is only passed when verification is off, using the SDK's
+    own DefaultHttpxClient so its default timeouts/limits are kept."""
+    kwargs = {}
+    if not get_openai_verify_ssl():
+        from openai import DefaultHttpxClient
+
+        logger.warning("TLS certificate verification is disabled for the openai-compatible endpoint")
+        kwargs["http_client"] = DefaultHttpxClient(verify=False)
+    return openai_cls(api_key=api_key, base_url=get_openai_base_url(), **kwargs)
+
+
 def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
     """Shared setup for both the blocking and streaming openai calls: validate
     config, build the client and the messages payload. Raises
@@ -183,7 +199,7 @@ def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, hi
             "isn't api.openai.com)."
         )
 
-    client = OpenAI(api_key=api_key, base_url=get_openai_base_url())
+    client = build_openai_client(OpenAI, api_key)
 
     photo_bytes, content_type = _downscale_for_chat(photo_bytes, content_type)
     image_data_url = f"data:{content_type};base64,{base64.b64encode(photo_bytes).decode('ascii')}"

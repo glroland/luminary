@@ -59,12 +59,15 @@ api:
     # Created by deploy/create-secrets.sh -- keep this name in sync
     # with that script's PHOTOS_SECRET_NAME.
     photosCredentialsSecret: luminary-photos-credentials
-    openaiBaseUrl: "https://maas.apps.ocp.home.glroland.com/sandbox/gemma-4/v1"
+    openaiBaseUrl: "https://gemma-4-kserve-workload-svc.sandbox.svc.cluster.local:8000/v1"
     openaiModel: "gemma-4"
     # Created by deploy/create-secrets.sh -- keep this name in sync
     # with that script's OPENAI_SECRET_NAME.
     openaiApiKeySecret: luminary-openai-credentials
     openaiStreaming: false
+    # The in-cluster KServe service above presents a cert that doesn't
+    # validate against the pod's trust store, so verification is off here.
+    openaiVerifySsl: false
     # Left at the app's own default (BAAI/bge-large-en-v1.5, a local model
     # run in-process -- unrelated to the gemma-4 chat endpoint above, see
     # embeddings.py's module docstring for why). Its weights must already

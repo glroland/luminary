@@ -145,7 +145,7 @@ def _build_prompt(facts: dict) -> str:
 def _compose(photo_id: str, facts: dict) -> str:
     from openai import OpenAI  # lazy: keep this an optional dependency at import time, like chat.py
 
-    from .config import get_openai_api_key, get_openai_base_url, get_openai_model
+    from .config import get_openai_api_key, get_openai_model
 
     api_key = get_openai_api_key()
     model = get_openai_model()
@@ -156,7 +156,9 @@ def _compose(photo_id: str, facts: dict) -> str:
         )
 
     prompt = _build_prompt(facts)
-    client = OpenAI(api_key=api_key, base_url=get_openai_base_url())
+    from .chat import build_openai_client
+
+    client = build_openai_client(OpenAI, api_key)
     try:
         response = client.chat.completions.create(
             model=model,

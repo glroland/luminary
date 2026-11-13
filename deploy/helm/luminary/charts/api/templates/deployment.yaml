@@ -78,6 +78,8 @@ spec:
             {{- end }}
             - name: LUMINARY_OPENAI_STREAMING
               value: {{ .Values.env.openaiStreaming | quote }}
+            - name: LUMINARY_OPENAI_VERIFY_SSL
+              value: {{ .Values.env.openaiVerifySsl | quote }}
             {{- if .Values.env.embeddingModel }}
             - name: LUMINARY_EMBEDDING_MODEL
               value: {{ .Values.env.embeddingModel | quote }}

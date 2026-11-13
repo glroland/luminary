@@ -526,3 +526,23 @@ def test_chat_endpoint_does_not_stream_by_default(client, tmp_path, monkeypatch)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     assert response.json() == {"reply": "a plain reply", "boxes": []}
+
+
+@pytest.mark.parametrize("raw,expected", [(None, True), ("true", True), ("false", False), ("0", False), ("off", False)])
+def test_openai_verify_ssl_flag(monkeypatch, raw, expected):
+    from app import chat, config
+
+    if raw is None:
+        monkeypatch.delenv("LUMINARY_OPENAI_VERIFY_SSL", raising=False)
+    else:
+        monkeypatch.setenv("LUMINARY_OPENAI_VERIFY_SSL", raw)
+    assert config.get_openai_verify_ssl() is expected
+
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, api_key, base_url, **kwargs):
+            captured.update(kwargs)
+
+    chat.build_openai_client(FakeOpenAI, "key")
+    assert ("http_client" in captured) is (not expected)

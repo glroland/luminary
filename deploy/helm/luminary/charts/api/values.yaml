@@ -69,6 +69,9 @@ env:
   # default; only applies to the openai backend (Florence-2 has no
   # streaming API to use regardless of this setting).
   openaiStreaming: false
+  # Validate the openai endpoint's TLS certificate. On by default; turn
+  # off only for a trusted endpoint with a self-signed/internal-CA cert.
+  openaiVerifySsl: true
   # --- Description embeddings for similarity search (embeddings.py) -----
   # Hugging Face model id for photos.description_embedding -- a local
   # model run in-process (sentence-transformers), unrelated to the openai

@@ -320,6 +320,7 @@ this as a checkbox):
 | `LUMINARY_OPENAI_BASE_URL` | *(none — SDK default)*      | OpenAI-compatible endpoint URL        |
 | `LUMINARY_OPENAI_MODEL`    | *(none)*                    | Required — the model name as your server calls it |
 | `LUMINARY_OPENAI_STREAMING`| `false`                     | Stream the reply token-by-token instead of all at once (`openai` backend only) |
+| `LUMINARY_OPENAI_VERIFY_SSL`| `true`                     | Validate the endpoint's TLS certificate; set `false` only for a trusted self-signed/internal-CA endpoint (Helm: `api.env.openaiVerifySsl`) |
 | `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint             |
 | `LUMINARY_FLORENCE_DEVICE` | `cpu`                       | `cpu` or `cuda`                       |
 

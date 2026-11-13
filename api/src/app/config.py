@@ -121,6 +121,13 @@ def get_openai_streaming() -> bool:
     return os.environ.get("LUMINARY_OPENAI_STREAMING", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
+def get_openai_verify_ssl() -> bool:
+    """Whether the openai client validates the endpoint's TLS certificate.
+    On by default -- only turn it off for a trusted, self-hosted endpoint
+    with a self-signed/internal-CA cert (e.g. an in-cluster service URL)."""
+    return os.environ.get("LUMINARY_OPENAI_VERIFY_SSL", "true").strip().lower() not in ("0", "false", "no", "off")
+
+
 # --- Photo chat: path 2, local Florence-2 vision-language model -----------
 
 
