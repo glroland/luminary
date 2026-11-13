@@ -382,6 +382,10 @@ export default function App() {
           ? "folder"
           : null;
 
+  // Shared by the header's hamburger and the copy PhotoGrid shows in its
+  // stuck section header. Stable identity: it's a PhotoGrid effect dep.
+  const handleToggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
+
   return (
     <div className="app">
       {/* A traditional sidebar: it's a column in this flex layout, not a
@@ -459,7 +463,7 @@ export default function App() {
           <button
             type="button"
             className="sidebar-toggle"
-            onClick={() => setSidebarOpen((prev) => !prev)}
+            onClick={handleToggleSidebar}
             aria-label="Toggle sidebar"
             aria-expanded={sidebarOpen}
           >
@@ -545,6 +549,8 @@ export default function App() {
             key={gridGeneration}
             photos={visiblePhotos}
             groupBy={groupBy}
+            onToggleSidebar={handleToggleSidebar}
+            sidebarOpen={sidebarOpen}
             onSelect={handleSelectPhoto}
             emptyMessage={searchResults !== null ? "No photos match your search." : "No photos yet."}
           />

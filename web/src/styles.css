@@ -1255,6 +1255,25 @@ textarea {
   background: var(--hover);
 }
 
+/* The copy PhotoGrid.jsx puts in the stuck section header once the page
+   header has scrolled away. Smaller, and with negative block margins so
+   it never makes that header taller than its text alone (no jump as it
+   appears/disappears). */
+.sidebar-toggle-inline {
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  margin: -6px 0;
+}
+
+.sidebar-toggle-inline .sidebar-toggle-icon {
+  gap: 3px;
+}
+
+.sidebar-toggle-inline .sidebar-toggle-icon span {
+  width: 14px;
+}
+
 .sidebar-toggle-icon {
   display: flex;
   flex-direction: column;

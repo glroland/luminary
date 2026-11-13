@@ -234,6 +234,44 @@ describe("PhotoGrid", () => {
     expect(within(headings[0].closest("section")).getAllByRole("img")).toHaveLength(2);
   });
 
+  it("shows a sidebar toggle in the section header stuck to the top of the viewport", () => {
+    // jsdom has no layout: pretend the "trip" section straddles the top
+    // edge of the viewport (i.e. its header is the stuck one).
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const stuck = this.dataset?.sectionId?.startsWith("trip@");
+      return { top: stuck ? -100 : 500, bottom: stuck ? 300 : 900 };
+    });
+    const onToggleSidebar = vi.fn();
+    try {
+      render(
+        <PhotoGrid
+          groupBy="folder"
+          photos={[
+            { id: "1", filename: "trip/a.jpg" },
+            { id: "2", filename: "c.jpg" },
+          ]}
+          onSelect={() => {}}
+          onToggleSidebar={onToggleSidebar}
+        />
+      );
+
+      const toggle = screen.getByRole("button", { name: "Toggle sidebar" });
+      expect(toggle.closest("section")).toHaveAttribute("data-section-id", "trip@0");
+      fireEvent.click(toggle);
+      expect(onToggleSidebar).toHaveBeenCalledTimes(1);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("shows no sidebar toggle in a section header while none is stuck", () => {
+    render(
+      <PhotoGrid groupBy="folder" photos={[{ id: "1", filename: "trip/a.jpg" }]} onSelect={() => {}} onToggleSidebar={() => {}} />
+    );
+
+    expect(screen.queryByRole("button", { name: "Toggle sidebar" })).not.toBeInTheDocument();
+  });
+
   describe("infinite scroll", () => {
     let observers;
 

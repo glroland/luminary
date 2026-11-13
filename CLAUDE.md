@@ -697,7 +697,12 @@ cached) is also per-pod, in-memory state — same caveat.
   folder sorts, `null` for filename sorts and search results) splits the
   grid into sections with sticky headers; sections are runs of
   *consecutive* photos, so it's only valid when the list is sorted by the
-  same thing. A tile has no filename caption (the filename is only the
+  same thing. Whichever section header is currently stuck to the top of
+  the viewport also carries a copy of the header's sidebar toggle
+  (`onToggleSidebar`/`sidebarOpen` props), since the page header — and
+  the toggle in it — has scrolled away by then; `PhotoGrid` works out
+  which section that is from a rAF-throttled window scroll listener, and
+  only re-renders when it changes. A tile has no filename caption (the filename is only the
   thumbnail's alt text, which is also how tests find a tile); everything
   shown on hover — frame, zoom, date/location strip, and the description
   tooltip after a 1s rest — is plain CSS on `.photo-card:hover`, with no

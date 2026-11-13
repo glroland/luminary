@@ -37,8 +37,25 @@ function groupLabelOf(photo, groupBy) {
 // a key, so it only makes sense when `photos` is sorted by that same
 // thing -- App.jsx picks it from the sort order, and passes null for
 // filename sorts and search results (ordered by relevance).
-export default function PhotoGrid({ photos, onSelect, emptyMessage = "No photos yet.", groupBy = null }) {
+//
+// `onToggleSidebar`/`sidebarOpen` (optional) put a copy of the header's
+// hamburger button in whichever section header is currently stuck to the
+// top of the viewport, so the sidebar stays reachable once the page
+// header itself has scrolled away.
+export default function PhotoGrid({
+  photos,
+  onSelect,
+  emptyMessage = "No photos yet.",
+  groupBy = null,
+  onToggleSidebar = null,
+  sidebarOpen = false,
+}) {
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
+  const galleryRef = useRef(null);
+  // The `data-section-id` of the section whose header is stuck to the top
+  // of the viewport right now, or null when none is (scrolled to the top,
+  // or an ungrouped grid).
+  const [stuckSectionId, setStuckSectionId] = useState(null);
   const sentinelRef = useRef(null);
   // Without IntersectionObserver there's no way to notice the bottom being
   // reached, so everything is rendered up front rather than stranding the
@@ -84,6 +101,40 @@ export default function PhotoGrid({ photos, onSelect, emptyMessage = "No photos 
     });
     return result;
   }, [photos, groupBy]);
+
+  // Tracks which section's header is stuck. A section straddling the top
+  // edge of the viewport is the one whose sticky header is pinned there --
+  // and since the page header sits above the whole gallery, that also
+  // means the page header (and its own sidebar button) is out of view.
+  // State only changes when the stuck section does, so scrolling within a
+  // section re-renders nothing.
+  useEffect(() => {
+    if (!sections || !onToggleSidebar) return;
+    let frame = null;
+    function measure() {
+      frame = null;
+      let stuck = null;
+      for (const element of galleryRef.current?.querySelectorAll("section[data-section-id]") ?? []) {
+        const rect = element.getBoundingClientRect();
+        if (rect.top <= 1 && rect.bottom > 1) {
+          stuck = element.dataset.sectionId;
+          break;
+        }
+      }
+      setStuckSectionId(stuck);
+    }
+    function schedule() {
+      if (frame === null) frame = requestAnimationFrame(measure);
+    }
+    measure();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [sections, shownCount, onToggleSidebar]);
 
   // Right-click-to-tag menu (mirrors PhotoModal.jsx's face tag menu, but a
   // checklist rather than a single-pick-and-close menu: multiple tags can
@@ -174,19 +225,37 @@ export default function PhotoGrid({ photos, onSelect, emptyMessage = "No photos 
   }
 
   return (
-    <div className="photo-gallery">
+    <div className="photo-gallery" ref={galleryRef}>
       {sections ? (
         sections
           .filter((section) => section.start < shownCount)
-          .map((section) => (
-            <section key={`${section.key}@${section.start}`}>
+          .map((section) => {
+            const sectionId = `${section.key}@${section.start}`;
+            return (
+            <section key={sectionId} data-section-id={sectionId}>
               <h2 className="photo-section-header">
+                {onToggleSidebar && stuckSectionId === sectionId && (
+                  <button
+                    type="button"
+                    className="sidebar-toggle sidebar-toggle-inline"
+                    onClick={onToggleSidebar}
+                    aria-label="Toggle sidebar"
+                    aria-expanded={sidebarOpen}
+                  >
+                    <span className="sidebar-toggle-icon" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </button>
+                )}
                 {section.label}
                 <span className="photo-section-count">{(section.end - section.start).toLocaleString()}</span>
               </h2>
               <div className="photo-grid">{renderCards(section.start, section.end)}</div>
             </section>
-          ))
+            );
+          })
       ) : (
         <div className="photo-grid">{renderCards(0, photos.length)}</div>
       )}
