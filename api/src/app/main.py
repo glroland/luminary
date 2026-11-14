@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
+from .tracing import configure_tracing
 from .routers import descriptions, faces, health, individuals, locations, photos, sync, tags
 
 configure_logging()
@@ -23,6 +24,9 @@ async def lifespan(app: FastAPI):
     # the liveness probe. See database.backfill_data().
     init_db()
     start_backfill()
+    # Connects on a background thread, and only logs if MLflow can't be
+    # reached -- tracing never holds up or fails startup. See tracing.py.
+    configure_tracing()
     yield
     logger.info("Shutting down Luminary API")
 

@@ -74,7 +74,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from . import embeddings
+from . import embeddings, tracing
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -159,18 +159,22 @@ def _compose(photo_id: str, facts: dict) -> str:
     from .chat import build_openai_client
 
     client = build_openai_client(OpenAI, api_key)
+    messages = [{"role": "user", "content": prompt}]
+    # One trace per rewrite (tracing.py), a single model call.
+    span = tracing.start_trace(
+        "enrich_description", "CHAT_MODEL", inputs={"messages": messages}, tags={"photo.id": photo_id}
+    )
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=_MAX_TOKENS,
-        )
+        response = client.chat.completions.create(model=model, messages=messages, max_tokens=_MAX_TOKENS)
+        description = response.choices[0].message.content.strip()
     except Exception as exc:
         from .chat import _log_upstream_error_body  # same diagnostic chat.py's openai calls use
 
         _log_upstream_error_body(exc)
+        span.end(error=exc)
         raise
-    description = response.choices[0].message.content.strip()
+    span.set_attributes(tracing.llm_attributes(model, getattr(response, "usage", None)))
+    span.end(outputs={"role": "assistant", "content": description})
     logger.info(
         "Description enrichment for photo %s -- prompt: %s -- response: %s", photo_id, prompt, description
     )

@@ -82,6 +82,20 @@ spec:
               value: {{ .Values.env.chatTools | quote }}
             - name: LUMINARY_OPENAI_VERIFY_SSL
               value: {{ .Values.env.openaiVerifySsl | quote }}
+            {{- if .Values.env.mlflowTrackingUri }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .Values.env.mlflowTrackingUri | quote }}
+            - name: MLFLOW_EXPERIMENT_NAME
+              value: {{ .Values.env.mlflowExperimentName | quote }}
+            {{- if .Values.env.mlflowWorkspace }}
+            - name: MLFLOW_WORKSPACE
+              value: {{ .Values.env.mlflowWorkspace | quote }}
+            {{- end }}
+            {{- if .Values.env.mlflowTrackingAuth }}
+            - name: MLFLOW_TRACKING_AUTH
+              value: {{ .Values.env.mlflowTrackingAuth | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.env.embeddingModel }}
             - name: LUMINARY_EMBEDDING_MODEL
               value: {{ .Values.env.embeddingModel | quote }}

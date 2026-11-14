@@ -91,7 +91,7 @@ target/               (generated, gitignored) local venv and pytest cache --
 | POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, failed, error}` |
 | POST   | `/api/chat`                 | Chat with no photo open — same request/response as below; this is how the library is searched |
-| POST   | `/api/photos/{id}/chat`     | Chat with a photo open — `{message, history, search_list}` → `{reply, boxes, search_results}` (JSON), or a streamed `application/x-ndjson` body if `LUMINARY_OPENAI_STREAMING` is on; see "Chat and search" below |
+| POST   | `/api/photos/{id}/chat`     | Chat with a photo open — `{message, history, search_list}` → a streamed `application/x-ndjson` body of events (tool calls as they happen, the reply, boxes, search results); see "Chat and search" below |
 
 `POST /api/sync` is the only way photos enter the index — point
 `LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
@@ -360,20 +360,50 @@ yours rejects requests that carry `tools`, set `LUMINARY_CHAT_TOOLS=false`:
 chat still answers questions about the open photo, but there is then no
 way to search.
 
-**Streaming.** With `LUMINARY_OPENAI_STREAMING` (**off by default**) the
-endpoint responds with `application/x-ndjson` instead of one JSON body: one
-JSON object per line, `{"text": ...}` for each piece of the reply,
-`{"boxes": [...]}` when an object search found something and
-`{"search_results": [...]}` when the search list changed. The web UI handles
-either response shape transparently (it checks the response's content
-type, not a client-side setting).
+**The response is a stream of events.** Both chat endpoints respond with
+`application/x-ndjson`, one JSON object per line, sent as it happens:
+
+- `{"tool": {"index", "name", "arguments", "status"}}` when the model calls
+  a tool (`status: "running"`) and again when that call has finished
+  (`"done"`, same `index`). The chat window shows each call as a line of
+  its own — "Searching for photos of “beach”" — with a spinner until it
+  finishes;
+- `{"text": ...}` for the reply: in pieces as the model writes it with
+  `LUMINARY_OPENAI_STREAMING` on, otherwise (the default) as one event once
+  it is complete;
+- `{"boxes": [...]}` when an object search found something, and
+  `{"search_results": [...]}` when the search list changed.
+
+A failure before the first event (not configured, the model endpoint
+unreachable) is still an ordinary `503`/`502` JSON error; one after the
+stream has started is reported in it, as a final `[chat backend failed]`
+text event.
+
+**Tracing.** Set `MLFLOW_TRACKING_URI` and every chat turn is recorded as
+an [MLflow](https://mlflow.org/docs/latest/genai/tracing/) trace — the turn,
+each call to the model (messages, reply, token counts when the server
+reports them) and each tool call (arguments, result) — as is every
+description rewrite ("Description enrichment" below). The open photo's
+bytes are left out of the trace. Tracing can't break the app: if MLflow
+can't be reached at startup an error is logged, the app runs untraced and
+the connection is retried in the background (30s, doubling to 10 minutes);
+if it goes away later, traces are dropped with a log line. These are
+MLflow's own variables, read by MLflow itself:
+
+| Variable                 | Default    | Purpose                                 |
+|--------------------------|------------|-----------------------------------------|
+| `MLFLOW_TRACKING_URI`    | *(none)*   | Tracking server URL; unset = no tracing (Helm: `api.env.mlflowTrackingUri`) |
+| `MLFLOW_EXPERIMENT_NAME` | `luminary` | Experiment the traces are filed under (Helm: `api.env.mlflowExperimentName`) |
+| `MLFLOW_WORKSPACE`       | *(none)*   | MLflow workspace, where the server has them (Helm: `api.env.mlflowWorkspace`) |
+| `MLFLOW_TRACKING_AUTH`   | *(none)*   | `kubernetes-namespaced` to authenticate as the pod's service account (Helm: `api.env.mlflowTrackingAuth`; OpenShift AI also needs the RoleBinding `api.mlflowIntegration.serviceAccounts` creates) |
+| `MLFLOW_TRACKING_TOKEN`  | *(none)*   | Bearer token, for running locally (e.g. `oc whoami --show-token`) |
 
 | Variable                   | Default                     | Purpose                              |
 |-----------------------------|------------------------------|---------------------------------------|
 | `LUMINARY_OPENAI_API_KEY`  | *(none)*                    | Required                              |
 | `LUMINARY_OPENAI_BASE_URL` | *(none — SDK default)*      | OpenAI-compatible endpoint URL        |
 | `LUMINARY_OPENAI_MODEL`    | *(none)*                    | Required — the model name as your server calls it |
-| `LUMINARY_OPENAI_STREAMING`| `false`                     | Stream the reply token-by-token instead of all at once |
+| `LUMINARY_OPENAI_STREAMING`| `false`                     | Send the reply text token-by-token instead of all at once (tool calls are reported live either way) |
 | `LUMINARY_CHAT_TOOLS`      | `true`                      | Offer the chat model its tools (photo search, object search); set `false` if the endpoint doesn't support tool calling (Helm: `api.env.chatTools`) |
 | `LUMINARY_OPENAI_VERIFY_SSL`| `true`                     | Validate the endpoint's TLS certificate; set `false` only for a trusted self-signed/internal-CA endpoint (Helm: `api.env.openaiVerifySsl`) |
 | `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint (object search, and captions at index time) |

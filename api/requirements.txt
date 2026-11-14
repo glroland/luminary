@@ -6,7 +6,7 @@ pillow==13.0.0
 # fails Image.open() with UnidentifiedImageError. Bundles libheif in its
 # wheels; no system package to install in the Containerfile.
 pillow-heif==1.8.1
-python-multipart==0.0.9
+python-multipart==0.0.33
 fsspec==2026.9.0
 s3fs==2026.9.0
 smbprotocol==1.17.0
@@ -28,6 +28,14 @@ pgvector==0.5.1
 
 # Photo chat: path 1 (any OpenAI-compatible multimodal endpoint)
 openai==3.41.0
+
+# Tracing of the chat's and the description rewrite's LLM calls
+# (tracing.py) -- optional at runtime: imported only when
+# MLFLOW_TRACKING_URI is set, and the app runs without it. [kubernetes]
+# adds the request-auth provider for MLFLOW_TRACKING_AUTH=
+# kubernetes-namespaced (the pod's own service-account token), which is how
+# an in-cluster MLflow on OpenShift AI is reached without a token Secret.
+mlflow[kubernetes]==3.18.0
 
 # Photo chat: path 2 (local Florence-2 vision-language model). torch pulls
 # in CUDA libraries by default on PyPI even for CPU-only use -- build/push

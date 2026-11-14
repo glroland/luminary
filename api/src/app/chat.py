@@ -45,9 +45,12 @@ OpenAI-compatible server that rejects requests carrying `tools` (e.g. vLLM
 started without tool calling enabled); chat then works as plain question
 answering, and there is no search.
 
-The reply can optionally be streamed back token-by-token
-(LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
-ask_stream() vs. the always-available, full-reply-at-once ask().
+A turn is reported as a stream of events (ask_events(), what the chat
+routes call): each tool call as it starts and finishes, the reply, and
+what the tools found. The reply text is one event unless
+LUMINARY_OPENAI_STREAMING (off by default, should_stream()) asks the model
+for it token by token. ask() is the same loop collected into a ChatReply.
+Each turn is also an MLflow trace when tracing is configured (tracing.py).
 
 caption_image() is the one Florence-2 entry point sync.py uses directly
 (outside the chat.ask()/ChatReply flow above) to auto-describe a photo at
@@ -78,7 +81,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import embeddings, storage
+from . import embeddings, storage, tracing
 from .config import (
     get_chat_tools,
     get_florence_device,
@@ -139,14 +142,49 @@ def ask(
     dicts, oldest first. `search_list` is the search list as the previous
     turn left it ({"id", "filename", "score"} entries; see _Turn), which
     this turn's tools can filter, add to or truncate."""
-    return _ask_openai(photo_bytes, content_type, message, history, search_list)
+    reply = ChatReply(text="")
+    for event in _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=False):
+        if "text" in event:
+            reply.text += event["text"]
+        elif "boxes" in event:
+            reply.boxes = event["boxes"]
+        elif "search_results" in event:
+            reply.search_results = event["search_results"]
+    return reply
 
 
 def should_stream() -> bool:
-    """Whether a chat request should use the streaming response path
-    (ask_stream) instead of ask() -- LUMINARY_OPENAI_STREAMING, default
-    off."""
+    """Whether the chat model's reply is requested token by token
+    (LUMINARY_OPENAI_STREAMING, default off). Either way ask_events()
+    reports tool calls as they happen; this only decides whether the
+    reply text arrives in pieces or all at once."""
     return get_openai_streaming()
+
+
+def ask_events(
+    photo_bytes: Optional[bytes],
+    content_type: Optional[str],
+    message: str,
+    history: list[dict],
+    search_list: Optional[list[dict]] = None,
+):
+    """What the chat routes call: one chat message as an iterator of
+    events, each a dict with exactly one key --
+
+    {"tool": {...}} when the model calls a tool, and again when that call
+      has finished: {"index", "name", "arguments", "status"}, `index`
+      counting the turn's calls from 0 (the same on both events),
+      `arguments` the parsed JSON object (None if it wasn't one) and
+      `status` "running" then "done";
+    {"text": str} for the next piece of the reply -- the whole reply as
+      one event unless should_stream();
+    {"boxes": [...]} / {"search_results": [...]} (same shapes as
+      ChatReply's, the turn's current value) once a tool call has
+      produced them.
+
+    Config is validated before this returns, not when the iterator is
+    first read -- see _ask_openai_events."""
+    return _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=should_stream())
 
 
 def ask_stream(
@@ -156,12 +194,9 @@ def ask_stream(
     history: list[dict],
     search_list: Optional[list[dict]] = None,
 ):
-    """Streaming counterpart to ask(), for when should_stream() is True.
-    Returns an iterator of events, each a dict with exactly one key:
-    {"text": str} for the next piece of the reply, {"boxes": [...]} or
-    {"search_results": [...]} (same shapes as ChatReply's, the turn's
-    current value) once a tool call has produced them."""
-    return _ask_openai_stream(photo_bytes, content_type, message, history, search_list)
+    """ask_events() with the reply always streamed token by token,
+    whatever LUMINARY_OPENAI_STREAMING says."""
+    return _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=True)
 
 
 # --- The chat model: an OpenAI-compatible multimodal endpoint ---------------
@@ -462,11 +497,19 @@ class _Turn:
     is then that list -- the part of the reply that tells the web UI what
     to show."""
 
-    def __init__(self, photo_bytes: Optional[bytes], search_list: Optional[list[dict]] = None):
+    def __init__(
+        self,
+        photo_bytes: Optional[bytes],
+        search_list: Optional[list[dict]] = None,
+        span: Optional[tracing.Span] = None,
+    ):
         self.photo_bytes = photo_bytes  # the open photo's original bytes, or None
+        # The turn's trace (tracing.py); each tool call is a child span.
+        self.span = span or tracing.Span()
         self.boxes: list[dict] = []
         self.search_list: list[dict] = _by_score(search_list or [])
         self.search_results: Optional[list[dict]] = None
+        self.tool_calls = 0  # how many tool calls this turn has started
 
     def set_search_list(self, entries: list[dict]) -> None:
         self.search_list = _by_score(entries)
@@ -502,12 +545,18 @@ def _chat_tools(round_index: int, turn: _Turn) -> dict:
     return {"tools": tools}
 
 
-def _run_tool_calls(messages: list, content: str, calls: list[dict], turn: _Turn) -> None:
+def _run_tool_calls(messages: list, content: str, calls: list[dict], turn: _Turn):
     """Record the model's tool calls (each {"id", "name", "arguments"},
     `arguments` still the raw JSON string) and their results on `messages`,
     ready for the next round; what they found lands on `turn`. A tool
     failure never fails the chat: it's reported back to the model as the
-    tool's result, so the model can still answer without it."""
+    tool's result, so the model can still answer without it.
+
+    A generator: it yields ask_events()'s events as it goes -- a "running"
+    then a "done" {"tool": ...} event around each call (so a caller that
+    forwards them shows the call *before* a slow tool has finished), and
+    {"boxes": ...}/{"search_results": ...} once the calls have changed
+    them. Nothing runs unless it is iterated."""
     messages.append(
         {
             "role": "assistant",
@@ -522,19 +571,39 @@ def _run_tool_calls(messages: list, content: str, calls: list[dict], turn: _Turn
             ],
         }
     )
+    boxes_before = len(turn.boxes)
+    search_before = turn.search_results
     for call in calls:
-        messages.append({"role": "tool", "tool_call_id": call["id"], "content": _run_tool_call(call, turn)})
+        event = {"index": turn.tool_calls, "name": call["name"], "arguments": _parsed_arguments(call)}
+        turn.tool_calls += 1
+        yield {"tool": {**event, "status": "running"}}
+        span = turn.span.child(call["name"], "TOOL", inputs=event["arguments"])
+        result = _run_tool_call(call, turn)
+        span.end(outputs=result)
+        messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
+        yield {"tool": {**event, "status": "done"}}
+    if len(turn.boxes) > boxes_before:
+        yield {"boxes": list(turn.boxes)}
+    if turn.search_results is not search_before:
+        yield {"search_results": turn.search_results}
+
+
+def _parsed_arguments(call: dict) -> Optional[dict]:
+    """A tool call's arguments as the JSON object they should be, or None
+    if the model wrote something else."""
+    try:
+        arguments = json.loads(call["arguments"] or "{}")
+    except ValueError:
+        return None
+    return arguments if isinstance(arguments, dict) else None
 
 
 def _run_tool_call(call: dict, turn: _Turn) -> str:
     handler = _TOOL_HANDLERS.get(call["name"])
     if handler is None:
         return f"Unknown tool: {call['name']}"
-    try:
-        arguments = json.loads(call["arguments"] or "{}")
-    except ValueError:
-        arguments = None
-    if not isinstance(arguments, dict):
+    arguments = _parsed_arguments(call)
+    if arguments is None:
         return "Invalid arguments: expected a JSON object."
     try:
         return handler(arguments, turn)
@@ -811,43 +880,17 @@ _TOOL_HANDLERS = {
 }
 
 
-def _ask_openai(
+def _ask_openai_events(
     photo_bytes: Optional[bytes],
     content_type: Optional[str],
     message: str,
     history: list[dict],
-    search_list: Optional[list[dict]] = None,
-) -> ChatReply:
-    client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
-    turn = _Turn(photo_bytes, search_list)
-    for round_index in range(_MAX_CHAT_ROUNDS):
-        try:
-            response = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=500, **_chat_tools(round_index, turn)
-            )
-        except Exception as exc:
-            _log_upstream_error_body(exc)
-            raise
-        reply = response.choices[0].message
-        # getattr: not every OpenAI-compatible server includes the field.
-        tool_calls = getattr(reply, "tool_calls", None)
-        if not tool_calls:
-            break
-        calls = [
-            {"id": call.id, "name": call.function.name, "arguments": call.function.arguments}
-            for call in tool_calls
-        ]
-        _run_tool_calls(messages, reply.content, calls, turn)
-    return ChatReply(text=reply.content or "", boxes=turn.boxes, search_results=turn.search_results)
-
-
-def _ask_openai_stream(
-    photo_bytes: Optional[bytes],
-    content_type: Optional[str],
-    message: str,
-    history: list[dict],
-    search_list: Optional[list[dict]] = None,
+    search_list: Optional[list[dict]],
+    stream: bool,
 ):
+    """The chat loop behind ask(), ask_events() and ask_stream(): returns
+    an iterator of ask_events()'s events. `stream` is whether the model's
+    reply is requested (and so reported) token by token."""
     # _prepare_openai_call() runs here, eagerly -- not inside generate()
     # below -- specifically so ChatNotConfigured still raises synchronously
     # when this is called, rather than only once the returned generator is
@@ -857,46 +900,146 @@ def _ask_openai_stream(
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
 
     def generate():
-        turn = _Turn(photo_bytes, search_list)
+        # One trace per turn: this span, a child per model round and a
+        # child per tool call. Ended in the `finally`, so a turn the client
+        # walked away from (GeneratorExit) is still recorded.
+        span = tracing.start_trace(
+            "chat",
+            "AGENT",
+            inputs={
+                "message": message,
+                "history": history,
+                "photo_open": photo_bytes is not None,
+                "search_list_size": len(search_list or []),
+            },
+        )
+        turn = _Turn(photo_bytes, search_list, span)
+        reply = ""
+        error = None
         try:
             for round_index in range(_MAX_CHAT_ROUNDS):
-                stream = client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=500, stream=True, **_chat_tools(round_index, turn)
-                )
-                content = ""
-                # A tool call arrives in fragments across chunks, keyed by
-                # its index: id and name once, the arguments JSON in pieces.
-                calls: dict[int, dict] = {}
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        content += delta.content
-                        yield {"text": delta.content}
-                    for fragment in getattr(delta, "tool_calls", None) or []:
-                        call = calls.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
-                        if fragment.id:
-                            call["id"] = fragment.id
-                        if fragment.function is not None:
-                            if fragment.function.name:
-                                call["name"] = fragment.function.name
-                            if fragment.function.arguments:
-                                call["arguments"] += fragment.function.arguments
+                request = dict(model=model, messages=messages, max_tokens=500, **_chat_tools(round_index, turn))
+                content, calls = yield from _traced_round(client, request, stream, span)
+                if stream:
+                    reply += content
                 if not calls:
-                    return
-                boxes_before = len(turn.boxes)
-                search_before = turn.search_results
-                _run_tool_calls(messages, content, [calls[index] for index in sorted(calls)], turn)
-                if len(turn.boxes) > boxes_before:
-                    yield {"boxes": list(turn.boxes)}
-                if turn.search_results is not search_before:
-                    yield {"search_results": turn.search_results}
+                    break
+                yield from _run_tool_calls(messages, content, calls, turn)
+            # Not streamed: only the last round's text is the reply (text
+            # a model writes alongside a tool call is not shown).
+            if not stream and content:
+                reply = content
+                yield {"text": content}
         except Exception as exc:
+            error = exc
             _log_upstream_error_body(exc)
             raise
+        finally:
+            span.end(
+                outputs={
+                    "reply": reply,
+                    "tool_calls": turn.tool_calls,
+                    "boxes": len(turn.boxes),
+                    "search_results": None if turn.search_results is None else len(turn.search_results),
+                },
+                error=error,
+            )
 
     return generate()
+
+
+def _traced_round(client, request: dict, stream: bool, parent: tracing.Span):
+    """One model round as a child span of the turn's trace. A generator
+    either way -- it yields the round's {"text": ...} events when streamed
+    -- returning (text, tool calls)."""
+    span = parent.child(
+        "chat.completions",
+        "CHAT_MODEL",
+        inputs={
+            "messages": _messages_for_trace(request["messages"]),
+            "tools": [tool["function"]["name"] for tool in request.get("tools", [])],
+        },
+    )
+    usage = None
+    try:
+        if stream:
+            content, calls, usage = yield from _streamed_round(client, request)
+        else:
+            content, calls, usage = _plain_round(client, request)
+    except BaseException as exc:  # GeneratorExit too: the client went away mid-reply
+        span.end(error=exc)
+        raise
+    span.set_attributes(tracing.llm_attributes(request["model"], usage))
+    output = {"role": "assistant", "content": content}
+    if calls:
+        output["tool_calls"] = [
+            {"id": call["id"], "type": "function", "function": {"name": call["name"], "arguments": call["arguments"]}}
+            for call in calls
+        ]
+    span.end(outputs=output)
+    return content, calls
+
+
+def _messages_for_trace(messages: list) -> list:
+    """The conversation as it's recorded on a trace: the open photo's
+    base64 data URL -- megabytes, on every round of every turn -- swapped
+    for a note of its size."""
+
+    def part_for_trace(part):
+        url = part.get("image_url", {}).get("url", "") if isinstance(part, dict) else ""
+        if not url.startswith("data:"):
+            return part
+        return {"type": "image_url", "image_url": {"url": f"{url.split(',', 1)[0]},<{len(url)} characters omitted>"}}
+
+    return [
+        {**message, "content": [part_for_trace(part) for part in message["content"]]}
+        if isinstance(message.get("content"), list)
+        else message
+        for message in messages
+    ]
+
+
+def _plain_round(client, request: dict) -> tuple[str, list[dict], object]:
+    """One model round, the reply taken whole: (its text, its tool calls,
+    the token usage the server reported or None)."""
+    response = client.chat.completions.create(**request)
+    reply = response.choices[0].message
+    # getattr: not every OpenAI-compatible server includes the field.
+    calls = [
+        {"id": call.id, "name": call.function.name, "arguments": call.function.arguments}
+        for call in getattr(reply, "tool_calls", None) or []
+    ]
+    return reply.content or "", calls, getattr(response, "usage", None)
+
+
+def _streamed_round(client, request: dict):
+    """One model round, streamed: a generator yielding a {"text": ...}
+    event per piece of the reply and *returning* the same
+    (text, tool calls, usage) as _plain_round."""
+    content = ""
+    usage = None
+    # A tool call arrives in fragments across chunks, keyed by its index:
+    # id and name once, the arguments JSON in pieces.
+    calls: dict[int, dict] = {}
+    for chunk in client.chat.completions.create(stream=True, **request):
+        # Only servers asked for it send usage, on a final chunk of its own.
+        usage = getattr(chunk, "usage", None) or usage
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta.content:
+            content += delta.content
+            yield {"text": delta.content}
+        for fragment in getattr(delta, "tool_calls", None) or []:
+            call = calls.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
+            if fragment.id:
+                call["id"] = fragment.id
+            if fragment.function is not None:
+                if fragment.function.name:
+                    call["name"] = fragment.function.name
+                if fragment.function.arguments:
+                    call["arguments"] += fragment.function.arguments
+    return content, [calls[index] for index in sorted(calls)], usage
 
 
 # --- Florence-2: the locate_object tool, and sync.py's captions -------------

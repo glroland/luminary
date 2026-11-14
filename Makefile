@@ -113,6 +113,14 @@ LUMINARY_EMBEDDING_MODEL ?= BAAI/bge-large-en-v1.5
 # `make run-api LUMINARY_MAX_CONCURRENCY=8`.
 LUMINARY_MAX_CONCURRENCY ?= 4
 
+# MLflow tracking server run-api traces chat/description LLM calls to
+# (api/src/app/tracing.py). Empty = tracing off. mlflow reads its other
+# settings (MLFLOW_TRACKING_TOKEN, MLFLOW_WORKSPACE, MLFLOW_EXPERIMENT_NAME)
+# from your shell's environment itself, e.g.
+# `MLFLOW_TRACKING_TOKEN=$(oc whoami --show-token) MLFLOW_WORKSPACE=luminary \
+#   make run-api MLFLOW_TRACKING_URI=https://rh-ai.apps.ocp.home.glroland.com/mlflow`.
+MLFLOW_TRACKING_URI ?=
+
 # Env vars for run-api: points at LUMINARY_DATABASE_NAME (the dev database).
 LUMINARY_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
 	LUMINARY_DATABASE_PORT=$(LUMINARY_DATABASE_PORT) \
@@ -192,6 +200,7 @@ run-api:
 		LUMINARY_OPENAI_BASE_URL=$(LUMINARY_OPENAI_BASE_URL) LUMINARY_OPENAI_MODEL=$(LUMINARY_OPENAI_MODEL) \
 		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
 		LUMINARY_MAX_CONCURRENCY=$(LUMINARY_MAX_CONCURRENCY) \
+		MLFLOW_TRACKING_URI=$(MLFLOW_TRACKING_URI) \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:

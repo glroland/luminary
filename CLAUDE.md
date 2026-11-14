@@ -397,7 +397,7 @@ cached) is also per-pod, in-memory state — same caveat.
   `storage.read_original_bytes` (unlike `stream_original`, chat needs the
   whole image in memory, not a chunked HTTP response), and
   `POST /api/chat` (`chat_about_library`) is the same with no photo open.
-  Both call `chat.ask(photo_bytes, content_type, message, history)`, the
+  Both call `chat.ask_events(photo_bytes, content_type, message, history)`, the
   first two `None` when there's no photo — the message is then plain text
   with no image part. There is one chat model, an OpenAI-compatible
   endpoint; Florence-2 is no longer a selectable backend (the old
@@ -428,6 +428,11 @@ cached) is also per-pod, in-memory state — same caveat.
   conversation as a `role: "tool"` message by `_run_tool_calls`). What a
   tool *found* for the user travels separately, on the per-turn `_Turn`
   object, and comes back as `ChatReply.boxes`/`.search_results`.
+  `_run_tool_calls` is a generator: around each call it yields a
+  `{"tool": {"index", "name", "arguments", "status"}}` event, `"running"`
+  *before* the handler runs and `"done"` after (see "Events" below) —
+  that is how the chat window shows a slow search while it's still going.
+  Nothing runs unless it's iterated.
 
   - `search_photos_by_filename` → `storage.search_photos_by_filename`
     (`ILIKE` on `filename`, i.e. the path too), `search_photos_by_text` →
@@ -490,7 +495,7 @@ cached) is also per-pod, in-memory state — same caveat.
     `_object_search_available()` finds torch/transformers via
     `importlib.util.find_spec` (a lookup, not an import).
 
-  `_ask_openai` loops up to `_MAX_CHAT_ROUNDS` times; `_chat_tools()`
+  `_ask_openai_events` loops up to `_MAX_CHAT_ROUNDS` times; `_chat_tools()`
   omits `tools` on the last round so a turn always ends in an answer, and
   omits the key entirely (never an empty list) when no tool is offered.
   `LUMINARY_CHAT_TOOLS` (`config.get_chat_tools()`, default on) switches
@@ -507,38 +512,43 @@ cached) is also per-pod, in-memory state — same caveat.
   deliberately no system message, since some self-hosted chat templates
   reject the system role.
 
-  **Streaming** (`LUMINARY_OPENAI_STREAMING`, off by default,
-  `config.get_openai_streaming()`, `chat.should_stream()`): when on,
-  `_chat()` calls `chat.ask_stream(...)` instead of
-  `chat.ask(...)` and wraps it in a
-  `StreamingResponse(..., media_type="application/x-ndjson")` instead of
-  returning `ChatResponse` JSON — the frontend tells which one it got from
-  the response's own `content-type` header, not from a client-side copy of
-  the setting. `ask_stream()` yields *events*, not bare strings — a dict
-  with one key, `{"text": ...}` for a reply piece, `{"boxes": [...]}`
-  after an object search found something, or `{"search_results": [...]}`
-  after a library search — and the router writes each as
-  one JSON line. (It was `text/plain` before the tool existed; plain text
-  had nowhere to carry boxes.) A streamed tool call arrives in fragments
-  across chunks (id/name once, the arguments JSON in pieces, keyed by
-  `index`); `generate()` reassembles them before running the tool, then
-  starts the next streamed round. `ask_stream()` → `_ask_openai_stream()`
-  is written so `_prepare_openai_call()` (config validation + building the
-  `openai` client/messages) runs **eagerly, before the generator is
-  returned** — not deferred into the generator function itself —
-  specifically so `ChatNotConfigured` (and anything else from that setup
-  step) still raises synchronously when the router calls
-  `chat.ask_stream(...)`, while the `StreamingResponse` hasn't been
-  constructed yet and the router can still turn it into a normal
-  `503`/`502` `HTTPException`. Don't collapse `_ask_openai_stream` back
-  into a single generator function — once the HTTP response has actually
-  started streaming, the status code can no longer change, so a failure at
-  that point (rare — a genuine network failure mid-generation, not a
-  config problem) is the one case handled by yielding an inline
+  **Events.** A chat response is always a stream. `_chat()` calls
+  `chat.ask_events(...)` and returns its events as a
+  `StreamingResponse(..., media_type="application/x-ndjson")`, one JSON
+  line each — there is no JSON `ChatResponse` any more (it existed only
+  for the non-streamed reply, which had nowhere to report a tool call
+  before the whole turn was over). An event is a dict with one key:
+  `{"tool": {...}}` (above), `{"text": ...}` for a piece of the reply,
+  `{"boxes": [...]}` after an object search found something, or
+  `{"search_results": [...]}` after the search list changed.
+  `LUMINARY_OPENAI_STREAMING` (off by default,
+  `config.get_openai_streaming()`, `chat.should_stream()`) now only
+  decides how the reply *text* arrives: on, the model is called with
+  `stream=True` and each delta is a `text` event; off, the reply is one
+  `text` event at the end (and text a model writes alongside a tool call
+  isn't shown). `chat.ask()` (the whole reply as a `ChatReply`) and
+  `chat.ask_stream()` (always `stream=True`) are the same loop,
+  `_ask_openai_events(..., stream)`, consumed differently — keep it one
+  loop. A streamed tool call arrives in fragments across chunks (id/name
+  once, the arguments JSON in pieces, keyed by `index`); `_streamed_round`
+  reassembles them and *returns* `(text, calls, usage)` to the loop, the
+  same triple `_plain_round` returns.
+
+  Errors: `_ask_openai_events` runs `_prepare_openai_call()` (config
+  validation + building the `openai` client/messages) **eagerly, before
+  the generator is returned** — not inside the generator function — so
+  `ChatNotConfigured` raises synchronously from `chat.ask_events(...)`.
+  `_chat()` then also reads the *first* event before constructing the
+  `StreamingResponse`, which runs the first call to the model: a wrong
+  model name or an unreachable endpoint is therefore still a normal
+  `503`/`502` `HTTPException`. Don't collapse `_ask_openai_events` into a
+  single generator function, and don't drop that first `next()` — once the
+  HTTP response has started, the status code can no longer change, so a
+  failure after that point is the one case handled by yielding an inline
   `{"text": "\n[chat backend failed]"}` event into the stream instead,
   logged server-side either way.
 
-  **The chat model** (`_ask_openai`): `LUMINARY_OPENAI_BASE_URL` has
+  **The chat model** (`_ask_openai_events`): `LUMINARY_OPENAI_BASE_URL` has
   no default of our own choosing — leaving it unset falls through to the
   `openai` SDK's own default (`api.openai.com`), which is only correct if
   that's genuinely the target; don't special-case or assume it elsewhere.
@@ -555,9 +565,9 @@ cached) is also per-pod, in-memory state — same caveat.
   an opaque `500` back, since many such servers have a much smaller max
   input resolution than that. Best-effort: if the bytes don't decode as an
   image for any reason, it falls back to the original bytes unchanged
-  rather than failing the chat request over this. `_ask_openai`/the
-  streaming `generate()` also wrap their `client.chat.completions.create`
-  call to log the raw upstream response body
+  rather than failing the chat request over this. `_ask_openai_events`'s
+  `generate()` also wraps the `client.chat.completions.create`
+  calls to log the raw upstream response body
   (`_log_upstream_error_body`) on failure — the `openai` SDK's own
   exception message is sometimes just a bare status code with no detail
   when a self-hosted gateway's error body doesn't match the shape it
@@ -604,6 +614,40 @@ cached) is also per-pod, in-memory state — same caveat.
   `microsoft/Florence-2-base` weights on CPU) — see the
   [Florence-2-large-ft discussion board](https://huggingface.co/microsoft/Florence-2-large-ft/discussions/40)
   for multiple independent reports of the same fix.
+
+- `tracing.py` is MLflow tracing of the LLM work: one trace per chat turn
+  (`chat.py`: an `AGENT` root span, a `CHAT_MODEL` child per model round, a
+  `TOOL` child per tool call) and one per description rewrite
+  (`enrich.py`'s `_compose`). Off unless `MLFLOW_TRACKING_URI` is set
+  (mlflow's own variable, like `MLFLOW_TRACKING_AUTH`/`_WORKSPACE`/
+  `_TOKEN`, which mlflow reads itself; `MLFLOW_EXPERIMENT_NAME` defaults
+  to `luminary`). **Tracing must never fail or slow what it traces**, and
+  everything odd about the module follows from that:
+  `configure_tracing()` (called from `main.py`'s lifespan) only starts a
+  daemon thread; `_connect()` on that thread does the lazy `import mlflow`
+  (seconds, and the app must run without the package) and
+  `mlflow.set_experiment()`, the call that raises when the server can't be
+  reached. A failure is logged at `ERROR` and retried with backoff (30s
+  doubling to 10min); until one attempt succeeds `tracing._mlflow` is
+  `None` and `start_trace()` returns a `Span` that does nothing. That
+  gate matters for more than the exception: against an unreachable server
+  mlflow's own span start swallows the error but blocks the traced
+  request on HTTP retries first. After connecting, every mlflow call goes
+  through `Span._safely`/`_start`'s `try/except` (logged, dropped); spans
+  are exported from mlflow's background queue, so a server that dies
+  later costs log lines only (verified against a real `mlflow server`
+  killed mid-run). Spans take an **explicit parent** (`Span.child` →
+  `mlflow.start_span_no_context(parent_span=...)`); don't switch to
+  `mlflow.start_span`/`@mlflow.trace`/`mlflow.openai.autolog()`. Those
+  find their parent through a context variable, and a chat turn is a
+  generator that `StreamingResponse` advances from a different worker
+  thread on each step, so the context set on one step isn't there on the
+  next (an autologged call would start a trace of its own). Doing the
+  model spans by hand is also what lets `chat._messages_for_trace` swap
+  the open photo's base64 data URL for a size note. The chat root span is
+  ended in a `finally`, so a turn the client abandoned (`GeneratorExit`)
+  is still recorded. `conftest.py`'s `client` fixture unsets
+  `MLFLOW_TRACKING_URI` so a test run never traces to a real server.
 
 - `people.py` (`routers/individuals.py`, `routers/faces.py`) is manual face
   tagging — a catalog of named individuals (`individuals` table) and a
@@ -1048,9 +1092,17 @@ cached) is also per-pod, in-memory state — same caveat.
   library, or the open photo for an object, is the chat model's call,
   server-side (see `chat.py`'s "Tools"). An empty message is never sent.
   Message history sent on each call is built from the component's own
-  local `messages` state (`{role, text}` per turn, oldest first) — there's
-  no server-side conversation state, each request carries the full
-  relevant history itself. The conversation deliberately does *not* reset
+  local `messages` state (oldest first) — there's no server-side
+  conversation state, each request carries the full relevant history
+  itself. `messages` holds `{role, text}` turns and, between them, a
+  `{role: "tool", index, name, arguments, status}` row per tool the model
+  called: added on the `"running"` event (`onTool`, `chatAboutPhoto`'s
+  sixth argument), updated in place on `"done"`, rendered as
+  `.photo-chat-tool` (spinner, then a tick; `describeToolCall` turns the
+  tool name + arguments into "Searching for photos of “beach”").
+  `toHistory()` drops those rows and merges assistant bubbles a tool call
+  split in two back into one message, since some chat templates reject two
+  assistant turns in a row. The conversation deliberately does *not* reset
   when `photoId` changes: a search closes the open photo to show its
   results, and resetting would wipe the very reply that announced them.
   Only the boxes are cleared on a photo change. A failed request (e.g. the
@@ -1060,23 +1112,19 @@ cached) is also per-pod, in-memory state — same caveat.
   soon as the next message is sent); a non-`null` `searchResults` goes up
   through `onSearchResults`.
 
-  `chatAboutPhoto` itself (in `client.js`) decides streaming vs. JSON purely
-  from the *response's* `content-type` — never a client-side copy of
-  `LUMINARY_OPENAI_STREAMING` — so the frontend doesn't need its own
-  knowledge of that server setting at all. For a streamed reply it reads
-  `response.body` incrementally via `getReader()`/`TextDecoder`, splits it
+  `chatAboutPhoto` itself (in `client.js`) reads the response by its
+  `content-type`: the event stream (`application/x-ndjson`, every
+  successful reply) incrementally via `getReader()`/`TextDecoder`, split
   into JSON lines (keeping an unfinished trailing line for the next read),
-  invokes `onChunk` per `text` event and keeps the latest `boxes` and
-  `search_results` events, still resolving to
-  `{reply, boxes, searchResults}` at the end, so callers that don't
-  care about incremental display can ignore `onChunk` entirely. In
-  `PhotoChat.jsx`, `handleSubmit`'s `onChunk`
-  callback grows a single assistant message in place (tracked by index via
-  `streamingIndexRef`, a ref rather than state since it must be readable/
-  settable synchronously from inside the chunk callback without waiting on
-  a render) — if no chunk ever arrives (a plain JSON reply), the full reply
-  is appended once at the end instead, so both response shapes render
-  through the same message list with no special-casing in the JSX.
+  invoking `onChunk` per `text` event and `onTool` per `tool` event and
+  keeping the latest `boxes` and `search_results`, resolving to
+  `{reply, boxes, searchResults}` at the end; a JSON body is an error (or
+  a whole reply, still handled). In `PhotoChat.jsx`, `handleSubmit`'s
+  `onChunk` grows the assistant message at the *end* of the list, or
+  starts a new one when the list ends in anything else (the user's
+  message, or a tool row — so text after a tool call gets its own bubble
+  below it). Both updaters are pure functions of the previous state (no
+  ref tracking an index): React StrictMode runs updaters twice.
 
 ## Container builds and proxying
 

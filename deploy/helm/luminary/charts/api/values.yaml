@@ -76,6 +76,20 @@ env:
   # Validate the openai endpoint's TLS certificate. On by default; turn
   # off only for a trusted endpoint with a self-signed/internal-CA cert.
   openaiVerifySsl: true
+  # --- MLflow tracing of the chat's and description rewrite's LLM calls
+  # (tracing.py) ---------------------------------------------------------
+  # Tracking server URL. Empty (the default) = no tracing. An unreachable
+  # server never fails the app: it logs an error and retries in the
+  # background.
+  mlflowTrackingUri: ""
+  # Experiment the traces are filed under.
+  mlflowExperimentName: "luminary"
+  # MLflow workspace (OpenShift AI: the namespace it maps to). Empty = unset.
+  mlflowWorkspace: ""
+  # "kubernetes-namespaced" authenticates with the pod's own
+  # service-account token, no Secret needed (see mlflowIntegration below
+  # for the RoleBinding OpenShift AI requires). Empty = no auth.
+  mlflowTrackingAuth: ""
   # --- Description embeddings for similarity search (embeddings.py) -----
   # Hugging Face model id for photos.description_embedding -- a local
   # model run in-process (sentence-transformers), unrelated to the openai
@@ -125,3 +139,13 @@ env:
 route:
   enabled: true
   host: ""
+
+# OpenShift AI's MLflow only accepts kubernetes-namespaced auth
+# (env.mlflowTrackingAuth) from service accounts bound to its integration
+# ClusterRole; being in the namespace isn't enough. List the service
+# account(s) the api pod runs as ("default" unless the Deployment is given
+# another) to have the chart create that RoleBinding. Only rendered when
+# env.mlflowTrackingUri is set.
+mlflowIntegration:
+  serviceAccounts: []
+  clusterRole: mlflow-operator-mlflow-integration

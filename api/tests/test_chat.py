@@ -12,6 +12,12 @@ def _get_synced_photo_id(client, tmp_path):
     return client.get("/api/photos").json()["photos"][0]["id"]
 
 
+def _events(response):
+    """The chat routes' response body: one JSON event per line."""
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    return [json.loads(line) for line in response.text.splitlines()]
+
+
 def test_chat_404s_for_unknown_photo(client):
     response = client.post(
         "/api/photos/does-not-exist/chat", json={"message": "hi", "history": []}
@@ -25,13 +31,21 @@ def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
     captured = {}
 
     box = {"label": "square", "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}
+    tool = {"index": 0, "name": "locate_object", "arguments": {"object": "square"}}
+    reply_events = [
+        {"tool": {**tool, "status": "running"}},
+        {"tool": {**tool, "status": "done"}},
+        {"boxes": [box]},
+        {"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}]},
+        {"text": "a red square"},
+    ]
 
     def fake_ask(photo_bytes, content_type, message, history, search_list=None):
         captured["args"] = (content_type, message, history)
         captured["search_list"] = search_list
-        return chat.ChatReply(text="a red square", boxes=[box], search_results=[{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}])
+        return iter(reply_events)
 
-    monkeypatch.setattr(chat, "ask", fake_ask)
+    monkeypatch.setattr(chat, "ask_events", fake_ask)
 
     response = client.post(
         f"/api/photos/{photo_id}/chat",
@@ -42,7 +56,8 @@ def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
         },
     )
     assert response.status_code == 200
-    assert response.json() == {"reply": "a red square", "boxes": [box], "search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}]}
+    # Every event goes out as its own line, in order -- tool calls included.
+    assert _events(response) == reply_events
     # The search list the client holds is handed to the chat, not the model.
     assert captured["search_list"] == [{"id": "p2", "filename": "b.jpg", "score": 0.5}]
     content_type, message, history = captured["args"]
@@ -57,7 +72,7 @@ def test_chat_returns_503_when_backend_not_configured(client, tmp_path, monkeypa
     def fake_ask(*args, **kwargs):
         raise chat.ChatNotConfigured("set LUMINARY_OPENAI_API_KEY")
 
-    monkeypatch.setattr(chat, "ask", fake_ask)
+    monkeypatch.setattr(chat, "ask_events", fake_ask)
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
     assert response.status_code == 503
@@ -70,7 +85,7 @@ def test_chat_returns_502_when_backend_raises_unexpectedly(client, tmp_path, mon
     def fake_ask(*args, **kwargs):
         raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(chat, "ask", fake_ask)
+    monkeypatch.setattr(chat, "ask_events", fake_ask)
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
     assert response.status_code == 502
@@ -89,7 +104,7 @@ def test_chat_returns_502_not_400_for_a_valueerror_from_the_backend(client, tmp_
     def fake_ask(*args, **kwargs):
         raise ValueError("1 validation error for ChatCompletion")
 
-    monkeypatch.setattr(chat, "ask", fake_ask)
+    monkeypatch.setattr(chat, "ask_events", fake_ask)
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
     assert response.status_code == 502
@@ -1070,14 +1085,14 @@ def test_library_chat_needs_no_photo(client, monkeypatch):
 
     def fake_ask(photo_bytes, content_type, message, history, search_list=None):
         captured["args"] = (photo_bytes, content_type, message, search_list)
-        return chat.ChatReply(text="Found two.", search_results=[{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}])
+        return iter([{"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]}, {"text": "Found one."}])
 
-    monkeypatch.setattr(chat, "ask", fake_ask)
+    monkeypatch.setattr(chat, "ask_events", fake_ask)
 
     response = client.post("/api/chat", json={"message": "find beach photos"})
 
     assert response.status_code == 200
-    assert response.json() == {"reply": "Found two.", "boxes": [], "search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}]}
+    assert _events(response) == [{"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]}, {"text": "Found one."}]
     assert captured["args"] == (None, None, "find beach photos", None)
 
 
@@ -1085,7 +1100,7 @@ def test_library_chat_returns_503_when_not_configured(client, monkeypatch):
     def fake_ask(*args, **kwargs):
         raise chat.ChatNotConfigured("set LUMINARY_OPENAI_API_KEY")
 
-    monkeypatch.setattr(chat, "ask", fake_ask)
+    monkeypatch.setattr(chat, "ask_events", fake_ask)
 
     assert client.post("/api/chat", json={"message": "hi"}).status_code == 503
 
@@ -1322,7 +1337,14 @@ def test_ask_stream_runs_a_streamed_tool_call_then_streams_the_answer(monkeypatc
 
     events = list(chat.ask_stream(b"bytes", "image/jpeg", "where is the dog?", []))
 
-    assert events == [{"boxes": [_DOG_BOX]}, {"text": "In the "}, {"text": "corner."}]
+    tool = {"index": 0, "name": "locate_object", "arguments": {"object": "the dog"}}
+    assert events == [
+        {"tool": {**tool, "status": "running"}},
+        {"tool": {**tool, "status": "done"}},
+        {"boxes": [_DOG_BOX]},
+        {"text": "In the "},
+        {"text": "corner."},
+    ]
     assert calls[1]["messages"][-1] == {"role": "tool", "tool_call_id": "call-1", "content": "found the dog"}
     assert calls[1]["messages"][-2]["tool_calls"][0]["function"]["arguments"] == '{"object": "the dog"}'
 
@@ -1354,17 +1376,66 @@ def test_ask_stream_reports_search_results_as_an_event(monkeypatch):
 
     events = list(chat.ask_stream(None, None, "find a", []))
 
-    assert events == [{"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]}, {"text": "Found one."}]
+    tool = {"index": 0, "name": "search_photos_by_text", "arguments": {"text": "a"}}
+    assert events == [
+        {"tool": {**tool, "status": "running"}},
+        {"tool": {**tool, "status": "done"}},
+        {"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]},
+        {"text": "Found one."},
+    ]
 
 
-def test_chat_endpoint_streams_when_enabled(client, tmp_path, monkeypatch):
+def test_ask_events_reports_a_tool_call_before_running_it(monkeypatch):
+    # The "running" event must be out before the tool starts, so the UI
+    # can show a slow search while it is still going.
+    ran = []
+
+    def slow_search(text):
+        ran.append(text)
+        return [_photo("p1", "a.jpg")]
+
+    monkeypatch.setattr(storage, "search_photos_by_text", slow_search)
+    monkeypatch.delenv("LUMINARY_OPENAI_STREAMING", raising=False)
+    _install_fake_openai(
+        monkeypatch,
+        [
+            _FakeResponse(
+                _FakeMessage(
+                    tool_calls=[
+                        _FakeToolCall("c1", "search_photos_by_text", '{"text": "a"}'),
+                        _FakeToolCall("c2", "list_tags", "not json"),
+                    ]
+                )
+            ),
+            _FakeResponse(_FakeMessage(content="Found one.")),
+        ],
+    )
+
+    events = chat.ask_events(None, None, "find a", [])
+
+    search = {"index": 0, "name": "search_photos_by_text", "arguments": {"text": "a"}}
+    assert next(events) == {"tool": {**search, "status": "running"}}
+    assert ran == []
+    assert next(events) == {"tool": {**search, "status": "done"}}
+    assert ran == ["a"]
+    # Arguments that aren't a JSON object are reported as None; the reply
+    # (not streamed here) comes as one text event at the end.
+    tags = {"index": 1, "name": "list_tags", "arguments": None}
+    assert list(events) == [
+        {"tool": {**tags, "status": "running"}},
+        {"tool": {**tags, "status": "done"}},
+        {"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]},
+        {"text": "Found one."},
+    ]
+
+
+def test_chat_endpoint_streams_events(client, tmp_path, monkeypatch):
     photo_id = _get_synced_photo_id(client, tmp_path)
 
     def fake_ask_stream(photo_bytes, content_type, message, history, search_list=None):
         return iter([{"text": "Hel"}, {"boxes": [_DOG_BOX]}, {"text": "lo"}])
 
-    monkeypatch.setattr(chat, "should_stream", lambda: True)
-    monkeypatch.setattr(chat, "ask_stream", fake_ask_stream)
+    monkeypatch.setattr(chat, "ask_events", fake_ask_stream)
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
@@ -1381,8 +1452,7 @@ def test_chat_endpoint_reports_a_mid_stream_failure_in_band(client, tmp_path, mo
         yield {"text": "Hel"}
         raise RuntimeError("connection dropped")
 
-    monkeypatch.setattr(chat, "should_stream", lambda: True)
-    monkeypatch.setattr(chat, "ask_stream", lambda *args: failing_events())
+    monkeypatch.setattr(chat, "ask_events", lambda *args: failing_events())
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
@@ -1391,8 +1461,8 @@ def test_chat_endpoint_reports_a_mid_stream_failure_in_band(client, tmp_path, mo
     assert events == [{"text": "Hel"}, {"text": "\n[chat backend failed]"}]
 
 
-def test_chat_endpoint_streaming_still_503s_when_not_configured(client, tmp_path, monkeypatch):
-    # The config check in ask_stream() must run before the streaming
+def test_chat_endpoint_still_503s_when_not_configured(client, tmp_path, monkeypatch):
+    # The config check in ask_events() must run before the streaming
     # response starts, so a misconfigured backend is still a clean 503 --
     # not a 200 with a broken/empty stream.
     photo_id = _get_synced_photo_id(client, tmp_path)
@@ -1400,8 +1470,7 @@ def test_chat_endpoint_streaming_still_503s_when_not_configured(client, tmp_path
     def fake_ask_stream(*args, **kwargs):
         raise chat.ChatNotConfigured("set LUMINARY_OPENAI_API_KEY")
 
-    monkeypatch.setattr(chat, "should_stream", lambda: True)
-    monkeypatch.setattr(chat, "ask_stream", fake_ask_stream)
+    monkeypatch.setattr(chat, "ask_events", fake_ask_stream)
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
@@ -1409,17 +1478,30 @@ def test_chat_endpoint_streaming_still_503s_when_not_configured(client, tmp_path
     assert response.headers["content-type"].startswith("application/json")
 
 
-def test_chat_endpoint_does_not_stream_by_default(client, tmp_path, monkeypatch):
+def test_chat_endpoint_502s_when_the_first_model_call_fails(client, tmp_path, monkeypatch):
+    # The first event is read before the response starts, so a failure of
+    # the first call to the chat model (wrong model name, server down) is
+    # still a real 502, not a 200 with "[chat backend failed]" in it.
     photo_id = _get_synced_photo_id(client, tmp_path)
-    monkeypatch.delenv("LUMINARY_OPENAI_STREAMING", raising=False)
 
-    monkeypatch.setattr(chat, "ask", lambda *args, **kwargs: chat.ChatReply(text="a plain reply"))
+    def failing_events():
+        raise RuntimeError("model not found")
+        yield
+
+    monkeypatch.setattr(chat, "ask_events", lambda *args: failing_events())
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
-    assert response.status_code == 200
+    assert response.status_code == 502
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json() == {"reply": "a plain reply", "boxes": [], "search_results": None}
+
+
+def test_ask_events_sends_the_whole_reply_at_once_by_default(monkeypatch):
+    monkeypatch.delenv("LUMINARY_OPENAI_STREAMING", raising=False)
+    calls = _install_fake_openai(monkeypatch, [_FakeResponse(_FakeMessage(content="a plain reply"))])
+
+    assert list(chat.ask_events(None, None, "hi", [])) == [{"text": "a plain reply"}]
+    assert "stream" not in calls[0]
 
 
 @pytest.mark.parametrize("raw,expected", [(None, True), ("true", True), ("false", False), ("0", False), ("off", False)])

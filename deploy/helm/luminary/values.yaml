@@ -65,6 +65,14 @@ api:
     # with that script's OPENAI_SECRET_NAME.
     openaiApiKeySecret: luminary-openai-credentials
     openaiStreaming: false
+    # MLflow tracing (tracing.py) is off until mlflowTrackingUri is set.
+    # For this cluster's OpenShift AI MLflow, set these four and add
+    # "default" to api.mlflowIntegration.serviceAccounts:
+    #   mlflowTrackingUri: "https://rh-ai.apps.ocp.home.glroland.com/mlflow"
+    #   mlflowWorkspace: "luminary"
+    #   mlflowExperimentName: "luminary"
+    #   mlflowTrackingAuth: "kubernetes-namespaced"
+    mlflowTrackingUri: ""
     # The in-cluster KServe service above presents a cert that doesn't
     # validate against the pod's trust store, so verification is off here.
     openaiVerifySsl: false

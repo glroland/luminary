@@ -257,7 +257,7 @@ describe("App", () => {
 
     // No photo is open, so the chat is about the library as a whole.
     // There is no search list yet to send along.
-    expect(chatMock).toHaveBeenCalledWith(null, "find party photos", [], expect.any(Function), null);
+    expect(chatMock).toHaveBeenCalledWith(null, "find party photos", [], expect.any(Function), null, expect.any(Function));
     await waitFor(() => expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument());
     expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
     // Each result's match score is on its tile.
@@ -280,7 +280,7 @@ describe("App", () => {
     // The next message carries the search list back, for the model's tools
     // to filter or truncate -- it isn't part of the conversation text.
     await searchViaChat("only the best ones");
-    expect(chatMock).toHaveBeenLastCalledWith(null, "only the best ones", expect.any(Array), expect.any(Function), [party]);
+    expect(chatMock).toHaveBeenLastCalledWith(null, "only the best ones", expect.any(Array), expect.any(Function), [party], expect.any(Function));
   });
 
   it("shows search results in the order given: best score first", async () => {
@@ -325,7 +325,7 @@ describe("App", () => {
     await searchViaChat("find party photos");
 
     // The open photo is what the model was shown.
-    expect(chatMock).toHaveBeenCalledWith("1", "find party photos", [], expect.any(Function), null);
+    expect(chatMock).toHaveBeenCalledWith("1", "find party photos", [], expect.any(Function), null, expect.any(Function));
     await waitFor(() => expect(document.querySelector(".photo-modal")).not.toBeInTheDocument());
     expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
     expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument();

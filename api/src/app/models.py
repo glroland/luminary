@@ -91,31 +91,10 @@ class ChatRequest(BaseModel):
     search_list: Optional[list[SearchListEntry]] = None
 
 
-class BoundingBox(BaseModel):
-    # Pixel coordinates in the *original* photo's own coordinate space
-    # (matching Photo.width/height) -- never a resized/internal coordinate
-    # space some model happened to process at. See chat.ChatReply.
-    label: str
-    x1: float
-    y1: float
-    x2: float
-    y2: float
-
-
-class ChatResponse(BaseModel):
-    reply: str
-    # Non-empty only when the chat model ran its object search this turn
-    # and found something. See chat.ChatReply.
-    boxes: list[BoundingBox] = []
-    # The search list, best score first, when the chat model changed it
-    # this turn (searched, filtered or truncated) -- [] if a first search
-    # matched nothing, null if it wasn't touched. The web UI shows these
-    # as the gallery's "Search Results".
-    search_results: Optional[list[SearchListEntry]] = None
-
-
 class FaceBox(BaseModel):
-    # Same pixel-coordinate convention as BoundingBox, but no `label` --
+    # Pixel coordinates in the *original* photo's own coordinate space
+    # (matching Photo.width/height), the same convention as the boxes the
+    # chat's object search reports (chat.ChatReply.boxes), but no `label` --
     # the `faces` table doesn't store one; every row is a face by
     # construction (see sync.py's Florence-2 face-detection pipeline).
     id: str

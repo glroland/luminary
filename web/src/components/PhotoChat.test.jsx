@@ -31,7 +31,7 @@ describe("PhotoChat", () => {
       expect(screen.getByText("It's a red square.")).toBeInTheDocument();
     });
 
-    expect(chatMock).toHaveBeenCalledWith("1", "Where was this taken?", [], expect.any(Function), null);
+    expect(chatMock).toHaveBeenCalledWith("1", "Where was this taken?", [], expect.any(Function), null, expect.any(Function));
   });
 
   it("has no backend checkbox -- the model decides when to search for an object", () => {
@@ -63,7 +63,8 @@ describe("PhotoChat", () => {
         { role: "assistant", text: "first reply" },
       ],
       expect.any(Function),
-      null
+      null,
+      expect.any(Function),
     );
   });
 
@@ -118,6 +119,67 @@ describe("PhotoChat", () => {
     expect(screen.getAllByText(/Hello, world/)).toHaveLength(1);
   });
 
+  it("shows each tool call as it starts, then marks it finished", async () => {
+    let finish;
+    vi.spyOn(client, "chatAboutPhoto").mockImplementation(
+      async (photoId, message, history, onChunk, searchList, onTool) => {
+        const call = { index: 0, name: "search_photos_semantic", arguments: { query: "beach", mode: "filter" } };
+        onTool({ ...call, status: "running" });
+        await new Promise((resolve) => {
+          finish = resolve;
+        });
+        onTool({ ...call, status: "done" });
+        onChunk("Found 3.");
+        return { reply: "Found 3.", boxes: [], searchResults: null };
+      },
+    );
+
+    render(<PhotoChat photoId={null} />);
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "beach photos" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    // The row is there while the tool is still running, before any reply.
+    const row = await screen.findByText("Searching for photos of “beach” (narrowing the results)");
+    expect(row).toHaveAttribute("data-status", "running");
+    expect(screen.queryByText("Found 3.")).not.toBeInTheDocument();
+
+    await act(async () => finish());
+
+    await waitFor(() => expect(screen.getByText("Found 3.")).toBeInTheDocument());
+    expect(row).toHaveAttribute("data-status", "done");
+    // One row for the call, not one per event.
+    expect(screen.getAllByText(/searching for photos of/i)).toHaveLength(1);
+  });
+
+  it("leaves tool rows out of the history, and sends a reply split by one as a single turn", async () => {
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockImplementationOnce(async (photoId, message, history, onChunk, searchList, onTool) => {
+        onChunk("Let me look.");
+        onTool({ index: 0, name: "list_tags", arguments: {}, status: "running" });
+        onTool({ index: 0, name: "list_tags", arguments: {}, status: "done" });
+        onChunk("You have two tags.");
+        return { reply: "Let me look.You have two tags.", boxes: [], searchResults: null };
+      })
+      .mockResolvedValueOnce({ reply: "ok", boxes: [], searchResults: null });
+
+    render(<PhotoChat photoId={null} />);
+    const input = screen.getByLabelText(/chat message/i);
+    fireEvent.change(input, { target: { value: "what tags are there?" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(screen.getByText("You have two tags.")).toBeInTheDocument());
+    expect(screen.getByText("Listing tags")).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "thanks" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(chatMock).toHaveBeenCalledTimes(2));
+
+    expect(chatMock.mock.calls[1][2]).toEqual([
+      { role: "user", text: "what tags are there?" },
+      { role: "assistant", text: "Let me look.\nYou have two tags." },
+    ]);
+  });
+
   it("reports boxes the model's object search found via onBoxesChange", async () => {
     const boxes = [{ label: "the dog", x1: 1, y1: 2, x2: 3, y2: 4 }];
     vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "found it", boxes });
@@ -169,7 +231,7 @@ describe("PhotoChat", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(screen.getByText("Found 3.")).toBeInTheDocument());
-    expect(chatMock).toHaveBeenCalledWith(null, "find beach photos", [], expect.any(Function), previous);
+    expect(chatMock).toHaveBeenCalledWith(null, "find beach photos", [], expect.any(Function), previous, expect.any(Function));
     expect(onSearchResults).toHaveBeenCalledWith(found);
   });
 

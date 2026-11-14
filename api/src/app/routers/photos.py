@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
 from .. import chat, embeddings, storage, tags
-from ..models import ChatRequest, ChatResponse, FaceList, Photo, PhotoList, PhotoSearchResults, PhotoTagList
+from ..models import ChatRequest, FaceList, Photo, PhotoList, PhotoSearchResults, PhotoTagList
 
 logger = logging.getLogger(__name__)
 
@@ -182,14 +182,14 @@ def purge_database() -> None:
     storage.purge_all()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat")
 def chat_about_library(body: ChatRequest):
     """Chat with no photo open: the model has its photo-search tools, but
     no image to look at."""
     return _chat(None, None, body, "the library")
 
 
-@router.post("/photos/{photo_id}/chat", response_model=ChatResponse)
+@router.post("/photos/{photo_id}/chat")
 def chat_about_photo(photo_id: str, body: ChatRequest):
     photo = storage.get_photo(photo_id)
     if not photo:
@@ -218,48 +218,41 @@ def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
     # truncate an earlier search. See chat._Turn.
     search_list = None if body.search_list is None else [entry.model_dump() for entry in body.search_list]
 
-    if chat.should_stream():
-        # chat.ask_stream() validates config and builds the request
-        # *before* returning its generator (see _prepare_openai_call's
-        # docstring), so ChatNotConfigured/other setup failures still
-        # become a normal HTTPException here, before any streaming
-        # response has started -- only a failure *during* generation (after
-        # the 200 and some chunks may already be out) can't change the
-        # status code any more; that case is surfaced in-band in the
-        # stream itself, logged server-side either way.
-        try:
-            events = chat.ask_stream(photo_bytes, content_type, body.message, history, search_list)
-        except chat.ChatNotConfigured as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
-        except Exception:
-            logger.exception("Chat failed to start streaming for %s", subject)
-            raise HTTPException(status_code=502, detail="Chat backend failed")
-
-        # One JSON object per line: {"text": ...} reply pieces,
-        # {"boxes": [...]} when the model located something in the photo,
-        # {"search_results": [...]} when it changed the search list.
-        def generate():
-            try:
-                for event in events:
-                    yield json.dumps(event) + "\n"
-            except Exception:
-                logger.exception("Streaming chat failed mid-stream for %s", subject)
-                yield json.dumps({"text": "\n[chat backend failed]"}) + "\n"
-
-        return StreamingResponse(generate(), media_type="application/x-ndjson")
-
+    # chat.ask_events() validates config and builds the request *before*
+    # returning its iterator (see chat._ask_openai_events), so
+    # ChatNotConfigured/other setup failures become a normal HTTPException
+    # here. Reading the first event before the response is constructed
+    # extends that to the first call to the chat model, which is where a
+    # wrong model name or an unreachable server shows up. Deliberately
+    # broad `except Exception` (never a ValueError -> 400 branch): this
+    # must also catch things like pydantic.ValidationError, a ValueError
+    # subclass the openai SDK raises when parsing a non-conforming response
+    # from a self-hosted server -- a backend failure, not a bad request.
     try:
-        result = chat.ask(photo_bytes, content_type, body.message, history, search_list)
+        events = iter(chat.ask_events(photo_bytes, content_type, body.message, history, search_list))
+        first = next(events, None)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
-        # Deliberately broad: this must also catch things like
-        # pydantic.ValidationError (a ValueError subclass) raised from
-        # inside the openai SDK when parsing a non-conforming response from
-        # a self-hosted OpenAI-compatible server -- that's a backend
-        # failure, not a malformed request, and must not come back as a
-        # misleading 400.
         logger.exception("Chat failed for %s", subject)
         raise HTTPException(status_code=502, detail="Chat backend failed")
 
-    return {"reply": result.text, "boxes": result.boxes, "search_results": result.search_results}
+    # Always a stream, one JSON object per line, so the web UI can show a
+    # tool call while it is still running: {"tool": {...}} when the model
+    # calls a tool and again when it finishes, {"text": ...} reply pieces
+    # (one piece unless LUMINARY_OPENAI_STREAMING is on), {"boxes": [...]}
+    # when the model located something in the photo and
+    # {"search_results": [...]} when it changed the search list. Once the
+    # response has started the status code can't change any more, so a
+    # later failure is reported in-band, logged server-side either way.
+    def generate():
+        try:
+            if first is not None:
+                yield json.dumps(first) + "\n"
+            for event in events:
+                yield json.dumps(event) + "\n"
+        except Exception:
+            logger.exception("Chat failed mid-stream for %s", subject)
+            yield json.dumps({"text": "\n[chat backend failed]"}) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")

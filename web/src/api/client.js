@@ -58,7 +58,7 @@ export async function fetchSyncStatus() {
 // ids, best first, or null if the model didn't search this turn. Pass
 // onChunk to also be notified of each reply piece as it arrives (never
 // called for a JSON reply).
-export async function chatAboutPhoto(photoId, message, history, onChunk, searchList = null) {
+export async function chatAboutPhoto(photoId, message, history, onChunk, searchList = null, onTool = null) {
   let response;
   try {
     response = await fetch(`${API_BASE}${photoId ? `/photos/${photoId}/chat` : "/chat"}`, {
@@ -97,6 +97,9 @@ export async function chatAboutPhoto(photoId, message, history, onChunk, searchL
       full += event.text;
       onChunk?.(event.text);
     }
+    // {index, name, arguments, status}: sent when the model calls a tool
+    // ("running") and again when that call finishes ("done").
+    if (event.tool) onTool?.(event.tool);
     if (Array.isArray(event.boxes)) boxes = event.boxes;
     if (Array.isArray(event.search_results)) searchResults = event.search_results;
   }

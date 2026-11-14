@@ -13,6 +13,9 @@ if str(SRC_DIR) not in sys.path:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LUMINARY_PHOTOS_URI", str(tmp_path / "photos"))
+    # Never trace a test run to a real MLflow server because the shell that
+    # started it happens to have one configured (see tracing.py).
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
 
     from app import chat, sync
     from app.database import get_connection

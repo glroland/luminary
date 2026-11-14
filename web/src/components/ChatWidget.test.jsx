@@ -45,7 +45,7 @@ describe("ChatWidget", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(screen.getByText("Found it.")).toBeInTheDocument());
-    expect(chatMock).toHaveBeenCalledWith("p1", "the dog", [], expect.any(Function), null);
+    expect(chatMock).toHaveBeenCalledWith("p1", "the dog", [], expect.any(Function), null, expect.any(Function));
     expect(onBoxesChange).toHaveBeenLastCalledWith(boxes);
   });
 

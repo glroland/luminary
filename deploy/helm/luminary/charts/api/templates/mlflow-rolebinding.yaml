@@ -1,0 +1,21 @@
+{{- if and .Values.env.mlflowTrackingUri .Values.mlflowIntegration.serviceAccounts }}
+{{- $root := . }}
+{{- range .Values.mlflowIntegration.serviceAccounts }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "api.fullname" $root }}-mlflow-{{ . }}
+  labels:
+    {{- include "api.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $root.Values.mlflowIntegration.clusterRole }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ . }}
+    namespace: {{ $root.Release.Namespace }}
+{{- end }}
+{{- end }}

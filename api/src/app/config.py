@@ -121,6 +121,21 @@ def get_openai_streaming() -> bool:
     return os.environ.get("LUMINARY_OPENAI_STREAMING", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
+def get_mlflow_tracking_uri() -> Optional[str]:
+    """The MLflow tracking server tracing.py sends traces to; unset (the
+    default) means no tracing. MLFLOW_TRACKING_URI is mlflow's own
+    variable, not a LUMINARY_ one, on purpose: mlflow reads it -- and
+    MLFLOW_TRACKING_AUTH, MLFLOW_WORKSPACE, MLFLOW_TRACKING_TOKEN etc. --
+    straight from the environment itself."""
+    return os.environ.get("MLFLOW_TRACKING_URI") or None
+
+
+def get_mlflow_experiment_name() -> str:
+    """The MLflow experiment traces are filed under (MLFLOW_EXPERIMENT_NAME,
+    also mlflow's own variable)."""
+    return os.environ.get("MLFLOW_EXPERIMENT_NAME") or "luminary"
+
+
 def get_chat_tools() -> bool:
     """Whether chat offers the model its tools (photo search, and locating
     an object in the open photo -- see chat.py). On by default -- turn it
