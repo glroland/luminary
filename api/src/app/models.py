@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -73,12 +73,6 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    # Validated here (not left to chat.ask()'s own check) so an unknown
-    # backend is rejected by FastAPI's request parsing (422) before the
-    # handler runs -- that keeps the router's exception handling for
-    # chat.ask() unambiguous: anything it raises is a real backend failure,
-    # never a malformed request.
-    backend: Literal["openai", "florence"]
     message: str
     history: list[ChatMessage] = []
 
@@ -96,9 +90,8 @@ class BoundingBox(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
-    # Only ever non-empty for a florence grounding result -- the openai
-    # backend has no concept of image regions. Always [] for a streamed
-    # reply too (streaming is openai-only, see chat.should_stream).
+    # Non-empty only when the chat model ran its object search this turn
+    # and found something. See chat.ChatReply.
     boxes: list[BoundingBox] = []
 
 

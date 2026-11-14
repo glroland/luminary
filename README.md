@@ -90,7 +90,7 @@ target/               (generated, gitignored) local venv and pytest cache --
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
 | POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, failed, error}` |
-| POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{backend: "openai"\|"florence", message, history}` → `{reply}` (JSON), or a streamed `text/plain` body if `LUMINARY_OPENAI_STREAMING` is on; see "Photo chat" below |
+| POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{message, history}` → `{reply, boxes}` (JSON), or a streamed `application/x-ndjson` body if `LUMINARY_OPENAI_STREAMING` is on; see "Photo chat" below |
 
 `POST /api/sync` is the only way photos enter the index — point
 `LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
@@ -288,43 +288,50 @@ without a full rebuild.
 
 ### Photo chat
 
-`POST /api/photos/{id}/chat` answers questions about a photo via one of two
-backends, picked per-request with the `backend` field (the web UI exposes
-this as a checkbox):
+`POST /api/photos/{id}/chat` answers questions about a photo with any
+OpenAI-*compatible* multimodal chat endpoint, via the `openai` Python SDK.
+`LUMINARY_OPENAI_BASE_URL` is never assumed to be `api.openai.com` — point
+it at a self-hosted server (vLLM, Ollama, LM Studio, etc.) if that's what
+you're running. The image is base64-encoded and attached to the current
+message on every call.
 
-- **`"openai"`** — any OpenAI-*compatible* multimodal chat endpoint, via the
-  `openai` Python SDK. `LUMINARY_OPENAI_BASE_URL` is never assumed to be
-  `api.openai.com` — point it at a self-hosted server (vLLM, Ollama, LM
-  Studio, etc.) if that's what you're running. The image is base64-encoded
-  and attached to the current message on every call. Can optionally stream
-  the reply back token-by-token (`LUMINARY_OPENAI_STREAMING`, **off by
-  default**) — when enabled, the endpoint responds with `text/plain` and the
-  reply arrives incrementally instead of all at once in the JSON body; the
-  web UI handles either response shape transparently (it checks the
-  response's content type, not a client-side setting).
-- **`"florence"`** — a local [Florence-2](https://huggingface.co/microsoft/Florence-2-base)
-  vision-language model, run in-process via `torch`/`transformers`
-  (`trust_remote_code=True`, per the model card). The model loads lazily on
-  first use and is cached in memory afterward. **Florence-2 is not a
-  conversational VQA model** — its public API is a fixed set of task tokens
-  (captioning, OCR, object detection, phrase grounding), with no token for
-  "answer this arbitrary question". A non-empty chat message is used as a
-  phrase to *locate* in the photo (`<CAPTION_TO_PHRASE_GROUNDING>`) — the
-  reply names the approximate bounding box(es) found, not a sentence
-  answering a question. An empty message instead runs
-  `<MORE_DETAILED_CAPTION>` for a general description.
+**Object search.** The chat model is given one tool, `locate_object`, and
+decides for itself when a question needs it ("where's the dog?", "is there
+a stop sign?"). It passes the phrase to search for; the API runs it through
+a local [Florence-2](https://huggingface.co/microsoft/Florence-2-base)
+vision-language model (`<CAPTION_TO_PHRASE_GROUNDING>`, in-process via
+`torch`/`transformers`, loaded lazily on first use), hands the bounding
+boxes found back to the chat model to word its answer, and returns them in
+the response's `boxes` so the web UI can highlight them on the photo.
+Florence-2 isn't a conversational model — it only locates a phrase — which
+is why it's a tool of the chat model rather than something you pick.
+
+The tool is offered only when `LUMINARY_CHAT_OBJECT_SEARCH` is on (the
+default) and `torch`/`transformers` are installed. **The chat endpoint has
+to support tool calling** — e.g. vLLM needs `--enable-auto-tool-choice` and
+a `--tool-call-parser` for the model. If yours rejects requests that carry
+`tools`, set `LUMINARY_CHAT_OBJECT_SEARCH=false` and chat works as plain
+question answering.
+
+**Streaming.** With `LUMINARY_OPENAI_STREAMING` (**off by default**) the
+endpoint responds with `application/x-ndjson` instead of one JSON body: one
+JSON object per line, `{"text": ...}` for each piece of the reply and
+`{"boxes": [...]}` when an object search found something. The web UI
+handles either response shape transparently (it checks the response's
+content type, not a client-side setting).
 
 | Variable                   | Default                     | Purpose                              |
 |-----------------------------|------------------------------|---------------------------------------|
-| `LUMINARY_OPENAI_API_KEY`  | *(none)*                    | Required for the `openai` backend     |
+| `LUMINARY_OPENAI_API_KEY`  | *(none)*                    | Required                              |
 | `LUMINARY_OPENAI_BASE_URL` | *(none — SDK default)*      | OpenAI-compatible endpoint URL        |
 | `LUMINARY_OPENAI_MODEL`    | *(none)*                    | Required — the model name as your server calls it |
-| `LUMINARY_OPENAI_STREAMING`| `false`                     | Stream the reply token-by-token instead of all at once (`openai` backend only) |
+| `LUMINARY_OPENAI_STREAMING`| `false`                     | Stream the reply token-by-token instead of all at once |
+| `LUMINARY_CHAT_OBJECT_SEARCH`| `true`                    | Offer the chat model the `locate_object` tool; set `false` if the endpoint doesn't support tool calling (Helm: `api.env.chatObjectSearch`) |
 | `LUMINARY_OPENAI_VERIFY_SSL`| `true`                     | Validate the endpoint's TLS certificate; set `false` only for a trusted self-signed/internal-CA endpoint (Helm: `api.env.openaiVerifySsl`) |
-| `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint             |
+| `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint (object search, and captions at index time) |
 | `LUMINARY_FLORENCE_DEVICE` | `cpu`                       | `cpu` or `cuda`                       |
 
-A backend that's missing required config returns `503` with a message
+Chat that's missing required config returns `503` with a message
 naming the missing variable, rather than a generic failure.
 
 In Kubernetes, `LUMINARY_OPENAI_API_KEY` is sourced from a `Secret` via the
@@ -632,7 +639,7 @@ this repository and self-heal any drift.
   `luminary-unittest` is separate from `luminary-dev` (what `make run-api`
   uses), so a test run never clears your locally-indexed dev photos. Chat
   tests mock the `openai` client and the
-  `chat.ask`/`chat._ask_florence` boundary rather than hitting a real
+  `chat.ask`/`chat.locate_object` boundary rather than hitting a real
   endpoint or loading real model weights; the Florence-2 "torch/transformers
   not installed" error path is simulated by patching `__import__` rather
   than relying on them being absent from the environment (`make install`
@@ -654,10 +661,10 @@ this repository and self-heal any drift.
   fresh, unpooled Postgres connection per call — fine at this project's
   scale, but a connection pool would be the first thing to add alongside
   multi-replica support.
-- The Florence-2 chat backend has been smoke-tested end-to-end against real
+- Florence-2 has been smoke-tested end-to-end against real
   `microsoft/Florence-2-base` weights on CPU (both the grounding and plain
   caption paths). Unit tests cover the documented boundary
-  (`chat._load_florence`/`chat._ask_florence`) with fakes, plus the
+  (`chat._load_florence`/`chat.locate_object`) with fakes, plus the
   "torch/transformers not installed" path simulated at the import boundary
   (not relied on as ambient environment state, since `make install` does
   pull them in from `requirements.txt`). Pin `transformers==4.49.0` exactly

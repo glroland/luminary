@@ -394,58 +394,82 @@ cached) is also per-pod, in-memory state — same caveat.
   (`routers/photos.py:chat_about_photo`), which reads the full original via
   `storage.read_original_bytes` (unlike `stream_original`, chat needs the
   whole image in memory, not a chunked HTTP response) and calls
-  `chat.ask(backend, photo_bytes, content_type, message, history)`.
-  `backend` is `"openai"` or `"florence"`, picked per-request by the
-  frontend's checkbox — there's no server-side default/fallback between
-  them. Validated as a `Literal["openai", "florence"]` on `ChatRequest`
-  (`models.py`), not by `chat.ask()`'s own `ValueError` check — an
-  unrecognized value is rejected as a `422` by FastAPI's request parsing
-  before the handler body even runs. That's deliberate, not incidental: an
-  earlier version let `chat.ask()`'s `ValueError` (meant only for "unknown
-  backend") be caught by a bare `except ValueError` in the router and
-  mapped to `400`, which also silently caught `pydantic.ValidationError`
-  bubbling up from inside the `openai` SDK (e.g. parsing a non-conforming
-  response from a self-hosted OpenAI-compatible server — it **is** a
-  `ValueError` subclass) and misreported a real backend failure as a
-  malformed request. `chat_about_photo` must not have an `except
-  ValueError` branch — let anything chat.ask() raises other than
-  `ChatNotConfigured` fall through to the generic `except Exception` → `502`
-  (full traceback goes to the log either way).
+  `chat.ask(photo_bytes, content_type, message, history)`. There is one
+  chat model, an OpenAI-compatible endpoint; Florence-2 is no longer a
+  selectable backend (the old `backend` request field and the UI checkbox
+  that set it are gone) but a *tool* that chat model can call — see
+  "Object search" below. `chat_about_photo` must not have an `except
+  ValueError` branch: an earlier version had one (mapped to `400`), which
+  also silently caught `pydantic.ValidationError` bubbling up from inside
+  the `openai` SDK (e.g. parsing a non-conforming response from a
+  self-hosted OpenAI-compatible server — it **is** a `ValueError`
+  subclass) and misreported a real backend failure as a malformed request.
+  Let anything chat.ask() raises other than `ChatNotConfigured` fall
+  through to the generic `except Exception` → `502` (full traceback goes
+  to the log either way).
 
-  Both backends' real dependencies (`openai`; `torch`/`transformers`/
+  Both sides' real dependencies (`openai`; `torch`/`transformers`/
   `timm`/`einops`) are imported **lazily inside the functions that use
   them**, not at module top — `chat.py` itself, and the rest of the app,
   must keep importing cleanly whether or not either is installed. Don't
-  move those imports to module level. Missing config or missing deps both
+  move those imports to module level. Missing openai config or deps
   surface as `chat.ChatNotConfigured`, mapped to a `503` with a message
   naming what's missing — never let either reach the client as a bare
   `ImportError`/`500`.
 
-  **Streaming** (`LUMINARY_OPENAI_STREAMING`, off by default,
-  `config.get_openai_streaming()`): only the `openai` backend supports it —
-  `chat.should_stream(backend)` is `False` for `"florence"` regardless of
-  the flag, since Florence-2's API has no token-by-token output to stream.
-  When `should_stream()` is true, `chat_about_photo` calls
-  `chat.ask_stream(...)` instead of `chat.ask(...)` and wraps it in a
-  `StreamingResponse(..., media_type="text/plain")` instead of returning
-  `ChatResponse` JSON — the frontend tells which one it got from the
-  response's own `content-type` header, not from a client-side copy of the
-  setting. `ask_stream()` → `_ask_openai_stream()` is written so
-  `_prepare_openai_call()` (config validation + building the `openai`
-  client/messages) runs **eagerly, before the generator is returned** —
-  not deferred into the generator function itself — specifically so
-  `ChatNotConfigured` (and anything else from that setup step) still raises
-  synchronously when the router calls `chat.ask_stream(...)`, while the
-  `StreamingResponse` hasn't been constructed yet and the router can still
-  turn it into a normal `503`/`502` `HTTPException`. Don't collapse
-  `_ask_openai_stream` back into a single generator function — once the
-  HTTP response has actually started streaming, the status code can no
-  longer change, so a failure at that point (rare — a genuine network
-  failure mid-generation, not a config problem) is the one case handled by
-  yielding an inline `"\n[chat backend failed]"` marker into the stream
-  instead, logged server-side either way.
+  **Object search** (the `locate_object` tool, `_LOCATE_OBJECT_TOOL`): the
+  chat model decides when a question needs something located and calls the
+  tool with the phrase to search for; `_run_tool_call` runs
+  `chat.locate_object(photo_bytes, phrase)` (Florence-2 phrase grounding,
+  on the *original* bytes, not the downscaled copy the chat model was
+  sent — boxes must be in the original photo's pixel space), appends the
+  text result to the conversation as a `role: "tool"` message, and
+  collects the boxes into `ChatReply.boxes` for the frontend to draw.
+  `_ask_openai` loops up to `_MAX_CHAT_ROUNDS` times; `_chat_tools()`
+  omits `tools` on the last round so a turn always ends in an answer, and
+  omits the key entirely (never an empty list) whenever the tool isn't
+  offered. It's offered only when `LUMINARY_CHAT_OBJECT_SEARCH`
+  (`config.get_chat_object_search()`, default on) is set *and*
+  `_object_search_available()` finds torch/transformers via
+  `importlib.util.find_spec` (a lookup, not an import). The flag exists
+  because an OpenAI-compatible server without tool calling enabled (e.g.
+  vLLM without `--enable-auto-tool-choice`) rejects any request carrying
+  `tools`, which would otherwise break chat outright. A tool failure —
+  Florence-2 missing (`ChatNotConfigured`), a crash, malformed arguments —
+  is never raised: it's logged and handed back to the model as the tool's
+  result text, so the model can still answer from the photo itself.
 
-  **OpenAI-compatible path** (`_ask_openai`): `LUMINARY_OPENAI_BASE_URL` has
+  **Streaming** (`LUMINARY_OPENAI_STREAMING`, off by default,
+  `config.get_openai_streaming()`, `chat.should_stream()`): when on,
+  `chat_about_photo` calls `chat.ask_stream(...)` instead of
+  `chat.ask(...)` and wraps it in a
+  `StreamingResponse(..., media_type="application/x-ndjson")` instead of
+  returning `ChatResponse` JSON — the frontend tells which one it got from
+  the response's own `content-type` header, not from a client-side copy of
+  the setting. `ask_stream()` yields *events*, not bare strings — a dict
+  with one key, `{"text": ...}` for a reply piece or `{"boxes": [...]}`
+  after an object search found something — and the router writes each as
+  one JSON line. (It was `text/plain` before the tool existed; plain text
+  had nowhere to carry boxes.) A streamed tool call arrives in fragments
+  across chunks (id/name once, the arguments JSON in pieces, keyed by
+  `index`); `generate()` reassembles them before running the tool, then
+  starts the next streamed round. `ask_stream()` → `_ask_openai_stream()`
+  is written so `_prepare_openai_call()` (config validation + building the
+  `openai` client/messages) runs **eagerly, before the generator is
+  returned** — not deferred into the generator function itself —
+  specifically so `ChatNotConfigured` (and anything else from that setup
+  step) still raises synchronously when the router calls
+  `chat.ask_stream(...)`, while the `StreamingResponse` hasn't been
+  constructed yet and the router can still turn it into a normal
+  `503`/`502` `HTTPException`. Don't collapse `_ask_openai_stream` back
+  into a single generator function — once the HTTP response has actually
+  started streaming, the status code can no longer change, so a failure at
+  that point (rare — a genuine network failure mid-generation, not a
+  config problem) is the one case handled by yielding an inline
+  `{"text": "\n[chat backend failed]"}` event into the stream instead,
+  logged server-side either way.
+
+  **The chat model** (`_ask_openai`): `LUMINARY_OPENAI_BASE_URL` has
   no default of our own choosing — leaving it unset falls through to the
   `openai` SDK's own default (`api.openai.com`), which is only correct if
   that's genuinely the target; don't special-case or assume it elsewhere.
@@ -470,8 +494,8 @@ cached) is also per-pod, in-memory state — same caveat.
   when a self-hosted gateway's error body doesn't match the shape it
   expects, and that body is usually where the actual diagnostic is.
 
-  **Florence-2 path** (`_ask_florence` / `_load_florence`): loads
-  `LUMINARY_FLORENCE_MODEL` (default `microsoft/Florence-2-base`) via
+  **Florence-2** (`locate_object` / `caption_image` / `_load_florence`):
+  loads `LUMINARY_FLORENCE_MODEL` (default `microsoft/Florence-2-base`) via
   `transformers.AutoModelForCausalLM`/`AutoProcessor` with
   `trust_remote_code=True`, per the
   [model card](https://huggingface.co/microsoft/Florence-2-base)'s sample
@@ -479,24 +503,24 @@ cached) is also per-pod, in-memory state — same caveat.
   globals for the life of the process. **This is not a conversational VQA
   model**: its public API is a fixed set of task-prompt tokens (captioning,
   OCR, object detection, phrase grounding) with no token for open-ended
-  question answering. Exactly one task takes free text alongside the task
+  question answering — which is why it's a tool of the chat model, not a
+  chat backend. Exactly one task takes free text alongside the task
   token — `<CAPTION_TO_PHRASE_GROUNDING>` (`chat._FLORENCE_GROUNDING_TASK`)
   — and it means "locate this phrase in the image", returning bounding
-  box(es), not an answer. `_ask_florence` uses that task with the user's
-  message as the phrase whenever the message is non-empty (formatted into
-  readable text by `_format_grounding_result`); an empty message instead
-  runs `<MORE_DETAILED_CAPTION>` (`chat._FLORENCE_CAPTION_TASK`) for a plain
-  description. Don't route the message into any *other* task token without
+  box(es), not an answer. `locate_object` uses that task with the tool's
+  `object` argument as the phrase (formatted into text for the chat model
+  by `_format_grounding_result`); `<MORE_DETAILED_CAPTION>`
+  (`chat._FLORENCE_CAPTION_TASK`) is `caption_image()`, used only by
+  `sync.py`. Don't route text into any *other* task token without
   re-reading the model card first — none of the rest take a text input, and
   the model wasn't trained to combine them with trailing free text the way
   `run_example()` does for grounding specifically (task token and text
   concatenated with no separator — match that exactly, it's part of the
-  trained format, not just a readability choice). `_ask_florence` must not
-  `import torch` at its own top level before calling `_load_florence()` —
-  that import has to happen after `_load_florence()` has already succeeded
-  (confirming torch is actually importable), or a missing-dependency
-  environment raises a raw `ImportError` instead of the intended
-  `ChatNotConfigured`.
+  trained format, not just a readability choice). `_run_florence_task` must
+  not `import torch` before calling `_load_florence()` — that import has
+  to happen after `_load_florence()` has already succeeded (confirming
+  torch is actually importable), or a missing-dependency environment
+  raises a raw `ImportError` instead of the intended `ChatNotConfigured`.
 
   **Pin `transformers==4.49.0` exactly** — don't bump it without testing
   Florence-2 loads afterward. Its model repo ships its own modeling/config
@@ -924,8 +948,9 @@ cached) is also per-pod, in-memory state — same caveat.
   (`.chat-widget`'s `z-index`), so it's usable while a photo is open.
   `App.jsx` passes it `selectedPhoto` — the photo open in the modal is
   what the chat is about, since the chat API is per-photo — and lifts the
-  florence backend's located boxes into its own `chatBoxes` state, handed
-  to `PhotoModal.jsx` to draw. With no photo open, `PhotoChat` disables
+  boxes the chat model's object search located (`chat.py`'s
+  `locate_object` tool) into its own `chatBoxes` state, handed to
+  `PhotoModal.jsx` to draw. With no photo open, `PhotoChat` disables
   its form and says to open one; there is no photo-less chat endpoint yet.
   The popup is hidden (`hidden` attribute), not unmounted, when closed, so
   the conversation survives closing and reopening it.
@@ -934,27 +959,29 @@ cached) is also per-pod, in-memory state — same caveat.
   (literal colours, same in both themes); its halo animates via CSS, not
   SMIL, so the reduced-motion block stills it.
 - `PhotoChat.jsx` talks to `POST /api/photos/{id}/chat` via
-  `client.js`'s `chatAboutPhoto(photoId, backend, message, history, onChunk)`.
-  A checkbox picks `backend` ("florence" when checked, "openai" otherwise,
-  per the two chat paths in `chat.py`) — checking it also shows a static
-  hint that Florence-2 always returns a description rather than answering
-  the specific question (see `chat.py`'s module docstring for why). Message
-  history sent on each call is built from the component's own local
-  `messages` state (`{role, text}` per turn, oldest first) — there's no
-  server-side conversation state, each request carries the full relevant
-  history itself. Resets (`messages`/`draft`/`error`) when `photoId`
-  changes. A failed request (e.g. the `503` "not configured" case) surfaces
-  `err.message` in a `role="alert"` element rather than silently dropping
-  the user's message.
+  `client.js`'s `chatAboutPhoto(photoId, message, history, onChunk)`.
+  There is no backend picker: whether to search the photo for an object is
+  the chat model's call, server-side (see `chat.py`'s "Object search"). An
+  empty message is never sent. Message history sent on each call is built
+  from the component's own local `messages` state (`{role, text}` per
+  turn, oldest first) — there's no server-side conversation state, each
+  request carries the full relevant history itself. Resets
+  (`messages`/`draft`/`error`) when `photoId` changes. A failed request
+  (e.g. the `503` "not configured" case) surfaces `err.message` in a
+  `role="alert"` element rather than silently dropping the user's message.
+  Boxes that come back with a reply go up through `onBoxesChange`; they're
+  cleared again as soon as the next message is sent.
 
   `chatAboutPhoto` itself (in `client.js`) decides streaming vs. JSON purely
   from the *response's* `content-type` — never a client-side copy of
   `LUMINARY_OPENAI_STREAMING` — so the frontend doesn't need its own
   knowledge of that server setting at all. For a streamed reply it reads
-  `response.body` incrementally via `getReader()`/`TextDecoder`, invoking
-  `onChunk` per piece and still resolving to the full concatenated text at
-  the end, so callers that don't care about incremental display can ignore
-  `onChunk` entirely. In `PhotoChat.jsx`, `handleSubmit`'s `onChunk`
+  `response.body` incrementally via `getReader()`/`TextDecoder`, splits it
+  into JSON lines (keeping an unfinished trailing line for the next read),
+  invokes `onChunk` per `text` event and keeps the latest `boxes` event,
+  still resolving to `{reply, boxes}` at the end, so callers that don't
+  care about incremental display can ignore `onChunk` entirely. In
+  `PhotoChat.jsx`, `handleSubmit`'s `onChunk`
   callback grows a single assistant message in place (tracked by index via
   `streamingIndexRef`, a ref rather than state since it must be readable/
   settable synchronously from inside the chunk callback without waiting on

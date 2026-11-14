@@ -66,9 +66,12 @@ env:
   # in this values file.
   openaiApiKeySecret: ""
   # Stream the reply back token-by-token instead of all at once. Off by
-  # default; only applies to the openai backend (Florence-2 has no
-  # streaming API to use regardless of this setting).
+  # default.
   openaiStreaming: false
+  # Offer the chat model its object-search tool (Florence-2 grounding).
+  # Turn off if the openai endpoint rejects requests that carry `tools`
+  # (e.g. vLLM started without --enable-auto-tool-choice).
+  chatObjectSearch: true
   # Validate the openai endpoint's TLS certificate. On by default; turn
   # off only for a trusted endpoint with a self-signed/internal-CA cert.
   openaiVerifySsl: true

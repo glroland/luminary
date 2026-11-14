@@ -13,7 +13,7 @@ describe("PhotoChat", () => {
     expect(screen.getByText(/ask something about this photo/i)).toBeInTheDocument();
   });
 
-  it("sends the message to the openai backend by default and shows the reply", async () => {
+  it("sends the message and shows the reply", async () => {
     const chatMock = vi
       .spyOn(client, "chatAboutPhoto")
       .mockResolvedValue({ reply: "It's a red square.", boxes: [] });
@@ -31,29 +31,12 @@ describe("PhotoChat", () => {
       expect(screen.getByText("It's a red square.")).toBeInTheDocument();
     });
 
-    expect(chatMock).toHaveBeenCalledWith("1", "openai", "Where was this taken?", [], expect.any(Function));
+    expect(chatMock).toHaveBeenCalledWith("1", "Where was this taken?", [], expect.any(Function));
   });
 
-  it("sends to the florence backend when the checkbox is checked", async () => {
-    const chatMock = vi
-      .spyOn(client, "chatAboutPhoto")
-      .mockResolvedValue({ reply: "A detailed caption.", boxes: [] });
-
+  it("has no backend checkbox -- the model decides when to search for an object", () => {
     render(<PhotoChat photoId="1" />);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /object detection/i }));
-    expect(screen.getByText(/doesn't answer questions/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/chat message/i)).toHaveAttribute(
-      "placeholder",
-      "What object are you looking for?"
-    );
-
-    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "hi" } });
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
-
-    await waitFor(() => {
-      expect(chatMock).toHaveBeenCalledWith("1", "florence", "hi", [], expect.any(Function));
-    });
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("sends prior turns as history on the next message", async () => {
@@ -74,7 +57,6 @@ describe("PhotoChat", () => {
 
     expect(chatMock).toHaveBeenLastCalledWith(
       "1",
-      "openai",
       "second question",
       [
         { role: "user", text: "first question" },
@@ -99,7 +81,7 @@ describe("PhotoChat", () => {
     });
   });
 
-  it("does not send an empty or whitespace-only message to openai", () => {
+  it("does not send an empty or whitespace-only message", () => {
     const chatMock = vi.spyOn(client, "chatAboutPhoto");
 
     render(<PhotoChat photoId="1" />);
@@ -112,27 +94,8 @@ describe("PhotoChat", () => {
     expect(chatMock).not.toHaveBeenCalled();
   });
 
-  it("sends an empty message to florence for a general description", async () => {
-    const chatMock = vi
-      .spyOn(client, "chatAboutPhoto")
-      .mockResolvedValue({ reply: "a detailed caption", boxes: [] });
-
-    render(<PhotoChat photoId="1" />);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /object detection/i }));
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
-
-    expect(screen.getByText("(describe this photo)")).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByText("a detailed caption")).toBeInTheDocument();
-    });
-
-    expect(chatMock).toHaveBeenCalledWith("1", "florence", "", [], expect.any(Function));
-  });
-
   it("grows the assistant message in place as streamed chunks arrive", async () => {
-    vi.spyOn(client, "chatAboutPhoto").mockImplementation(async (photoId, backend, message, history, onChunk) => {
+    vi.spyOn(client, "chatAboutPhoto").mockImplementation(async (photoId, message, history, onChunk) => {
       onChunk("Hel");
       // "Thinking..." must disappear as soon as the first chunk starts the
       // assistant message, not only once the whole reply has arrived.
@@ -154,15 +117,14 @@ describe("PhotoChat", () => {
     expect(screen.getAllByText(/Hello, world/)).toHaveLength(1);
   });
 
-  it("reports boxes from a florence grounding reply via onBoxesChange", async () => {
+  it("reports boxes the model's object search found via onBoxesChange", async () => {
     const boxes = [{ label: "the dog", x1: 1, y1: 2, x2: 3, y2: 4 }];
     vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "found it", boxes });
     const onBoxesChange = vi.fn();
 
     render(<PhotoChat photoId="1" onBoxesChange={onBoxesChange} />);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /object detection/i }));
-    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "the dog" } });
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "where is the dog?" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => {

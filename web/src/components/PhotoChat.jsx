@@ -8,7 +8,6 @@ import { chatAboutPhoto } from "../api/client.js";
 export default function PhotoChat({ photoId, onBoxesChange }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
-  const [useFlorence, setUseFlorence] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
   // Index of the assistant message currently being grown by streamed
@@ -28,21 +27,19 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
   async function handleSubmit(event) {
     event.preventDefault();
     const text = draft.trim();
-    const backend = useFlorence ? "florence" : "openai";
-    // Florence-2 treats an empty message as "just describe the photo"
-    // (see chat.py) rather than a question -- only the openai backend needs
-    // a non-empty message to be worth sending.
-    if (!photoId || isSending || (!text && backend !== "florence")) return;
+    if (!photoId || isSending || !text) return;
 
     const history = messages.map((message) => ({ role: message.role, text: message.text }));
 
-    setMessages((current) => [...current, { role: "user", text: text || "(describe this photo)" }]);
+    setMessages((current) => [...current, { role: "user", text }]);
     setDraft("");
     setError(null);
     setIsSending(true);
     streamingIndexRef.current = null;
     // Clear any box(es) drawn for the previous turn immediately -- they're
-    // specific to that reply, not the conversation as a whole.
+    // specific to that reply, not the conversation as a whole. New ones
+    // arrive with the reply if the model searched the photo for an object
+    // (its locate_object tool, see chat.py) and found it.
     onBoxesChange?.([]);
 
     function handleChunk(chunk) {
@@ -59,7 +56,7 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
     }
 
     try {
-      const { reply, boxes } = await chatAboutPhoto(photoId, backend, text, history, handleChunk);
+      const { reply, boxes } = await chatAboutPhoto(photoId, text, history, handleChunk);
       if (streamingIndexRef.current === null) {
         // A plain (non-streaming) reply: no chunks arrived via handleChunk,
         // so the message was never started above -- append it now.
@@ -80,11 +77,9 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
     <div className="photo-chat">
       <div className="photo-chat-messages">
         {messages.length === 0 ? (
-          !photoId ? (
-            <p className="photo-chat-empty">Open a photo to chat about it.</p>
-          ) : (
-            !useFlorence && <p className="photo-chat-empty">Ask something about this photo.</p>
-          )
+          <p className="photo-chat-empty">
+            {photoId ? "Ask something about this photo." : "Open a photo to chat about it."}
+          </p>
         ) : (
           messages.map((message, index) => (
             <div key={index} className={`photo-chat-message photo-chat-message-${message.role}`}>
@@ -106,7 +101,7 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
           type="text"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder={useFlorence ? "What object are you looking for?" : "Ask about this photo..."}
+          placeholder="Ask about this photo..."
           aria-label="Chat message"
           disabled={isSending || !photoId}
         />
@@ -115,20 +110,6 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
         </button>
       </form>
 
-      <label className="photo-chat-backend">
-        <input
-          type="checkbox"
-          checked={useFlorence}
-          onChange={(event) => setUseFlorence(event.target.checked)}
-        />
-        Natural Language Object Detection
-      </label>
-      {useFlorence && (
-        <p className="photo-chat-hint">
-          Locates objects from a short phrase (e.g. "the dog") using the local Florence-2 model — it
-          doesn't answer questions. Leave the message blank for a general description instead.
-        </p>
-      )}
     </div>
   );
 }

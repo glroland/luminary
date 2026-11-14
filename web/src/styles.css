@@ -1196,22 +1196,6 @@ textarea {
   flex-direction: column;
 }
 
-.photo-chat-backend {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.8rem;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.photo-chat-hint {
-  margin: 0.35rem 0 0;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
 .photo-chat-messages {
   flex: 1;
   overflow-y: auto;

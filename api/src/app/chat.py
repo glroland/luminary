@@ -1,33 +1,35 @@
-"""Chat about a photo, via one of two interchangeable backends:
+"""Chat about a photo with an OpenAI-*compatible* multimodal chat endpoint
+(self-hosted or not -- LUMINARY_OPENAI_BASE_URL is never assumed to be
+api.openai.com), which can call one tool of ours: a visual object search
+run by a local Florence-2 vision-language model (see
+https://huggingface.co/microsoft/Florence-2-base), in-process via
+transformers/torch.
 
-- "openai": any OpenAI-*compatible* multimodal chat endpoint (self-hosted or
-  not -- LUMINARY_OPENAI_BASE_URL is never assumed to be api.openai.com).
-- "florence": a local Florence-2 vision-language model (see
-  https://huggingface.co/microsoft/Florence-2-base), run in-process via
-  transformers/torch.
-
-Both are heavy, optional dependencies (openai is light; torch/transformers
-are not) -- imported lazily inside the functions that need them, not at
-module import time, so the API starts and the rest of the test suite runs
-without requiring either to be installed or configured.
+Both are optional dependencies (openai is light; torch/transformers are
+not) -- imported lazily inside the functions that need them, not at module
+import time, so the API starts and the rest of the test suite runs without
+requiring either to be installed or configured.
 
 Florence-2 is not a conversational VQA model: its API is a fixed set of task
 tokens (captioning, OCR, object detection, phrase grounding), not free-form
-question answering -- there's no task token for "answer this arbitrary
-question about the image". Exactly one task accepts free text alongside the
-task token: <CAPTION_TO_PHRASE_GROUNDING>, which takes a caption/phrase and
-returns the bounding box(es) where it appears in the image (see
-run_example() in the model card) -- not a natural-language answer. The
-Florence-2 path uses that task, with the user's message as the phrase to
-ground, whenever the message is non-empty; an empty message falls back to
-<MORE_DETAILED_CAPTION>. The frontend should make this limitation visible
-rather than implying it's a general-purpose chat model: a user's question
-("where was this taken?") won't be answered, but a phrase ("the dog") will
-be located. ask() returns a ChatReply (not a bare string) so that
-grounding's bounding boxes can travel alongside the reply text -- see its
-docstring -- for the frontend to draw as an overlay on the full-size image.
+question answering. Exactly one task accepts free text alongside the task
+token: <CAPTION_TO_PHRASE_GROUNDING>, which takes a phrase and returns the
+bounding box(es) where it appears in the image (see run_example() in the
+model card) -- not a natural-language answer. That's why it's a *tool* of
+the chat model rather than a chat backend of its own (it used to be one,
+picked with a checkbox in the UI): the chat model decides when a question
+needs something located ("where's the dog?"), calls `locate_object` with
+the phrase to search for, and words the answer itself. The boxes found
+travel back alongside the reply (ChatReply.boxes) for the frontend to draw
+on the full-size image.
 
-The openai backend can optionally stream its reply back token-by-token
+The tool is only offered when LUMINARY_CHAT_OBJECT_SEARCH is on (the
+default) and torch/transformers are importable -- see
+_object_search_available(). Turn it off for an OpenAI-compatible server
+that rejects requests carrying `tools` (e.g. vLLM started without tool
+calling enabled); chat then works as plain question answering.
+
+The reply can optionally be streamed back token-by-token
 (LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
 ask_stream() vs. the always-available, full-reply-at-once ask().
 
@@ -52,12 +54,15 @@ anything in this module, for the face-boxes step of its indexing pipeline.
 """
 
 import base64
+import importlib.util
 import io
+import json
 import logging
 import threading
 from dataclasses import dataclass, field
 
 from .config import (
+    get_chat_object_search,
     get_florence_device,
     get_florence_model,
     get_openai_api_key,
@@ -84,11 +89,11 @@ class ChatNotConfigured(Exception):
 @dataclass
 class ChatReply:
     """Return shape of ask(): `text` is always the human-readable reply.
-    `boxes` is non-empty only for a florence grounding result (never for
-    openai, which has no concept of image regions) -- each is
+    `boxes` is non-empty only when the model called the locate_object tool
+    this turn and it found something -- each is
     {"label": str, "x1"/"y1"/"x2"/"y2": float} in the *original* photo's
     pixel coordinate space (matching Photo.width/height from the API, not
-    whatever resolution the model processed internally), so the frontend
+    whatever resolution either model processed internally), so the frontend
     can position an overlay directly against the full-size image without
     knowing anything about Florence-2's internals."""
 
@@ -96,36 +101,30 @@ class ChatReply:
     boxes: list[dict] = field(default_factory=list)
 
 
-def ask(backend: str, photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> ChatReply:
+def ask(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> ChatReply:
     """Ask a question about a photo, returning the full reply at once.
     `history` is a list of {"role": "user"|"assistant", "text": str}
     dicts, oldest first."""
-    if backend == "openai":
-        return ChatReply(text=_ask_openai(photo_bytes, content_type, message, history))
-    if backend == "florence":
-        return _ask_florence(photo_bytes, message)
-    raise ValueError(f"Unknown chat backend: {backend!r}")
+    return _ask_openai(photo_bytes, content_type, message, history)
 
 
-def should_stream(backend: str) -> bool:
-    """Whether a chat request for this backend should use the streaming
-    response path (ask_stream) instead of ask(). Only "openai" supports
-    streaming -- Florence-2's API is a single blocking generate() call with
-    no token-by-token output -- and only when LUMINARY_OPENAI_STREAMING is
-    enabled (default off)."""
-    return backend == "openai" and get_openai_streaming()
+def should_stream() -> bool:
+    """Whether a chat request should use the streaming response path
+    (ask_stream) instead of ask() -- LUMINARY_OPENAI_STREAMING, default
+    off."""
+    return get_openai_streaming()
 
 
-def ask_stream(backend: str, photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
-    """Streaming counterpart to ask(), for when should_stream(backend) is
-    True. Returns an iterator of reply text chunks. Only implemented for
-    "openai" -- callers must check should_stream() first."""
-    if backend != "openai":
-        raise ValueError(f"Streaming isn't supported for backend {backend!r}")
+def ask_stream(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+    """Streaming counterpart to ask(), for when should_stream() is True.
+    Returns an iterator of events, each a dict with exactly one key:
+    {"text": str} for the next piece of the reply, or {"boxes": [...]}
+    (same shape as ChatReply.boxes, the turn's full list so far) once a
+    locate_object call has found something."""
     return _ask_openai_stream(photo_bytes, content_type, message, history)
 
 
-# --- Path 1: OpenAI-compatible multimodal endpoint -------------------------
+# --- The chat model: an OpenAI-compatible multimodal endpoint ---------------
 
 
 def _downscale_for_chat(photo_bytes: bytes, content_type: str) -> tuple[bytes, str]:
@@ -225,14 +224,131 @@ def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, hi
     return client, model, messages
 
 
-def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> str:
-    client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
+# The model may call the tool, read the result, and call it again (e.g. a
+# second phrase after the first found nothing). The last round is always
+# made without tools, so a turn can't loop: it has to end in an answer.
+_MAX_CHAT_ROUNDS = 4
+
+_LOCATE_OBJECT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "locate_object",
+        "description": (
+            "Search the photo for an object with a visual grounding model and get back the "
+            "bounding box of each match. The matches are also highlighted on the photo for "
+            "the user. Call this when the user asks to find, locate, point out or show where "
+            "something is, or when you need to confirm whether a specific object is present. "
+            "Don't call it for questions you can answer just by looking at the photo."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "object": {
+                    "type": "string",
+                    "description": 'What to search for, as a short noun phrase, e.g. "the dog" or "red car".',
+                }
+            },
+            "required": ["object"],
+        },
+    },
+}
+
+
+def _object_search_available() -> bool:
+    """Whether to offer the model the locate_object tool at all: switched
+    on (LUMINARY_CHAT_OBJECT_SEARCH), and Florence-2's dependencies are
+    installed. find_spec() only looks the packages up -- it doesn't import
+    them, so this stays cheap and keeps torch a lazy import."""
+    if not get_chat_object_search():
+        return False
     try:
-        response = client.chat.completions.create(model=model, messages=messages, max_tokens=500)
-    except Exception as exc:
-        _log_upstream_error_body(exc)
-        raise
-    return response.choices[0].message.content
+        return all(importlib.util.find_spec(name) is not None for name in ("torch", "transformers"))
+    except (ImportError, ValueError):
+        return False
+
+
+def _chat_tools(round_index: int) -> dict:
+    """Extra kwargs for one chat.completions.create() call: the tool list,
+    or nothing -- `tools` is left out entirely rather than sent empty, since
+    some OpenAI-compatible servers reject an empty list."""
+    if round_index < _MAX_CHAT_ROUNDS - 1 and _object_search_available():
+        return {"tools": [_LOCATE_OBJECT_TOOL]}
+    return {}
+
+
+def _run_tool_calls(messages: list, content: str, calls: list[dict], photo_bytes: bytes, boxes: list) -> None:
+    """Record the model's tool calls (each {"id", "name", "arguments"},
+    `arguments` still the raw JSON string) and their results on `messages`,
+    ready for the next round, appending any boxes found to `boxes`. A tool
+    failure never fails the chat: it's reported back to the model as the
+    tool's result, so the model can still answer from the photo itself."""
+    messages.append(
+        {
+            "role": "assistant",
+            "content": content or "",
+            "tool_calls": [
+                {
+                    "id": call["id"],
+                    "type": "function",
+                    "function": {"name": call["name"], "arguments": call["arguments"]},
+                }
+                for call in calls
+            ],
+        }
+    )
+    for call in calls:
+        messages.append(
+            {"role": "tool", "tool_call_id": call["id"], "content": _run_tool_call(call, photo_bytes, boxes)}
+        )
+
+
+def _run_tool_call(call: dict, photo_bytes: bytes, boxes: list) -> str:
+    if call["name"] != _LOCATE_OBJECT_TOOL["function"]["name"]:
+        return f"Unknown tool: {call['name']}"
+    try:
+        arguments = json.loads(call["arguments"] or "{}")
+        phrase = arguments.get("object") if isinstance(arguments, dict) else None
+    except ValueError:
+        phrase = None
+    if not isinstance(phrase, str) or not phrase.strip():
+        return 'Invalid arguments: "object" must be a non-empty string.'
+
+    try:
+        text, found = locate_object(photo_bytes, phrase.strip())
+    except ChatNotConfigured:
+        logger.warning("Chat model called locate_object, but Florence-2 isn't available")
+        return "Object search isn't available on this server."
+    except Exception:
+        logger.exception("locate_object(%r) failed", phrase)
+        return "Object search failed."
+
+    logger.info("Chat model searched the photo for %r: %d match(es)", phrase, len(found))
+    boxes.extend(found)
+    return text
+
+
+def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> ChatReply:
+    client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
+    boxes: list[dict] = []
+    for round_index in range(_MAX_CHAT_ROUNDS):
+        try:
+            response = client.chat.completions.create(
+                model=model, messages=messages, max_tokens=500, **_chat_tools(round_index)
+            )
+        except Exception as exc:
+            _log_upstream_error_body(exc)
+            raise
+        reply = response.choices[0].message
+        # getattr: not every OpenAI-compatible server includes the field.
+        tool_calls = getattr(reply, "tool_calls", None)
+        if not tool_calls:
+            break
+        calls = [
+            {"id": call.id, "name": call.function.name, "arguments": call.function.arguments}
+            for call in tool_calls
+        ]
+        _run_tool_calls(messages, reply.content, calls, photo_bytes, boxes)
+    return ChatReply(text=reply.content or "", boxes=boxes)
 
 
 def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
@@ -245,12 +361,38 @@ def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, hist
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
 
     def generate():
+        boxes: list[dict] = []
         try:
-            stream = client.chat.completions.create(model=model, messages=messages, max_tokens=500, stream=True)
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    yield delta
+            for round_index in range(_MAX_CHAT_ROUNDS):
+                stream = client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=500, stream=True, **_chat_tools(round_index)
+                )
+                content = ""
+                # A tool call arrives in fragments across chunks, keyed by
+                # its index: id and name once, the arguments JSON in pieces.
+                calls: dict[int, dict] = {}
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        content += delta.content
+                        yield {"text": delta.content}
+                    for fragment in getattr(delta, "tool_calls", None) or []:
+                        call = calls.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
+                        if fragment.id:
+                            call["id"] = fragment.id
+                        if fragment.function is not None:
+                            if fragment.function.name:
+                                call["name"] = fragment.function.name
+                            if fragment.function.arguments:
+                                call["arguments"] += fragment.function.arguments
+                if not calls:
+                    return
+                found_before = len(boxes)
+                _run_tool_calls(messages, content, [calls[index] for index in sorted(calls)], photo_bytes, boxes)
+                if len(boxes) > found_before:
+                    yield {"boxes": list(boxes)}
         except Exception as exc:
             _log_upstream_error_body(exc)
             raise
@@ -258,13 +400,13 @@ def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, hist
     return generate()
 
 
-# --- Path 2: local Florence-2 vision-language model -------------------------
+# --- Florence-2: the locate_object tool, and sync.py's captions -------------
 
-# Used when the chat message is empty -- a plain description, no text input.
+# A plain description, no text input -- caption_image(), for sync.py.
 _FLORENCE_CAPTION_TASK = "<MORE_DETAILED_CAPTION>"
 # The one Florence-2 task that takes free text alongside the task token: a
 # caption/phrase to locate in the image, returned as bounding box(es) -- not
-# a natural-language answer. Used whenever the chat message is non-empty.
+# a natural-language answer. This is what the locate_object tool runs.
 _FLORENCE_GROUNDING_TASK = "<CAPTION_TO_PHRASE_GROUNDING>"
 
 _florence_lock = threading.Lock()
@@ -307,7 +449,7 @@ def _run_florence_task(image, task: str, phrase: str = "") -> dict:
     """Shared Florence-2 inference step: load the model, run `task` (with
     `phrase` appended for the one task that takes free text -- see module
     docstring), and return the parsed result for that task key. `image`
-    must already be RGB and EXIF-transposed (see caption_image/_ask_florence
+    must already be RGB and EXIF-transposed (see caption_image/locate_object
     for why that matters)."""
     model, processor = _load_florence()
     import torch
@@ -334,15 +476,17 @@ def _run_florence_task(image, task: str, phrase: str = "") -> dict:
 def caption_image(image) -> str:
     """Run Florence-2's <MORE_DETAILED_CAPTION> task on an already-opened,
     already RGB, already EXIF-transposed image (e.g. the one sync.py opens
-    per-file) and return the plain-text description. Shared between
-    _ask_florence's empty-message case and sync.py's auto-description-on-
-    index path, so both describe the image the same way. Raises
-    ChatNotConfigured if torch/transformers aren't installed, same as
-    ask()."""
+    per-file) and return the plain-text description, for sync.py's
+    auto-description-on-index path. Raises ChatNotConfigured if
+    torch/transformers aren't installed."""
     return _run_florence_task(image, _FLORENCE_CAPTION_TASK)
 
 
-def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:
+def locate_object(photo_bytes: bytes, phrase: str) -> tuple[str, list[dict]]:
+    """The locate_object tool: find `phrase` in the photo with Florence-2's
+    phrase grounding. Returns (a text result for the chat model to read,
+    the boxes for the frontend to draw). Raises ChatNotConfigured if
+    torch/transformers aren't installed."""
     from PIL import Image, ImageOps  # Pillow is a core dependency, always safe to import
 
     # Raise ChatNotConfigured (missing torch/transformers) before doing
@@ -358,26 +502,29 @@ def _ask_florence(photo_bytes: bytes, message: str) -> ChatReply:
     # relative to what the frontend overlays them on.
     image = ImageOps.exif_transpose(image) or image
 
-    phrase = message.strip()
-    if not phrase:
-        return ChatReply(text=caption_image(image))
-
     result = _run_florence_task(image, _FLORENCE_GROUNDING_TASK, phrase)
     text, boxes = _format_grounding_result(result, phrase)
-    return ChatReply(text=text, boxes=boxes)
+    if boxes:
+        # The chat model was sent a downscaled copy, so pixel coordinates
+        # mean nothing to it without the size they're relative to.
+        text += (
+            f"\nCoordinates are (left, top)-(right, bottom) in pixels; the photo is "
+            f"{image.width}x{image.height}. These regions are now highlighted on the photo for the user."
+        )
+    return text, boxes
 
 
 def _format_grounding_result(result: dict, phrase: str) -> tuple[str, list[dict]]:
     """<CAPTION_TO_PHRASE_GROUNDING> returns {"bboxes": [...], "labels":
     [...]} -- box coordinates (in the image_size passed to
     post_process_generation, i.e. the original photo's pixel space), not a
-    sentence. Render readable text for the chat transcript, and return the
+    sentence. Render readable text for the chat model, and return the
     boxes themselves (full precision, not rounded like the text) for the
     frontend to draw."""
     bboxes = result.get("bboxes", [])
     labels = result.get("labels", [])
     if not bboxes:
-        return f'Florence-2 couldn\'t locate "{phrase}" in this image.', []
+        return f'No match for "{phrase}" was found in this photo.', []
 
     lines = []
     boxes = []

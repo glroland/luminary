@@ -89,8 +89,8 @@ const FILMSTRIP_RADIUS = 7;
 // page while the gallery is filtered to something else) -- the modal
 // shows just the one photo, as it always did. `origin` ({x, y} in viewport
 // px, optional) is where the open animation scales up from; see
-// styles.css's .photo-modal. `chatBoxes` is the box(es) the florence chat
-// backend located for the floating chat's current turn (ChatWidget.jsx,
+// styles.css's .photo-modal. `chatBoxes` is the box(es) the chat's object
+// search located for the floating chat's current turn (ChatWidget.jsx,
 // via App.jsx) -- drawn as a temporary overlay on the image, never baked
 // into any stored image data (see chat.ChatReply; this is purely a
 // frontend annotation).

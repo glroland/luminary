@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Response
@@ -200,7 +201,7 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
 
     history = [turn.model_dump() for turn in body.history]
 
-    if chat.should_stream(body.backend):
+    if chat.should_stream():
         # chat.ask_stream() validates config and builds the request
         # *before* returning its generator (see _prepare_openai_call's
         # docstring), so ChatNotConfigured/other setup failures still
@@ -210,26 +211,27 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
         # status code any more; that case is surfaced in-band in the
         # stream itself, logged server-side either way.
         try:
-            chunks = chat.ask_stream(body.backend, original_bytes, photo["content_type"], body.message, history)
+            events = chat.ask_stream(original_bytes, photo["content_type"], body.message, history)
         except chat.ChatNotConfigured as exc:
             raise HTTPException(status_code=503, detail=str(exc))
         except Exception:
-            logger.exception("Chat backend %r failed to start streaming for photo %s", body.backend, photo_id)
+            logger.exception("Chat failed to start streaming for photo %s", photo_id)
             raise HTTPException(status_code=502, detail="Chat backend failed")
 
+        # One JSON object per line: {"text": ...} reply pieces, and
+        # {"boxes": [...]} when the model's object search found something.
         def generate():
             try:
-                yield from chunks
+                for event in events:
+                    yield json.dumps(event) + "\n"
             except Exception:
-                logger.exception(
-                    "Streaming chat backend %r failed mid-stream for photo %s", body.backend, photo_id
-                )
-                yield "\n[chat backend failed]"
+                logger.exception("Streaming chat failed mid-stream for photo %s", photo_id)
+                yield json.dumps({"text": "\n[chat backend failed]"}) + "\n"
 
-        return StreamingResponse(generate(), media_type="text/plain")
+        return StreamingResponse(generate(), media_type="application/x-ndjson")
 
     try:
-        result = chat.ask(body.backend, original_bytes, photo["content_type"], body.message, history)
+        result = chat.ask(original_bytes, photo["content_type"], body.message, history)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
@@ -239,7 +241,7 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
         # a self-hosted OpenAI-compatible server -- that's a backend
         # failure, not a malformed request, and must not come back as a
         # misleading 400.
-        logger.exception("Chat backend %r failed for photo %s", body.backend, photo_id)
+        logger.exception("Chat failed for photo %s", photo_id)
         raise HTTPException(status_code=502, detail="Chat backend failed")
 
     return {"reply": result.text, "boxes": result.boxes}

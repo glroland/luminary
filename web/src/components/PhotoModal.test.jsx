@@ -5,7 +5,7 @@ import PhotoModal from "./PhotoModal.jsx";
 
 vi.mock("./PhotoMap.jsx", () => ({ default: () => <div data-testid="photo-map" /> }));
 // What the floating chat (ChatWidget.jsx, via App.jsx) hands the modal
-// after a florence reply locates something.
+// after a reply whose object search located something.
 const CHAT_BOXES = [{ label: "eye", x1: 100, y1: 200, x2: 300, y2: 400 }];
 vi.mock("../api/client.js", async (importOriginal) => ({
   ...(await importOriginal()),

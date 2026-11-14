@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app import chat, config
@@ -12,30 +14,31 @@ def _get_synced_photo_id(client, tmp_path):
 
 def test_chat_404s_for_unknown_photo(client):
     response = client.post(
-        "/api/photos/does-not-exist/chat", json={"backend": "openai", "message": "hi", "history": []}
+        "/api/photos/does-not-exist/chat", json={"message": "hi", "history": []}
     )
     assert response.status_code == 404
 
 
-def test_chat_returns_reply_from_selected_backend(client, tmp_path, monkeypatch):
+def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
     photo_id = _get_synced_photo_id(client, tmp_path)
 
     captured = {}
 
-    def fake_ask(backend, photo_bytes, content_type, message, history):
-        captured["args"] = (backend, content_type, message, history)
-        return chat.ChatReply(text="a red square")
+    box = {"label": "square", "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}
+
+    def fake_ask(photo_bytes, content_type, message, history):
+        captured["args"] = (content_type, message, history)
+        return chat.ChatReply(text="a red square", boxes=[box])
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
     response = client.post(
         f"/api/photos/{photo_id}/chat",
-        json={"backend": "florence", "message": "what is this?", "history": [{"role": "user", "text": "hi"}]},
+        json={"message": "what is this?", "history": [{"role": "user", "text": "hi"}]},
     )
     assert response.status_code == 200
-    assert response.json() == {"reply": "a red square", "boxes": []}
-    backend, content_type, message, history = captured["args"]
-    assert backend == "florence"
+    assert response.json() == {"reply": "a red square", "boxes": [box]}
+    content_type, message, history = captured["args"]
     assert content_type == "image/jpeg"
     assert message == "what is this?"
     assert history == [{"role": "user", "text": "hi"}]
@@ -49,7 +52,7 @@ def test_chat_returns_503_when_backend_not_configured(client, tmp_path, monkeypa
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
     assert response.status_code == 503
     assert "LUMINARY_OPENAI_API_KEY" in response.json()["detail"]
 
@@ -62,19 +65,8 @@ def test_chat_returns_502_when_backend_raises_unexpectedly(client, tmp_path, mon
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
     assert response.status_code == 502
-
-
-def test_chat_rejects_unknown_backend_as_a_validation_error(client, tmp_path):
-    # Validated by the ChatRequest schema (Literal["openai", "florence"]),
-    # not by chat.ask()'s own check -- FastAPI's own 422 means an invalid
-    # backend never reaches the except-clauses in chat_about_photo, which
-    # matters for the next test: see its comment.
-    photo_id = _get_synced_photo_id(client, tmp_path)
-
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "not-a-real-backend", "message": "hi"})
-    assert response.status_code == 422
 
 
 def test_chat_returns_502_not_400_for_a_valueerror_from_the_backend(client, tmp_path, monkeypatch):
@@ -92,13 +84,8 @@ def test_chat_returns_502_not_400_for_a_valueerror_from_the_backend(client, tmp_
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
     assert response.status_code == 502
-
-
-def test_ask_rejects_unknown_backend():
-    with pytest.raises(ValueError):
-        chat.ask("not-a-real-backend", b"", "image/jpeg", "hi", [])
 
 
 def test_openai_backend_raises_when_not_configured(monkeypatch):
@@ -106,7 +93,7 @@ def test_openai_backend_raises_when_not_configured(monkeypatch):
     monkeypatch.delenv("LUMINARY_OPENAI_MODEL", raising=False)
 
     with pytest.raises(chat.ChatNotConfigured):
-        chat.ask("openai", b"fake-bytes", "image/jpeg", "hi", [])
+        chat.ask(b"fake-bytes", "image/jpeg", "hi", [])
 
 
 def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
@@ -143,9 +130,9 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
     import openai
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(chat, "_object_search_available", lambda: False)
 
     reply = chat.ask(
-        "openai",
         b"fake-bytes",
         "image/jpeg",
         "what is this?",
@@ -156,6 +143,8 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
     assert captured["api_key"] == "test-key"
     assert captured["base_url"] == "http://localhost:9999/v1"
     assert captured["model"] == "my-vision-model"
+    # No object search available: `tools` is left out, not sent empty.
+    assert "tools" not in captured
 
     messages = captured["messages"]
     assert messages[0] == {"role": "assistant", "content": "earlier reply"}
@@ -212,7 +201,7 @@ def test_openai_backend_downscales_a_large_image_before_sending(monkeypatch):
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
 
-    chat.ask("openai", large_photo_bytes, "image/jpeg", "what is this?", [])
+    chat.ask(large_photo_bytes, "image/jpeg", "what is this?", [])
 
     image_part = next(part for part in captured["messages"][-1]["content"] if part["type"] == "image_url")
     data_url = image_part["image_url"]["url"]
@@ -267,7 +256,7 @@ def test_openai_backend_leaves_a_small_image_unchanged(monkeypatch):
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
 
-    chat.ask("openai", small_photo_bytes, "image/jpeg", "what is this?", [])
+    chat.ask(small_photo_bytes, "image/jpeg", "what is this?", [])
 
     image_part = next(part for part in captured["messages"][-1]["content"] if part["type"] == "image_url")
     data_url = image_part["image_url"]["url"]
@@ -323,47 +312,37 @@ def _make_jpeg_bytes():
     return buffer.getvalue()
 
 
-def test_florence_backend_runs_phrase_grounding_when_message_is_non_empty(monkeypatch):
+def test_locate_object_runs_phrase_grounding(monkeypatch):
     # The one Florence-2 task that takes free text: ground a phrase to
     # image regions, returning bounding boxes -- not a sentence answer.
     processor = _FakeFlorenceProcessor({"bboxes": [[1.2, 3.4, 5.6, 7.8]], "labels": ["the dog"]})
     monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
 
-    reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "the dog", [])
+    text, boxes = chat.locate_object(_make_jpeg_bytes(), "the dog")
 
     assert processor.calls["prompt"] == chat._FLORENCE_GROUNDING_TASK + "the dog"
     assert processor.calls["task"] == chat._FLORENCE_GROUNDING_TASK
-    assert '"the dog"' in reply.text
-    assert "(1, 3)-(6, 8)" in reply.text
+    assert '"the dog"' in text
+    assert "(1, 3)-(6, 8)" in text
+    # The chat model needs the size the pixel coordinates are relative to.
+    assert "100x100" in text
     # Full-precision coordinates (not the rounded text) travel separately
     # for the frontend to draw an overlay with.
-    assert reply.boxes == [{"label": "the dog", "x1": 1.2, "y1": 3.4, "x2": 5.6, "y2": 7.8}]
+    assert boxes == [{"label": "the dog", "x1": 1.2, "y1": 3.4, "x2": 5.6, "y2": 7.8}]
 
 
-def test_florence_backend_reports_no_match_for_an_ungrounded_phrase(monkeypatch):
+def test_locate_object_reports_no_match(monkeypatch):
     processor = _FakeFlorenceProcessor({"bboxes": [], "labels": []})
     monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
 
-    reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "a unicorn", [])
+    text, boxes = chat.locate_object(_make_jpeg_bytes(), "a unicorn")
 
-    assert "couldn't locate" in reply.text
-    assert "a unicorn" in reply.text
-    assert reply.boxes == []
-
-
-def test_florence_backend_runs_plain_caption_when_message_is_empty(monkeypatch):
-    processor = _FakeFlorenceProcessor("a detailed caption of the photo")
-    monkeypatch.setattr(chat, "_load_florence", lambda: (_FakeFlorenceModel(), processor))
-
-    reply = chat.ask("florence", _make_jpeg_bytes(), "image/jpeg", "   ", [])
-
-    assert processor.calls["prompt"] == chat._FLORENCE_CAPTION_TASK
-    assert processor.calls["task"] == chat._FLORENCE_CAPTION_TASK
-    assert reply.text == "a detailed caption of the photo"
-    assert reply.boxes == []
+    assert "No match" in text
+    assert "a unicorn" in text
+    assert boxes == []
 
 
-def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
+def test_locate_object_raises_chat_not_configured_without_torch(monkeypatch):
     # torch/transformers are an optional, multi-GB dependency -- this must
     # hold regardless of whether they happen to be installed in whatever
     # environment the suite runs in, so the "not installed" case is
@@ -383,7 +362,186 @@ def test_florence_backend_raises_chat_not_configured_without_torch(monkeypatch):
     monkeypatch.setattr(chat, "_florence_processor", None)
 
     with pytest.raises(chat.ChatNotConfigured):
-        chat.ask("florence", b"fake-bytes", "image/jpeg", "what is this?", [])
+        chat.locate_object(b"fake-bytes", "the dog")
+
+
+# --- The locate_object tool, as the chat model calls it ----------------------
+
+
+class _FakeFunction:
+    def __init__(self, name, arguments):
+        self.name = name
+        self.arguments = arguments
+
+
+class _FakeToolCall:
+    def __init__(self, call_id, name, arguments, index=0):
+        self.id = call_id
+        self.index = index
+        self.function = _FakeFunction(name, arguments)
+
+
+class _FakeMessage:
+    def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _FakeResponse:
+    def __init__(self, message):
+        class Choice:
+            pass
+
+        choice = Choice()
+        choice.message = message
+        self.choices = [choice]
+
+
+def _install_fake_openai(monkeypatch, responses):
+    """Patch openai.OpenAI with a client whose create() returns `responses`
+    in order (each one whatever create() should return for that round),
+    recording every call's kwargs. Returns that list of recorded calls."""
+    monkeypatch.setenv("LUMINARY_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LUMINARY_OPENAI_MODEL", "my-vision-model")
+    calls = []
+    remaining = list(responses)
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            # The messages list is mutated between rounds -- snapshot it.
+            calls.append({**kwargs, "messages": list(kwargs["messages"])})
+            return remaining.pop(0)
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key, base_url):
+            self.chat = FakeChat()
+
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    return calls
+
+
+_DOG_BOX = {"label": "the dog", "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}
+
+
+def test_object_search_is_offered_only_when_enabled_and_installed(monkeypatch):
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.delenv("LUMINARY_CHAT_OBJECT_SEARCH", raising=False)
+    assert chat._object_search_available() is True
+
+    monkeypatch.setenv("LUMINARY_CHAT_OBJECT_SEARCH", "false")
+    assert chat._object_search_available() is False
+
+    monkeypatch.setenv("LUMINARY_CHAT_OBJECT_SEARCH", "true")
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert chat._object_search_available() is False
+
+
+def test_chat_model_can_call_locate_object_and_then_answer(monkeypatch):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+    searched = []
+
+    def fake_locate(photo_bytes, phrase):
+        searched.append((photo_bytes, phrase))
+        return "found the dog at (1, 2)-(3, 4)", [_DOG_BOX]
+
+    monkeypatch.setattr(chat, "locate_object", fake_locate)
+    calls = _install_fake_openai(
+        monkeypatch,
+        [
+            _FakeResponse(_FakeMessage(tool_calls=[_FakeToolCall("call-1", "locate_object", '{"object": "the dog"}')])),
+            _FakeResponse(_FakeMessage(content="The dog is in the corner.")),
+        ],
+    )
+
+    reply = chat.ask(b"original-bytes", "image/jpeg", "where is the dog?", [])
+
+    assert reply == chat.ChatReply(text="The dog is in the corner.", boxes=[_DOG_BOX])
+    # The search runs on the original bytes, with the model's own phrase.
+    assert searched == [(b"original-bytes", "the dog")]
+    assert calls[0]["tools"] == [chat._LOCATE_OBJECT_TOOL]
+    # Round two carries the model's call and the tool's result back to it.
+    assistant, tool = calls[1]["messages"][-2:]
+    assert assistant["role"] == "assistant"
+    assert assistant["tool_calls"][0]["id"] == "call-1"
+    assert assistant["tool_calls"][0]["function"] == {"name": "locate_object", "arguments": '{"object": "the dog"}'}
+    assert tool == {"role": "tool", "tool_call_id": "call-1", "content": "found the dog at (1, 2)-(3, 4)"}
+
+
+def test_chat_model_answers_directly_without_calling_the_tool(monkeypatch):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+    monkeypatch.setattr(chat, "locate_object", lambda *args: pytest.fail("the tool must not run"))
+    calls = _install_fake_openai(monkeypatch, [_FakeResponse(_FakeMessage(content="A beach at sunset."))])
+
+    reply = chat.ask(b"bytes", "image/jpeg", "what is this?", [])
+
+    assert reply == chat.ChatReply(text="A beach at sunset.")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [(chat.ChatNotConfigured("no torch"), "isn't available"), (RuntimeError("boom"), "failed")],
+)
+def test_a_failed_object_search_is_reported_to_the_model_not_raised(monkeypatch, error, expected):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+
+    def fake_locate(photo_bytes, phrase):
+        raise error
+
+    monkeypatch.setattr(chat, "locate_object", fake_locate)
+    calls = _install_fake_openai(
+        monkeypatch,
+        [
+            _FakeResponse(_FakeMessage(tool_calls=[_FakeToolCall("call-1", "locate_object", '{"object": "x"}')])),
+            _FakeResponse(_FakeMessage(content="I couldn't search, but I can see a dog.")),
+        ],
+    )
+
+    reply = chat.ask(b"bytes", "image/jpeg", "where is the dog?", [])
+
+    assert reply.text == "I couldn't search, but I can see a dog."
+    assert reply.boxes == []
+    assert expected in calls[1]["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize("arguments", ["not json", "{}", '{"object": "  "}', '{"object": 5}', "[]"])
+def test_malformed_tool_arguments_are_reported_to_the_model(monkeypatch, arguments):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+    monkeypatch.setattr(chat, "locate_object", lambda *args: pytest.fail("the tool must not run"))
+    calls = _install_fake_openai(
+        monkeypatch,
+        [
+            _FakeResponse(_FakeMessage(tool_calls=[_FakeToolCall("call-1", "locate_object", arguments)])),
+            _FakeResponse(_FakeMessage(content="done")),
+        ],
+    )
+
+    assert chat.ask(b"bytes", "image/jpeg", "hi", []).text == "done"
+    assert "Invalid arguments" in calls[1]["messages"][-1]["content"]
+
+
+def test_the_last_round_is_made_without_tools_so_a_turn_cannot_loop(monkeypatch):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+    monkeypatch.setattr(chat, "locate_object", lambda photo_bytes, phrase: ("nothing", []))
+
+    def tool_round(n):
+        return _FakeResponse(_FakeMessage(tool_calls=[_FakeToolCall(f"call-{n}", "locate_object", '{"object": "x"}')]))
+
+    responses = [tool_round(n) for n in range(chat._MAX_CHAT_ROUNDS - 1)]
+    responses.append(_FakeResponse(_FakeMessage(content="final answer")))
+    calls = _install_fake_openai(monkeypatch, responses)
+
+    assert chat.ask(b"bytes", "image/jpeg", "hi", []).text == "final answer"
+    assert len(calls) == chat._MAX_CHAT_ROUNDS
+    assert all("tools" in call for call in calls[:-1])
+    assert "tools" not in calls[-1]
 
 
 # --- Streaming -------------------------------------------------------------
@@ -404,25 +562,11 @@ def test_openai_streaming_recognizes_truthy_values(monkeypatch, raw):
     assert config.get_openai_streaming() is True
 
 
-def test_should_stream_is_false_for_openai_when_disabled(monkeypatch):
+def test_should_stream_follows_the_setting(monkeypatch):
     monkeypatch.delenv("LUMINARY_OPENAI_STREAMING", raising=False)
-    assert chat.should_stream("openai") is False
-
-
-def test_should_stream_is_true_for_openai_when_enabled(monkeypatch):
+    assert chat.should_stream() is False
     monkeypatch.setenv("LUMINARY_OPENAI_STREAMING", "true")
-    assert chat.should_stream("openai") is True
-
-
-def test_should_stream_is_always_false_for_florence(monkeypatch):
-    # Florence-2 has no streaming API to use even if the flag is set.
-    monkeypatch.setenv("LUMINARY_OPENAI_STREAMING", "true")
-    assert chat.should_stream("florence") is False
-
-
-def test_ask_stream_rejects_florence():
-    with pytest.raises(ValueError):
-        chat.ask_stream("florence", b"", "image/jpeg", "hi", [])
+    assert chat.should_stream() is True
 
 
 def test_ask_stream_raises_chat_not_configured_synchronously(monkeypatch):
@@ -434,7 +578,7 @@ def test_ask_stream_raises_chat_not_configured_synchronously(monkeypatch):
     monkeypatch.delenv("LUMINARY_OPENAI_MODEL", raising=False)
 
     with pytest.raises(chat.ChatNotConfigured):
-        chat.ask_stream("openai", b"fake-bytes", "image/jpeg", "hi", [])
+        chat.ask_stream(b"fake-bytes", "image/jpeg", "hi", [])
 
 
 def test_ask_stream_yields_chunks_from_the_client(monkeypatch):
@@ -473,28 +617,91 @@ def test_ask_stream_yields_chunks_from_the_client(monkeypatch):
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
 
-    chunks = list(chat.ask_stream("openai", b"fake-bytes", "image/jpeg", "what is this?", []))
+    chunks = list(chat.ask_stream(b"fake-bytes", "image/jpeg", "what is this?", []))
 
-    assert chunks == ["Hello", ", ", "world"]
+    assert chunks == [{"text": "Hello"}, {"text": ", "}, {"text": "world"}]
     assert captured["stream"] is True
     assert captured["model"] == "my-vision-model"
+
+
+def test_ask_stream_runs_a_streamed_tool_call_then_streams_the_answer(monkeypatch):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+    monkeypatch.setattr(chat, "locate_object", lambda photo_bytes, phrase: (f"found {phrase}", [_DOG_BOX]))
+
+    class Delta:
+        def __init__(self, content=None, tool_calls=None):
+            self.content = content
+            self.tool_calls = tool_calls
+
+    class Chunk:
+        def __init__(self, delta=None):
+            class Choice:
+                pass
+
+            self.choices = []
+            if delta is not None:
+                choice = Choice()
+                choice.delta = delta
+                self.choices = [choice]
+
+    def fragment(call_id, name, arguments):
+        return _FakeToolCall(call_id, name, arguments)
+
+    calls = _install_fake_openai(
+        monkeypatch,
+        [
+            # The call's id/name arrive once, its arguments JSON in pieces.
+            iter(
+                [
+                    Chunk(Delta(tool_calls=[fragment("call-1", "locate_object", "")])),
+                    Chunk(Delta(tool_calls=[fragment(None, None, '{"object": ')])),
+                    Chunk(Delta(tool_calls=[fragment(None, None, '"the dog"}')])),
+                    Chunk(),  # e.g. a trailing usage-only chunk: no choices
+                ]
+            ),
+            iter([Chunk(Delta("In the "), ), Chunk(Delta("corner."))]),
+        ],
+    )
+
+    events = list(chat.ask_stream(b"bytes", "image/jpeg", "where is the dog?", []))
+
+    assert events == [{"boxes": [_DOG_BOX]}, {"text": "In the "}, {"text": "corner."}]
+    assert calls[1]["messages"][-1] == {"role": "tool", "tool_call_id": "call-1", "content": "found the dog"}
+    assert calls[1]["messages"][-2]["tool_calls"][0]["function"]["arguments"] == '{"object": "the dog"}'
 
 
 def test_chat_endpoint_streams_when_enabled(client, tmp_path, monkeypatch):
     photo_id = _get_synced_photo_id(client, tmp_path)
 
-    def fake_ask_stream(backend, photo_bytes, content_type, message, history):
-        assert backend == "openai"
-        return iter(["Hel", "lo, ", "world"])
+    def fake_ask_stream(photo_bytes, content_type, message, history):
+        return iter([{"text": "Hel"}, {"boxes": [_DOG_BOX]}, {"text": "lo"}])
 
-    monkeypatch.setattr(chat, "should_stream", lambda backend: True)
+    monkeypatch.setattr(chat, "should_stream", lambda: True)
     monkeypatch.setattr(chat, "ask_stream", fake_ask_stream)
 
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/plain")
-    assert response.text == "Hello, world"
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events == [{"text": "Hel"}, {"boxes": [_DOG_BOX]}, {"text": "lo"}]
+
+
+def test_chat_endpoint_reports_a_mid_stream_failure_in_band(client, tmp_path, monkeypatch):
+    photo_id = _get_synced_photo_id(client, tmp_path)
+
+    def failing_events():
+        yield {"text": "Hel"}
+        raise RuntimeError("connection dropped")
+
+    monkeypatch.setattr(chat, "should_stream", lambda: True)
+    monkeypatch.setattr(chat, "ask_stream", lambda *args: failing_events())
+
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events == [{"text": "Hel"}, {"text": "\n[chat backend failed]"}]
 
 
 def test_chat_endpoint_streaming_still_503s_when_not_configured(client, tmp_path, monkeypatch):
@@ -506,10 +713,10 @@ def test_chat_endpoint_streaming_still_503s_when_not_configured(client, tmp_path
     def fake_ask_stream(*args, **kwargs):
         raise chat.ChatNotConfigured("set LUMINARY_OPENAI_API_KEY")
 
-    monkeypatch.setattr(chat, "should_stream", lambda backend: True)
+    monkeypatch.setattr(chat, "should_stream", lambda: True)
     monkeypatch.setattr(chat, "ask_stream", fake_ask_stream)
 
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/json")
@@ -521,7 +728,7 @@ def test_chat_endpoint_does_not_stream_by_default(client, tmp_path, monkeypatch)
 
     monkeypatch.setattr(chat, "ask", lambda *args, **kwargs: chat.ChatReply(text="a plain reply"))
 
-    response = client.post(f"/api/photos/{photo_id}/chat", json={"backend": "openai", "message": "hi"})
+    response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")

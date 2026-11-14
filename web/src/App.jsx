@@ -80,7 +80,7 @@ function comparePhotos(a, b, sortOrder) {
 export default function App() {
   const [photos, setPhotos] = useState([]);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
-  // Boxes the floating chat's florence backend located in selectedPhoto
+  // Boxes the floating chat's object search located in selectedPhoto
   // for its latest turn; PhotoModal draws them. PhotoChat clears them
   // itself whenever the open photo changes.
   const [chatBoxes, setChatBoxes] = useState([]);

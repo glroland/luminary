@@ -54,19 +54,19 @@ export async function fetchSyncStatus() {
 
 // The server may answer with a normal {reply, boxes} JSON body, or (when
 // LUMINARY_OPENAI_STREAMING is enabled server-side) a streamed
-// text/plain body delivering the reply incrementally -- which one it did
-// is read from the response's own content-type, not decided here. Either
-// way this resolves to {reply, boxes} (boxes always [] for a streamed
-// reply -- streaming is openai-only, and only florence ever returns
-// boxes); pass onChunk to also be notified of each reply piece as it
-// arrives (never called for a JSON reply).
-export async function chatAboutPhoto(photoId, backend, message, history, onChunk) {
+// application/x-ndjson body: one JSON object per line, {"text": ...} for
+// each piece of the reply and {"boxes": [...]} when the model's object
+// search found something. Which one it did is read from the response's own
+// content-type, not decided here. Either way this resolves to
+// {reply, boxes}; pass onChunk to also be notified of each reply piece as
+// it arrives (never called for a JSON reply).
+export async function chatAboutPhoto(photoId, message, history, onChunk) {
   let response;
   try {
     response = await fetch(`${API_BASE}/photos/${photoId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ backend, message, history }),
+      body: JSON.stringify({ message, history }),
     });
   } catch {
     throw new Error("Could not connect to the API. Is it running?");
@@ -87,14 +87,30 @@ export async function chatAboutPhoto(photoId, backend, message, history, onChunk
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let full = "";
+  let boxes = [];
+  // A network chunk can end mid-line; keep the unfinished tail for the next.
+  let pending = "";
+
+  function handleLine(line) {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (typeof event.text === "string") {
+      full += event.text;
+      onChunk?.(event.text);
+    }
+    if (Array.isArray(event.boxes)) boxes = event.boxes;
+  }
+
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    full += chunk;
-    onChunk?.(chunk);
+    pending += decoder.decode(value, { stream: true });
+    const lines = pending.split("\n");
+    pending = lines.pop();
+    lines.forEach(handleLine);
   }
-  return { reply: full, boxes: [] };
+  handleLine(pending + decoder.decode());
+  return { reply: full, boxes };
 }
 
 export async function fetchFaces(photoId) {

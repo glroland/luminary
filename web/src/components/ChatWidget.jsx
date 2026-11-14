@@ -6,8 +6,8 @@ import PhotoChat from "./PhotoChat.jsx";
 // everything else (the photo modal included), so it's reachable from any
 // view. `photo` is whichever photo is open in PhotoModal, or null -- the
 // chat API is per-photo (POST /api/photos/{id}/chat), so that open photo
-// is what the conversation is about. `onBoxesChange` hands the florence
-// backend's located boxes up to App.jsx, which passes them to PhotoModal
+// is what the conversation is about. `onBoxesChange` hands the chat's
+// located boxes up to App.jsx, which passes them to PhotoModal
 // to draw over the image.
 //
 // The launcher's icon is a speech bubble drawn as the logo's luminaria
