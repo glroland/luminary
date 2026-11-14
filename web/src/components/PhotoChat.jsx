@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { chatAboutPhoto } from "../api/client.js";
 
+// `photoId` is the photo the conversation is about -- the one open in
+// PhotoModal -- or null when none is open. The chat API is per-photo, so
+// with no photo there's nothing to send to: the form is disabled and a
+// hint says to open one. The conversation resets whenever photoId changes.
 export default function PhotoChat({ photoId, onBoxesChange }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
@@ -28,7 +32,7 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
     // Florence-2 treats an empty message as "just describe the photo"
     // (see chat.py) rather than a question -- only the openai backend needs
     // a non-empty message to be worth sending.
-    if (isSending || (!text && backend !== "florence")) return;
+    if (!photoId || isSending || (!text && backend !== "florence")) return;
 
     const history = messages.map((message) => ({ role: message.role, text: message.text }));
 
@@ -76,7 +80,11 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
     <div className="photo-chat">
       <div className="photo-chat-messages">
         {messages.length === 0 ? (
-          !useFlorence && <p className="photo-chat-empty">Ask something about this photo.</p>
+          !photoId ? (
+            <p className="photo-chat-empty">Open a photo to chat about it.</p>
+          ) : (
+            !useFlorence && <p className="photo-chat-empty">Ask something about this photo.</p>
+          )
         ) : (
           messages.map((message, index) => (
             <div key={index} className={`photo-chat-message photo-chat-message-${message.role}`}>
@@ -100,9 +108,9 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
           onChange={(event) => setDraft(event.target.value)}
           placeholder={useFlorence ? "What object are you looking for?" : "Ask about this photo..."}
           aria-label="Chat message"
-          disabled={isSending}
+          disabled={isSending || !photoId}
         />
-        <button type="submit" disabled={isSending}>
+        <button type="submit" disabled={isSending || !photoId}>
           Send
         </button>
       </form>

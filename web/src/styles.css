@@ -1082,13 +1082,107 @@ textarea {
   font-size: 0.8rem;
 }
 
-.photo-chat {
-  flex: 1;
-  min-height: 200px;
+/* The floating chat (ChatWidget.jsx): a launcher pinned to the viewport's
+   bottom-right corner and the popup it opens. z-index: above the photo
+   modal's overlay, so the chat stays usable while a photo is open. The
+   wrapper itself ignores the pointer -- only the launcher and the popup
+   take clicks -- so it never blocks whatever is underneath it. */
+.chat-widget {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 1100;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border);
-  padding-top: 1rem;
+  align-items: flex-end;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.chat-launcher {
+  pointer-events: auto;
+  width: 54px;
+  height: 54px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 18px var(--shadow);
+  transition: transform 0.15s ease;
+}
+
+.chat-launcher:hover {
+  transform: scale(1.06);
+}
+
+.chat-popup {
+  pointer-events: auto;
+  width: min(360px, calc(100vw - 2.5rem));
+  height: min(520px, calc(100vh - 7rem));
+  display: flex;
+  flex-direction: column;
+  padding: 0.9rem 1rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px var(--shadow);
+}
+
+.chat-popup[hidden] {
+  display: none;
+}
+
+.chat-popup-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-popup-heading {
+  min-width: 0;
+}
+
+.chat-popup-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.chat-popup-context {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-popup-close {
+  background: none;
+  border: none;
+  padding: 0 0.25rem;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-popup-close:hover {
+  color: var(--text);
+}
+
+.photo-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .photo-chat-backend {

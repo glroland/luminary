@@ -185,6 +185,18 @@ describe("PhotoChat", () => {
     await waitFor(() => expect(screen.getByText("a reply")).toBeInTheDocument());
   });
 
+  it("asks for a photo to be opened, and sends nothing, when there is none", () => {
+    const chatMock = vi.spyOn(client, "chatAboutPhoto");
+
+    render(<PhotoChat photoId={null} />);
+
+    expect(screen.getByText(/open a photo to chat about it/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/chat message/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+    fireEvent.submit(screen.getByLabelText(/chat message/i).closest("form"));
+    expect(chatMock).not.toHaveBeenCalled();
+  });
+
   it("resets the conversation when the photo changes", async () => {
     vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "a reply", boxes: [] });
 

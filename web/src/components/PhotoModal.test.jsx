@@ -4,15 +4,9 @@ import * as client from "../api/client.js";
 import PhotoModal from "./PhotoModal.jsx";
 
 vi.mock("./PhotoMap.jsx", () => ({ default: () => <div data-testid="photo-map" /> }));
-vi.mock("./PhotoChat.jsx", () => ({
-  // Exposes onBoxesChange via a button so tests can trigger it directly,
-  // without pulling in the real chat flow/network calls.
-  default: ({ onBoxesChange }) => (
-    <button onClick={() => onBoxesChange([{ label: "eye", x1: 100, y1: 200, x2: 300, y2: 400 }])}>
-      trigger-boxes
-    </button>
-  ),
-}));
+// What the floating chat (ChatWidget.jsx, via App.jsx) hands the modal
+// after a florence reply locates something.
+const CHAT_BOXES = [{ label: "eye", x1: 100, y1: 200, x2: 300, y2: 400 }];
 vi.mock("../api/client.js", async (importOriginal) => ({
   ...(await importOriginal()),
   fetchFaces: vi.fn(),
@@ -129,7 +123,7 @@ describe("PhotoModal", () => {
   });
 
   it("positions a box overlay in pixels from the image's measured visible rect, accounting for object-fit: contain letterboxing", async () => {
-    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
     await flush();
 
     const img = document.querySelector(".photo-modal-image-pane img");
@@ -146,7 +140,7 @@ describe("PhotoModal", () => {
     Object.defineProperty(img, "naturalHeight", { value: 800, configurable: true });
 
     fireEvent.load(img);
-    fireEvent.click(screen.getByText("trigger-boxes"));
+    rerender(<PhotoModal photo={PHOTO} onClose={() => {}} chatBoxes={CHAT_BOXES} />);
 
     const box = document.querySelector(".photo-modal-bbox");
     expect(box).toBeInTheDocument();
@@ -160,10 +154,10 @@ describe("PhotoModal", () => {
   });
 
   it("does not render a box overlay before the image has been measured", async () => {
-    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
     await flush();
 
-    fireEvent.click(screen.getByText("trigger-boxes"));
+    rerender(<PhotoModal photo={PHOTO} onClose={() => {}} chatBoxes={CHAT_BOXES} />);
 
     expect(document.querySelector(".photo-modal-bbox")).not.toBeInTheDocument();
   });
@@ -467,7 +461,7 @@ describe("PhotoModal", () => {
     });
 
     it("zooms back out when a chat reply brings in grounding boxes", async () => {
-      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
       measureImage();
       await flush();
 
@@ -476,7 +470,7 @@ describe("PhotoModal", () => {
       fireEvent.mouseMove(img, { clientX: 50, clientY: 25 });
       expect(img).toHaveClass("photo-modal-image-zoomed");
 
-      fireEvent.click(screen.getByText("trigger-boxes"));
+      rerender(<PhotoModal photo={PHOTO} onClose={() => {}} chatBoxes={CHAT_BOXES} />);
       expect(img).not.toHaveClass("photo-modal-image-zoomed");
     });
 

@@ -12,7 +12,6 @@ import {
   tagPhoto,
   untagPhoto,
 } from "../api/client.js";
-import PhotoChat from "./PhotoChat.jsx";
 import PhotoMap from "./PhotoMap.jsx";
 
 // Computes the <img>'s actual *visible* image content box -- which, under
@@ -90,16 +89,25 @@ const FILMSTRIP_RADIUS = 7;
 // page while the gallery is filtered to something else) -- the modal
 // shows just the one photo, as it always did. `origin` ({x, y} in viewport
 // px, optional) is where the open animation scales up from; see
-// styles.css's .photo-modal.
-export default function PhotoModal({ photo, onClose, photos = null, onNavigate = null, origin = null }) {
+// styles.css's .photo-modal. `chatBoxes` is the box(es) the florence chat
+// backend located for the floating chat's current turn (ChatWidget.jsx,
+// via App.jsx) -- drawn as a temporary overlay on the image, never baked
+// into any stored image data (see chat.ChatReply; this is purely a
+// frontend annotation).
+const NO_BOXES = [];
+
+export default function PhotoModal({
+  photo,
+  onClose,
+  photos = null,
+  onNavigate = null,
+  origin = null,
+  chatBoxes: boxes = NO_BOXES,
+}) {
   const photoIndex = photo && photos && onNavigate ? photos.findIndex((candidate) => candidate.id === photo.id) : -1;
   const previousPhoto = photoIndex > 0 ? photos[photoIndex - 1] : null;
   const nextPhoto = photoIndex !== -1 && photoIndex < photos.length - 1 ? photos[photoIndex + 1] : null;
 
-  // Box(es) located by the florence chat backend for the current turn --
-  // drawn as a temporary overlay on the image, never baked into any stored
-  // image data (see chat.ChatReply; this is purely a frontend annotation).
-  const [boxes, setBoxes] = useState([]);
   const imgRef = useRef(null);
   const modalRef = useRef(null);
 
@@ -760,8 +768,6 @@ export default function PhotoModal({ photo, onClose, photos = null, onNavigate =
               )}
             </div>
           )}
-
-          <PhotoChat photoId={photo.id} onBoxesChange={setBoxes} />
         </div>
       </div>
 

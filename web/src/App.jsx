@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ChatWidget from "./components/ChatWidget.jsx";
 import Logo from "./components/Logo.jsx";
 import ManagementPage from "./components/ManagementPage.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
@@ -79,6 +80,10 @@ function comparePhotos(a, b, sortOrder) {
 export default function App() {
   const [photos, setPhotos] = useState([]);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
+  // Boxes the floating chat's florence backend located in selectedPhoto
+  // for its latest turn; PhotoModal draws them. PhotoChat clears them
+  // itself whenever the open photo changes.
+  const [chatBoxes, setChatBoxes] = useState([]);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [syncStatus, setSyncStatus] = useState(null);
@@ -561,6 +566,7 @@ export default function App() {
           photo={selectedPhoto}
           photos={visiblePhotos}
           origin={modalOrigin}
+          chatBoxes={chatBoxes}
           onNavigate={setSelectedPhoto}
           onClose={() => {
             setSelectedPhoto(null);
@@ -569,6 +575,8 @@ export default function App() {
           }}
         />
       </div>
+      {/* Whatever photo is open in the modal is what the chat is about. */}
+      <ChatWidget photo={selectedPhoto} onBoxesChange={setChatBoxes} />
     </div>
   );
 }

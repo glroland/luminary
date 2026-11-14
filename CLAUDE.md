@@ -847,8 +847,9 @@ cached) is also per-pod, in-memory state — same caveat.
   `vi.advanceTimersByTimeAsync`) to drive the 1s poll loop deterministically.
 - `PhotoModal.jsx` (opened by clicking a photo card) is a two-pane layout
   filling most of the viewport (`.photo-modal`: 94vw × 92vh) — a large
-  image pane plus a sidebar composing `PhotoMap.jsx` and `PhotoChat.jsx`.
-  Stacks vertically under 700px width. It opens by scaling up out of the
+  image pane plus a sidebar composing `PhotoMap.jsx`. Chat is not part of
+  the modal (see `ChatWidget.jsx` below); the modal only draws the
+  `chatBoxes` prop `App.jsx` passes it. Stacks vertically under 700px width. It opens by scaling up out of the
   clicked tile (`origin` prop → `--modal-origin-x/y`, see the comment on
   `.photo-modal` in `styles.css`, whose 3vw/4vh offsets are tied to the
   modal's size). The optional `photos`/`onNavigate` props (`App.jsx`
@@ -917,6 +918,17 @@ cached) is also per-pod, in-memory state — same caveat.
   icon path doesn't resolve through Vite's bundler by default — the PNG
   assets are imported explicitly and wired via `L.Icon.Default.mergeOptions`
   at module load; don't drop that if touching this file.
+- `ChatWidget.jsx` is the floating chat, rendered once by `App.jsx`: a
+  launcher button fixed to the viewport's bottom-right corner that opens a
+  popup holding `PhotoChat.jsx`. It sits above the photo modal's overlay
+  (`.chat-widget`'s `z-index`), so it's usable while a photo is open.
+  `App.jsx` passes it `selectedPhoto` — the photo open in the modal is
+  what the chat is about, since the chat API is per-photo — and lifts the
+  florence backend's located boxes into its own `chatBoxes` state, handed
+  to `PhotoModal.jsx` to draw. With no photo open, `PhotoChat` disables
+  its form and says to open one; there is no photo-less chat endpoint yet.
+  The popup is hidden (`hidden` attribute), not unmounted, when closed, so
+  the conversation survives closing and reopening it.
 - `PhotoChat.jsx` talks to `POST /api/photos/{id}/chat` via
   `client.js`'s `chatAboutPhoto(photoId, backend, message, history, onChunk)`.
   A checkbox picks `backend` ("florence" when checked, "openai" otherwise,
