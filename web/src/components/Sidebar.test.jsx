@@ -33,15 +33,9 @@ function renderSidebar(overrides = {}) {
     onSelectDate: vi.fn(),
     onAllImages: vi.fn(),
     onManage: vi.fn(),
-    searchQuery: "",
-    onSearchQueryChange: vi.fn(),
-    searchThreshold: 0.5,
-    onSearchThresholdChange: vi.fn(),
-    onSearch: vi.fn(),
-    onClearSearch: vi.fn(),
+    searchResultCount: null,
     searchActive: false,
-    searchLoading: false,
-    searchError: null,
+    onSearchResults: vi.fn(),
     ...overrides,
   };
   render(<Sidebar {...props} />);
@@ -264,66 +258,29 @@ describe("Sidebar", () => {
     expect(props.onManage).toHaveBeenCalled();
   });
 
-  // The search section's own submit button is also named "Search", same
-  // as the collapsible section header above it -- query it by its
-  // distinguishing type="submit" rather than getByRole("button", {name})
-  // to avoid matching both.
-  function searchSubmitButton() {
-    return document.querySelector(".sidebar-search-actions button[type='submit']");
-  }
-
-  it("renders a Search section under Individuals", () => {
+  it("has no search box -- search is done through the chat", () => {
     renderSidebar({ open: true });
-    expect(searchSubmitButton()).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/search photo descriptions/i)).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("disables the Search button until a query is typed", () => {
-    // Sidebar is fully controlled -- searchQuery/onQueryChange are the
-    // parent's (App.jsx's) state, not local -- so simulating "typing" here
-    // means rerendering with a new searchQuery prop, the same way a real
-    // onChange round-trip through the parent would.
-    const { rerender } = render(<Sidebar {...propsFor({ searchQuery: "" })} />);
-    expect(searchSubmitButton()).toBeDisabled();
-
-    rerender(<Sidebar {...propsFor({ searchQuery: "a cat" })} />);
-    expect(searchSubmitButton()).not.toBeDisabled();
-  });
-
-  it("notifies onSearchQueryChange when the query textarea is edited", () => {
+  it("calls onSearchResults when the Search Results row is clicked", () => {
     const props = renderSidebar({ open: true });
-    fireEvent.change(screen.getByPlaceholderText(/search photo descriptions/i), {
-      target: { value: "a cat" },
-    });
-    expect(props.onSearchQueryChange).toHaveBeenCalledWith("a cat");
+    fireEvent.click(screen.getByRole("button", { name: "Search Results" }));
+    expect(props.onSearchResults).toHaveBeenCalled();
   });
 
-  it("submits the typed query and threshold via onSearch/onQueryChange/onThresholdChange", () => {
-    const props = renderSidebar({ open: true, searchQuery: "a cat", searchThreshold: 0.7 });
-
-    expect(screen.getByDisplayValue("a cat")).toBeInTheDocument();
-    expect(screen.getByLabelText(/similarity threshold/i)).toHaveValue("0.7");
-
-    fireEvent.click(searchSubmitButton());
-    expect(props.onSearch).toHaveBeenCalled();
-
-    fireEvent.change(screen.getByLabelText(/similarity threshold/i), { target: { value: "0.85" } });
-    expect(props.onSearchThresholdChange).toHaveBeenCalledWith(0.85);
+  it("marks Search Results, not All Images, as active while a search is shown", () => {
+    renderSidebar({ open: true, searchActive: true, searchResultCount: 3 });
+    expect(screen.getByRole("button", { name: "Search Results" })).toHaveClass("sidebar-all-images-active");
+    expect(screen.getByRole("button", { name: "All Images" })).not.toHaveClass("sidebar-all-images-active");
   });
 
-  it("only shows the clear ('x') button once a search is active", () => {
-    renderSidebar({ open: true, searchActive: false });
-    expect(screen.queryByRole("button", { name: /clear search/i })).not.toBeInTheDocument();
+  it("carries the last search's photo count on Search Results, once there is one", () => {
+    const { rerender } = render(<Sidebar {...propsFor({ searchResultCount: null })} />);
+    expect(screen.getByRole("button", { name: "Search Results" })).not.toHaveAttribute("data-count");
 
-    const props = renderSidebar({ open: true, searchActive: true });
-    const clearButton = screen.getByRole("button", { name: /clear search/i });
-    fireEvent.click(clearButton);
-    expect(props.onClearSearch).toHaveBeenCalled();
-  });
-
-  it("shows a search error when provided", () => {
-    renderSidebar({ open: true, searchError: "Search backend failed" });
-    expect(screen.getByRole("alert")).toHaveTextContent("Search backend failed");
+    rerender(<Sidebar {...propsFor({ searchResultCount: 0 })} />);
+    expect(screen.getByRole("button", { name: "Search Results" })).toHaveAttribute("data-count", "0");
   });
 
   it("carries photo counts on All Images and on folder rows (subfolders included)", () => {
@@ -366,15 +323,9 @@ function propsFor(overrides) {
     onSelectDate: vi.fn(),
     onAllImages: vi.fn(),
     onManage: vi.fn(),
-    searchQuery: "",
-    onSearchQueryChange: vi.fn(),
-    searchThreshold: 0.5,
-    onSearchThresholdChange: vi.fn(),
-    onSearch: vi.fn(),
-    onClearSearch: vi.fn(),
+    searchResultCount: null,
     searchActive: false,
-    searchLoading: false,
-    searchError: null,
+    onSearchResults: vi.fn(),
     ...overrides,
   };
 }

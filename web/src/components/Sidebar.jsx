@@ -3,19 +3,6 @@ import { individualThumbnailUrl } from "../api/client.js";
 import DateTree from "./DateTree.jsx";
 import DirectoryTree from "./DirectoryTree.jsx";
 
-// A few reasonable cosine-similarity cutoffs for the search section's
-// threshold dropdown below -- not verified-correct values (see
-// config.get_face_match_threshold's own docstring for why this app
-// generally treats similarity thresholds as starting points to tune
-// against real data, not universal constants), just a sensible spread
-// from loose to strict.
-export const SEARCH_THRESHOLD_OPTIONS = [
-  { value: 0.3, label: "Loose match (0.3)" },
-  { value: 0.5, label: "Moderate match (0.5)" },
-  { value: 0.7, label: "Strict match (0.7)" },
-  { value: 0.85, label: "Very strict match (0.85)" },
-];
-
 // Builds a nested {children: {name: node}} tree of every directory that
 // appears in `photos`' filenames (relative paths, e.g.
 // "vacation/2019/beach.jpg") -- there's no dedicated directory concept in
@@ -122,78 +109,6 @@ function Section({ title, icon, expanded, onToggle, children }) {
   );
 }
 
-// The "Search" section's text query + similarity-threshold dropdown, plus
-// a small "x" to cancel an active search (only shown once one is active --
-// there's nothing to cancel otherwise). A plain <form> so pressing Enter
-// in the textarea submits it without needing its own keydown handling;
-// textareas don't submit on Enter by default the way a single-line
-// <input> does, which is exactly why there's also an explicit Search
-// button, not just the dropdown/textarea.
-function SearchSection({
-  query,
-  onQueryChange,
-  threshold,
-  onThresholdChange,
-  onSearch,
-  onClear,
-  active,
-  loading,
-  error,
-}) {
-  return (
-    <div className="sidebar-search">
-      <form
-        className="sidebar-search-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSearch();
-        }}
-      >
-        <textarea
-          className="sidebar-search-input"
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search photo descriptions…"
-          rows={3}
-        />
-        <select
-          className="sidebar-search-threshold"
-          value={threshold}
-          onChange={(event) => onThresholdChange(Number(event.target.value))}
-          aria-label="Similarity threshold"
-        >
-          {SEARCH_THRESHOLD_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <div className="sidebar-search-actions">
-          <button type="submit" disabled={!query.trim() || loading}>
-            {loading ? "Searching…" : "Search"}
-          </button>
-          {active && (
-            <button
-              type="button"
-              className="sidebar-search-clear"
-              onClick={onClear}
-              aria-label="Clear search"
-              title="Clear search"
-            >
-              ×
-            </button>
-          )}
-        </div>
-      </form>
-      {error && (
-        <p role="alert" className="error sidebar-search-error">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
 // A traditional, non-overlaying sidebar: it occupies its own column in the
 // page's flex layout (see App.jsx/styles.css's ".app"/".sidebar" rules),
 // flush against the window's left edge, rather than floating a
@@ -204,24 +119,19 @@ function SearchSection({
 // and clickable regardless of open/closed state, which it couldn't do as
 // part of this collapsing <aside>.
 //
-// "Search" sits apart from the other sections, pinned in the footer above
-// the "Manage" button (see the JSX below).
-//
-// Five parent sections narrow the photo grid, mutually exclusive with each
-// other (selecting one clears any other filter -- see App.jsx's
-// handleSelectDirectory/handleSelectIndividual/handleSelectDate/
-// handleAllImages/handleSearch): "All Images" clears every filter, "By
-// Folder" filters by directory (via DirectoryTree, built from the photos'
-// own paths), "By Individual" filters to photos containing a selected
-// catalogued person, "By Tag" (below By Individual) filters to photos with
-// a selected tag attached, "By Date" (below By Tag) filters by the
-// photo's created_at via a year -> month -> day tree (DateTree, built from
-// the photos' own created_at the same way the folder tree is built from
-// their filenames -- there's no dedicated "date" concept in the API
-// either), and "Search" narrows to photos whose description is similar
-// enough to a free-text query (embeddings.py's similarity search), sorted
-// most-similar first -- that ordering comes from the API response itself
-// (GET /api/photos/search), not anything sorted client-side here.
+// The rows and sections narrow the photo grid, mutually exclusive with
+// each other (selecting one clears any other filter -- see App.jsx):
+// "All Images" clears every filter; "Search Results" shows whatever the
+// chat's last library search found (there is no search box here -- search
+// is done by asking the chat, see ChatWidget.jsx -- so this row is how to
+// get back to those results after browsing elsewhere); "By Folder" filters
+// by directory (via DirectoryTree, built from the photos' own paths); "By
+// Individual" filters to photos containing a selected catalogued person;
+// "By Tag" filters to photos with a selected tag attached; "By Date"
+// filters by the photo's created_at via a year -> month -> day tree
+// (DateTree, built from the photos' own created_at the same way the
+// folder tree is built from their filenames -- there's no dedicated
+// "date" concept in the API either).
 export default function Sidebar({
   open,
   photos,
@@ -237,15 +147,10 @@ export default function Sidebar({
   onSelectDate,
   onAllImages,
   onManage,
-  searchQuery = "",
-  onSearchQueryChange = () => {},
-  searchThreshold = SEARCH_THRESHOLD_OPTIONS[1].value,
-  onSearchThresholdChange = () => {},
-  onSearch = () => {},
-  onClearSearch = () => {},
+  // How many photos the last chat search found; null before any search.
+  searchResultCount = null,
   searchActive = false,
-  searchLoading = false,
-  searchError = null,
+  onSearchResults = () => {},
 }) {
   const tree = useMemo(() => buildTree(photos), [photos]);
   const dateTree = useMemo(() => buildDateTree(photos), [photos]);
@@ -253,7 +158,6 @@ export default function Sidebar({
   const [individualsExpanded, setIndividualsExpanded] = useState(false);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const [datesExpanded, setDatesExpanded] = useState(false);
-  const [searchExpanded, setSearchExpanded] = useState(true);
   const noFilter =
     selectedDirectory === null &&
     selectedIndividual === null &&
@@ -272,6 +176,16 @@ export default function Sidebar({
         >
           <Icon name="grid" />
           All Images
+        </button>
+
+        <button
+          type="button"
+          className={`sidebar-all-images${searchActive ? " sidebar-all-images-active" : ""}`}
+          onClick={onSearchResults}
+          data-count={searchResultCount !== null ? searchResultCount.toLocaleString() : undefined}
+        >
+          <Icon name="search" />
+          Search Results
         </button>
 
         <Section title="By Folder" icon="folder" expanded={foldersExpanded} onToggle={() => setFoldersExpanded((prev) => !prev)}>
@@ -367,22 +281,6 @@ export default function Sidebar({
       </nav>
 
       <div className="sidebar-footer">
-        {/* Search is pinned here, directly above "Manage", rather than in
-            the scrolling list of sections above -- it stays in reach
-            however long the folder/date trees get. */}
-        <Section title="Search" icon="search" expanded={searchExpanded} onToggle={() => setSearchExpanded((prev) => !prev)}>
-          <SearchSection
-            query={searchQuery}
-            onQueryChange={onSearchQueryChange}
-            threshold={searchThreshold}
-            onThresholdChange={onSearchThresholdChange}
-            onSearch={onSearch}
-            onClear={onClearSearch}
-            active={searchActive}
-            loading={searchLoading}
-            error={searchError}
-          />
-        </Section>
         <a
           href="#manage"
           className="sidebar-manage-link"

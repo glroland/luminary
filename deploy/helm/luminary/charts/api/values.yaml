@@ -68,10 +68,11 @@ env:
   # Stream the reply back token-by-token instead of all at once. Off by
   # default.
   openaiStreaming: false
-  # Offer the chat model its object-search tool (Florence-2 grounding).
-  # Turn off if the openai endpoint rejects requests that carry `tools`
-  # (e.g. vLLM started without --enable-auto-tool-choice).
-  chatObjectSearch: true
+  # Offer the chat model its tools (photo search, locating an object in
+  # the open photo). Turn off if the openai endpoint rejects requests that
+  # carry `tools` (e.g. vLLM started without --enable-auto-tool-choice) --
+  # chat still answers questions, but there is then no search.
+  chatTools: true
   # Validate the openai endpoint's TLS certificate. On by default; turn
   # off only for a trusted endpoint with a self-signed/internal-CA cert.
   openaiVerifySsl: true

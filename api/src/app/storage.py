@@ -222,14 +222,14 @@ def find_similar_photos(photo_id: str, limit: int = SIMILAR_PHOTOS_LIMIT) -> lis
 
 # Default cap on search_photos' result list below -- a safety net against
 # returning the whole library for a very loose threshold, not a real
-# pagination limit (the sidebar search narrows the grid to however many of
+# pagination limit (the gallery's "Search Results" shows however many of
 # these actually come back, however many that is).
 SEARCH_RESULTS_LIMIT = 500
 
 
 def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
     """Free-text search over `description` via `description_embedding`
-    similarity (the sidebar's "Search" section, GET /api/photos/search) --
+    similarity (chat.py's search_photos_semantic tool, GET /api/photos/search) --
     embeds `query` with the same local model as photos' own descriptions
     (embeddings.embed_text, is_query=True for this call since `query` is a
     search query, not a passage -- see embeddings.py's module docstring on
@@ -270,6 +270,73 @@ def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMI
             'See db/create_extensions.sql and the README\'s "Database" section.'
         )
         return []
+
+
+def _like_patterns(text: str) -> list[str]:
+    """One ILIKE pattern per whitespace-separated word of `text`, with
+    LIKE's own wildcards escaped so a "%" or "_" in a search (a filename
+    like "IMG_1234") matches literally."""
+    patterns = []
+    for term in text.split():
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        patterns.append(f"%{escaped}%")
+    return patterns
+
+
+def search_photos_by_filename(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
+    """Photos whose `filename` -- the path relative to the photos root, so
+    folders too -- contains every word of `text`, case-insensitively,
+    ordered by filename. Backs chat.py's search_photos_by_filename tool."""
+    patterns = _like_patterns(text)
+    if not patterns:
+        return []
+    where = " AND ".join(["filename ILIKE %s"] * len(patterns))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT {METADATA_COLUMNS} FROM photos WHERE {where} ORDER BY filename LIMIT %s",
+            (*patterns, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+# Everything search_photos_by_text looks through for one word: the photo's
+# own text columns, the names of people tagged in it, and its tags.
+_TEXT_SEARCH_TERM = """(
+    p.filename ILIKE %(t{n})s
+    OR p.description ILIKE %(t{n})s
+    OR p.vlm_description ILIKE %(t{n})s
+    OR p.location_name ILIKE %(t{n})s
+    OR EXISTS (
+        SELECT 1 FROM faces f JOIN individuals i ON i.id = f.person_id
+        WHERE f.photo_id = p.id AND i.name ILIKE %(t{n})s
+    )
+    OR EXISTS (
+        SELECT 1 FROM photo_tags pt JOIN tags t ON t.id = pt.tag_id
+        WHERE pt.photo_id = p.id AND t.name ILIKE %(t{n})s
+    )
+)"""
+
+
+def search_photos_by_text(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
+    """Plain case-insensitive text search across everything textual known
+    about a photo: filename/path, description, the raw Florence-2 caption,
+    location name, tagged individuals' names, and tag names. Every word of
+    `text` must appear somewhere, though not all in the same field
+    ("beach alice" matches a beach photo Alice is tagged in). Newest
+    first. Backs chat.py's search_photos_by_text tool."""
+    patterns = _like_patterns(text)
+    if not patterns:
+        return []
+    where = " AND ".join(_TEXT_SEARCH_TERM.format(n=n) for n in range(len(patterns)))
+    params = {f"t{n}": pattern for n, pattern in enumerate(patterns)}
+    params["limit"] = limit
+    columns = ", ".join(f"p.{column.strip()}" for column in METADATA_COLUMNS.split(","))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT {columns} FROM photos p WHERE {where} ORDER BY p.created_at DESC LIMIT %(limit)s",
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def stream_original(metadata: dict):

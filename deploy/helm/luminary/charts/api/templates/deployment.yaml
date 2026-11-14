@@ -78,8 +78,8 @@ spec:
             {{- end }}
             - name: LUMINARY_OPENAI_STREAMING
               value: {{ .Values.env.openaiStreaming | quote }}
-            - name: LUMINARY_CHAT_OBJECT_SEARCH
-              value: {{ .Values.env.chatObjectSearch | quote }}
+            - name: LUMINARY_CHAT_TOOLS
+              value: {{ .Values.env.chatTools | quote }}
             - name: LUMINARY_OPENAI_VERIFY_SSL
               value: {{ .Values.env.openaiVerifySsl | quote }}
             {{- if .Values.env.embeddingModel }}

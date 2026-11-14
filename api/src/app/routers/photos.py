@@ -182,6 +182,13 @@ def purge_database() -> None:
     storage.purge_all()
 
 
+@router.post("/chat", response_model=ChatResponse)
+def chat_about_library(body: ChatRequest):
+    """Chat with no photo open: the model has its photo-search tools, but
+    no image to look at."""
+    return _chat(None, None, body, "the library")
+
+
 @router.post("/photos/{photo_id}/chat", response_model=ChatResponse)
 def chat_about_photo(photo_id: str, body: ChatRequest):
     photo = storage.get_photo(photo_id)
@@ -199,6 +206,12 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
     if original_bytes is None:
         raise HTTPException(status_code=404, detail="Photo not found")
 
+    return _chat(original_bytes, photo["content_type"], body, f"photo {photo_id}")
+
+
+def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
+    """Shared by both chat routes. `photo_bytes`/`content_type` are None
+    when no photo is open; `subject` only labels log lines."""
     history = [turn.model_dump() for turn in body.history]
 
     if chat.should_stream():
@@ -211,27 +224,28 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
         # status code any more; that case is surfaced in-band in the
         # stream itself, logged server-side either way.
         try:
-            events = chat.ask_stream(original_bytes, photo["content_type"], body.message, history)
+            events = chat.ask_stream(photo_bytes, content_type, body.message, history)
         except chat.ChatNotConfigured as exc:
             raise HTTPException(status_code=503, detail=str(exc))
         except Exception:
-            logger.exception("Chat failed to start streaming for photo %s", photo_id)
+            logger.exception("Chat failed to start streaming for %s", subject)
             raise HTTPException(status_code=502, detail="Chat backend failed")
 
-        # One JSON object per line: {"text": ...} reply pieces, and
-        # {"boxes": [...]} when the model's object search found something.
+        # One JSON object per line: {"text": ...} reply pieces,
+        # {"boxes": [...]} when the model located something in the photo,
+        # {"search_results": [...]} when it searched the library.
         def generate():
             try:
                 for event in events:
                     yield json.dumps(event) + "\n"
             except Exception:
-                logger.exception("Streaming chat failed mid-stream for photo %s", photo_id)
+                logger.exception("Streaming chat failed mid-stream for %s", subject)
                 yield json.dumps({"text": "\n[chat backend failed]"}) + "\n"
 
         return StreamingResponse(generate(), media_type="application/x-ndjson")
 
     try:
-        result = chat.ask(original_bytes, photo["content_type"], body.message, history)
+        result = chat.ask(photo_bytes, content_type, body.message, history)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:
@@ -241,7 +255,7 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
         # a self-hosted OpenAI-compatible server -- that's a backend
         # failure, not a malformed request, and must not come back as a
         # misleading 400.
-        logger.exception("Chat failed for photo %s", photo_id)
+        logger.exception("Chat failed for %s", subject)
         raise HTTPException(status_code=502, detail="Chat backend failed")
 
-    return {"reply": result.text, "boxes": result.boxes}
+    return {"reply": result.text, "boxes": result.boxes, "search_results": result.search_results}

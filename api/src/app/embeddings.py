@@ -3,8 +3,8 @@ embedding of `photos.description` (enrich.py's LLM-composed rewrite, never
 the raw Florence-2 `vlm_description`) used for similarity search: "find
 photos whose description reads most like this one", via pgvector's
 nearest-neighbor operators (storage.find_similar_photos,
-GET /api/photos/{id}/similar), and for the sidebar's free-text search
-(storage.search_photos, GET /api/photos/search).
+GET /api/photos/{id}/similar), and for the chat's semantic search tool
+(storage.search_photos, also GET /api/photos/search).
 
 --- Model and dimension choice ---
 

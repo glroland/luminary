@@ -90,7 +90,8 @@ target/               (generated, gitignored) local venv and pytest cache --
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
 | POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, failed, error}` |
-| POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{message, history}` → `{reply, boxes}` (JSON), or a streamed `application/x-ndjson` body if `LUMINARY_OPENAI_STREAMING` is on; see "Photo chat" below |
+| POST   | `/api/chat`                 | Chat with no photo open — same request/response as below; this is how the library is searched |
+| POST   | `/api/photos/{id}/chat`     | Chat with a photo open — `{message, history}` → `{reply, boxes, search_results}` (JSON), or a streamed `application/x-ndjson` body if `LUMINARY_OPENAI_STREAMING` is on; see "Chat and search" below |
 
 `POST /api/sync` is the only way photos enter the index — point
 `LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
@@ -286,39 +287,58 @@ together — the first two so a brand-new database comes up fully current,
 the third so an already-provisioned one can be patched up to match
 without a full rebuild.
 
-### Photo chat
+### Chat and search
 
-`POST /api/photos/{id}/chat` answers questions about a photo with any
-OpenAI-*compatible* multimodal chat endpoint, via the `openai` Python SDK.
-`LUMINARY_OPENAI_BASE_URL` is never assumed to be `api.openai.com` — point
-it at a self-hosted server (vLLM, Ollama, LM Studio, etc.) if that's what
-you're running. The image is base64-encoded and attached to the current
-message on every call.
+The floating chat talks to any OpenAI-*compatible* chat endpoint, via the
+`openai` Python SDK. `LUMINARY_OPENAI_BASE_URL` is never assumed to be
+`api.openai.com` — point it at a self-hosted server (vLLM, Ollama, LM
+Studio, etc.) if that's what you're running. With a photo open
+(`POST /api/photos/{id}/chat`) the image is base64-encoded and attached to
+the current message on every call, so the model can answer questions about
+it; with none open (`POST /api/chat`) the chat is about the library as a
+whole.
 
-**Object search.** The chat model is given one tool, `locate_object`, and
-decides for itself when a question needs it ("where's the dog?", "is there
-a stop sign?"). It passes the phrase to search for; the API runs it through
-a local [Florence-2](https://huggingface.co/microsoft/Florence-2-base)
+**The chat is also the app's search.** There is no search box: ask the
+chat to find photos and the model picks one of three search tools, passing
+the search text itself.
+
+| Tool                         | Finds photos by                                                                 |
+|-------------------------------|----------------------------------------------------------------------------------|
+| `search_photos_by_filename`  | Text in the file name or folder path (case-insensitive; every word must appear) |
+| `search_photos_semantic`     | Meaning — photos whose description is similar to the query (see "Similarity search" below). Optional `match_level`: `loose` (the default, similarity ≥ 0.3), `moderate` (0.5), `strict` (0.7), `very_strict` (0.85) |
+| `search_photos_by_text`      | Plain text match across everything known about a photo: file name and path, description, Florence-2 caption, location, names of people tagged in it, and tags (every word must appear somewhere) |
+
+The response's `search_results` carries the matching photo ids, best match
+first (`[]` if a search matched nothing, `null` if the model didn't search).
+The web UI closes any open photo and shows them in the gallery under the
+sidebar's **Search Results** row; that row brings the last search back
+after browsing elsewhere. A search returns at most 500 photos.
+
+**Object search.** While a photo is open the model has a fourth tool,
+`locate_object`, for questions like "where's the dog?" or "is there a stop
+sign?". It passes the phrase to search for; the API runs it through a local
+[Florence-2](https://huggingface.co/microsoft/Florence-2-base)
 vision-language model (`<CAPTION_TO_PHRASE_GROUNDING>`, in-process via
 `torch`/`transformers`, loaded lazily on first use), hands the bounding
 boxes found back to the chat model to word its answer, and returns them in
 the response's `boxes` so the web UI can highlight them on the photo.
 Florence-2 isn't a conversational model — it only locates a phrase — which
-is why it's a tool of the chat model rather than something you pick.
+is why it's a tool of the chat model rather than something you pick. It's
+only offered when `torch`/`transformers` are installed.
 
-The tool is offered only when `LUMINARY_CHAT_OBJECT_SEARCH` is on (the
-default) and `torch`/`transformers` are installed. **The chat endpoint has
-to support tool calling** — e.g. vLLM needs `--enable-auto-tool-choice` and
-a `--tool-call-parser` for the model. If yours rejects requests that carry
-`tools`, set `LUMINARY_CHAT_OBJECT_SEARCH=false` and chat works as plain
-question answering.
+**The chat endpoint has to support tool calling** — e.g. vLLM needs
+`--enable-auto-tool-choice` and a `--tool-call-parser` for the model. If
+yours rejects requests that carry `tools`, set `LUMINARY_CHAT_TOOLS=false`:
+chat still answers questions about the open photo, but there is then no
+way to search.
 
 **Streaming.** With `LUMINARY_OPENAI_STREAMING` (**off by default**) the
 endpoint responds with `application/x-ndjson` instead of one JSON body: one
-JSON object per line, `{"text": ...}` for each piece of the reply and
-`{"boxes": [...]}` when an object search found something. The web UI
-handles either response shape transparently (it checks the response's
-content type, not a client-side setting).
+JSON object per line, `{"text": ...}` for each piece of the reply,
+`{"boxes": [...]}` when an object search found something and
+`{"search_results": [...]}` when a library search ran. The web UI handles
+either response shape transparently (it checks the response's content
+type, not a client-side setting).
 
 | Variable                   | Default                     | Purpose                              |
 |-----------------------------|------------------------------|---------------------------------------|
@@ -326,7 +346,7 @@ content type, not a client-side setting).
 | `LUMINARY_OPENAI_BASE_URL` | *(none — SDK default)*      | OpenAI-compatible endpoint URL        |
 | `LUMINARY_OPENAI_MODEL`    | *(none)*                    | Required — the model name as your server calls it |
 | `LUMINARY_OPENAI_STREAMING`| `false`                     | Stream the reply token-by-token instead of all at once |
-| `LUMINARY_CHAT_OBJECT_SEARCH`| `true`                    | Offer the chat model the `locate_object` tool; set `false` if the endpoint doesn't support tool calling (Helm: `api.env.chatObjectSearch`) |
+| `LUMINARY_CHAT_TOOLS`      | `true`                      | Offer the chat model its tools (photo search, object search); set `false` if the endpoint doesn't support tool calling (Helm: `api.env.chatTools`) |
 | `LUMINARY_OPENAI_VERIFY_SSL`| `true`                     | Validate the endpoint's TLS certificate; set `false` only for a trusted self-signed/internal-CA endpoint (Helm: `api.env.openaiVerifySsl`) |
 | `LUMINARY_FLORENCE_MODEL`  | `microsoft/Florence-2-base` | Any Florence-2 checkpoint (object search, and captions at index time) |
 | `LUMINARY_FLORENCE_DEVICE` | `cpu`                       | `cpu` or `cuda`                       |
@@ -476,18 +496,12 @@ it was available. Same background-job shape as "Refresh Faces"
 pgvector's cosine-distance operator — unrelated to "Refresh Faces" above,
 which matches *faces* by image embedding, not photos by description text.
 
-The sidebar's **Search** section (under Individuals) is the free-text
-equivalent — type a query, pick a similarity threshold from the dropdown
-(a few preset cutoffs, loose to strict), and the grid narrows to matching
-photos, most-similar first; the small "×" that appears once a search is
-active clears it and restores whatever filter (or no filter) was showing
-before. Backed by `GET /api/photos/search?q=...&threshold=...`
-(`storage.search_photos`), which embeds the query text with the same
-model/endpoint as `description_embedding` itself, so the two are
-comparable. Selecting "All Images", a folder, or an individual clears an
-active search the same way starting a search clears those — the four
-sidebar sections are mutually exclusive ways to narrow the same grid, not
-combinable filters.
+The chat's `search_photos_semantic` tool (see "Chat and search" above) is
+the free-text equivalent: it embeds the query text with the same model as
+`description_embedding` itself, so the two are comparable, and returns the
+photos at least as similar as its match level, most-similar first
+(`storage.search_photos`). `GET /api/photos/search?q=...&threshold=...`
+exposes the same search over plain HTTP; the web UI no longer calls it.
 
 `embeddings.py` embeds with a **local** Hugging Face sentence-embedding
 model (`LUMINARY_EMBEDDING_MODEL`, default `BAAI/bge-large-en-v1.5`), run

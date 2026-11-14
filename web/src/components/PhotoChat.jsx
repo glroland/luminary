@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { chatAboutPhoto } from "../api/client.js";
 
-// `photoId` is the photo the conversation is about -- the one open in
-// PhotoModal -- or null when none is open. The chat API is per-photo, so
-// with no photo there's nothing to send to: the form is disabled and a
-// hint says to open one. The conversation resets whenever photoId changes.
-export default function PhotoChat({ photoId, onBoxesChange }) {
+// `photoId` is the photo open in PhotoModal, which the model is shown and
+// can be asked about -- or null when none is open, when the chat is about
+// the library as a whole. Either way the model can search the library
+// (see chat.py's tools); the ids it finds go up through `onSearchResults`,
+// and boxes it locates in the open photo through `onBoxesChange`.
+//
+// The conversation carries on across photos being opened and closed: a
+// search closes the open photo to show its results, and that mustn't wipe
+// the reply that announced them. Only the boxes are per-photo.
+export default function PhotoChat({ photoId, onBoxesChange, onSearchResults }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -16,18 +21,13 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
   const streamingIndexRef = useRef(null);
 
   useEffect(() => {
-    setMessages([]);
-    setDraft("");
-    setError(null);
-    setIsSending(false);
-    streamingIndexRef.current = null;
     onBoxesChange?.([]);
   }, [photoId]);
 
   async function handleSubmit(event) {
     event.preventDefault();
     const text = draft.trim();
-    if (!photoId || isSending || !text) return;
+    if (isSending || !text) return;
 
     const history = messages.map((message) => ({ role: message.role, text: message.text }));
 
@@ -56,13 +56,14 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
     }
 
     try {
-      const { reply, boxes } = await chatAboutPhoto(photoId, text, history, handleChunk);
+      const { reply, boxes, searchResults } = await chatAboutPhoto(photoId, text, history, handleChunk);
       if (streamingIndexRef.current === null) {
         // A plain (non-streaming) reply: no chunks arrived via handleChunk,
         // so the message was never started above -- append it now.
         setMessages((current) => [...current, { role: "assistant", text: reply }]);
       }
       onBoxesChange?.(boxes);
+      if (searchResults) onSearchResults?.(searchResults);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -78,7 +79,9 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
       <div className="photo-chat-messages">
         {messages.length === 0 ? (
           <p className="photo-chat-empty">
-            {photoId ? "Ask something about this photo." : "Open a photo to chat about it."}
+            {photoId
+              ? "Ask something about this photo, or ask me to find photos."
+              : "Ask me to find photos — by what's in them, a name or place, or a file name."}
           </p>
         ) : (
           messages.map((message, index) => (
@@ -101,11 +104,11 @@ export default function PhotoChat({ photoId, onBoxesChange }) {
           type="text"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Ask about this photo..."
+          placeholder={photoId ? "Ask about this photo, or search..." : "Search your photos..."}
           aria-label="Chat message"
-          disabled={isSending || !photoId}
+          disabled={isSending}
         />
-        <button type="submit" disabled={isSending || !photoId}>
+        <button type="submit" disabled={isSending}>
           Send
         </button>
       </form>

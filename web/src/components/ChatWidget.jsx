@@ -4,11 +4,13 @@ import PhotoChat from "./PhotoChat.jsx";
 // The floating chat: a launcher button pinned to the bottom-right corner
 // of the viewport, and the popup it opens. Rendered once by App.jsx, above
 // everything else (the photo modal included), so it's reachable from any
-// view. `photo` is whichever photo is open in PhotoModal, or null -- the
-// chat API is per-photo (POST /api/photos/{id}/chat), so that open photo
-// is what the conversation is about. `onBoxesChange` hands the chat's
-// located boxes up to App.jsx, which passes them to PhotoModal
-// to draw over the image.
+// view. `photo` is whichever photo is open in PhotoModal, or null: with
+// one open the model is shown it and can answer questions about it; with
+// or without one, the chat is also how the library is searched (there is
+// no search box). `onSearchResults` hands the ids a search found up to
+// App.jsx, which shows them as the gallery's "Search Results";
+// `onBoxesChange` hands up the boxes located in the open photo, which
+// App.jsx passes to PhotoModal to draw over the image.
 //
 // The launcher's icon is a speech bubble drawn as the logo's luminaria
 // on a black disc (LuminaryBubble below), in the logo's own warm palette
@@ -16,7 +18,7 @@ import PhotoChat from "./PhotoChat.jsx";
 //
 // PhotoChat stays mounted while the popup is closed (the popup is only
 // hidden), so closing and reopening it doesn't lose the conversation.
-export default function ChatWidget({ photo, onBoxesChange }) {
+export default function ChatWidget({ photo, onBoxesChange, onSearchResults }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -26,14 +28,14 @@ export default function ChatWidget({ photo, onBoxesChange }) {
           <div className="chat-popup-heading">
             <h2>Chat</h2>
             <p className="chat-popup-context" title={photo?.filename}>
-              {photo ? `About ${photo.filename.split("/").pop()}` : "No photo open"}
+              {photo ? `About ${photo.filename.split("/").pop()}` : "Your photo library"}
             </p>
           </div>
           <button type="button" className="chat-popup-close" aria-label="Close chat" onClick={() => setOpen(false)}>
             ×
           </button>
         </header>
-        <PhotoChat photoId={photo?.id ?? null} onBoxesChange={onBoxesChange} />
+        <PhotoChat photoId={photo?.id ?? null} onBoxesChange={onBoxesChange} onSearchResults={onSearchResults} />
       </section>
 
       <button

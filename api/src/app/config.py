@@ -121,11 +121,12 @@ def get_openai_streaming() -> bool:
     return os.environ.get("LUMINARY_OPENAI_STREAMING", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
-def get_chat_object_search() -> bool:
-    """Whether photo chat offers the model its object-search tool (Florence-2
-    phrase grounding, see chat.py). On by default -- turn it off if the
-    OpenAI-compatible server rejects requests that carry `tools`."""
-    return os.environ.get("LUMINARY_CHAT_OBJECT_SEARCH", "true").strip().lower() not in ("0", "false", "no", "off")
+def get_chat_tools() -> bool:
+    """Whether chat offers the model its tools (photo search, and locating
+    an object in the open photo -- see chat.py). On by default -- turn it
+    off if the OpenAI-compatible server rejects requests that carry
+    `tools`; chat is then plain question answering, with no search."""
+    return os.environ.get("LUMINARY_CHAT_TOOLS", "true").strip().lower() not in ("0", "false", "no", "off")
 
 
 def get_openai_verify_ssl() -> bool:

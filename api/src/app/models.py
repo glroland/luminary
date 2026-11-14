@@ -93,6 +93,11 @@ class ChatResponse(BaseModel):
     # Non-empty only when the chat model ran its object search this turn
     # and found something. See chat.ChatReply.
     boxes: list[BoundingBox] = []
+    # Photo ids, best match first, when the chat model searched the library
+    # this turn -- [] if it searched and nothing matched, null if it didn't
+    # search at all. The web UI shows these as the gallery's "Search
+    # Results".
+    search_results: Optional[list[str]] = None
 
 
 class FaceBox(BaseModel):

@@ -27,15 +27,6 @@ export async function fetchPhotos() {
   return data.photos;
 }
 
-// Free-text similarity search over photos.description (see enrich.py/
-// embeddings.py) -- results already come back ordered most-similar
-// first (GET /api/photos/search), so no client-side sorting is needed.
-export async function searchPhotos(query, threshold) {
-  const params = new URLSearchParams({ q: query, threshold: String(threshold) });
-  const data = await request(`/photos/search?${params}`);
-  return data.results;
-}
-
 export async function deletePhoto(photoId) {
   await request(`/photos/${photoId}`, { method: "DELETE" });
 }
@@ -52,18 +43,25 @@ export async function fetchSyncStatus() {
   return request("/sync/status");
 }
 
-// The server may answer with a normal {reply, boxes} JSON body, or (when
+// Sends one chat message. `photoId` is the photo open in the modal, which
+// the model is then shown -- or null for a chat about the library as a
+// whole (POST /api/chat).
+//
+// The server may answer with a normal JSON body, or (when
 // LUMINARY_OPENAI_STREAMING is enabled server-side) a streamed
 // application/x-ndjson body: one JSON object per line, {"text": ...} for
-// each piece of the reply and {"boxes": [...]} when the model's object
-// search found something. Which one it did is read from the response's own
-// content-type, not decided here. Either way this resolves to
-// {reply, boxes}; pass onChunk to also be notified of each reply piece as
-// it arrives (never called for a JSON reply).
+// each piece of the reply, {"boxes": [...]} when the model located
+// something in the photo, {"search_results": [...]} when it searched the
+// library. Which one it did is read from the response's own content-type,
+// not decided here. Either way this resolves to
+// {reply, boxes, searchResults} -- searchResults is the matching photo
+// ids, best first, or null if the model didn't search this turn. Pass
+// onChunk to also be notified of each reply piece as it arrives (never
+// called for a JSON reply).
 export async function chatAboutPhoto(photoId, message, history, onChunk) {
   let response;
   try {
-    response = await fetch(`${API_BASE}/photos/${photoId}/chat`, {
+    response = await fetch(`${API_BASE}${photoId ? `/photos/${photoId}/chat` : "/chat"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history }),
@@ -81,13 +79,14 @@ export async function chatAboutPhoto(photoId, message, history, onChunk) {
 
   if (isJson) {
     const data = await response.json();
-    return { reply: data.reply, boxes: data.boxes || [] };
+    return { reply: data.reply, boxes: data.boxes || [], searchResults: data.search_results ?? null };
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let full = "";
   let boxes = [];
+  let searchResults = null;
   // A network chunk can end mid-line; keep the unfinished tail for the next.
   let pending = "";
 
@@ -99,6 +98,7 @@ export async function chatAboutPhoto(photoId, message, history, onChunk) {
       onChunk?.(event.text);
     }
     if (Array.isArray(event.boxes)) boxes = event.boxes;
+    if (Array.isArray(event.search_results)) searchResults = event.search_results;
   }
 
   for (;;) {
@@ -110,7 +110,7 @@ export async function chatAboutPhoto(photoId, message, history, onChunk) {
     lines.forEach(handleLine);
   }
   handleLine(pending + decoder.decode());
-  return { reply: full, boxes };
+  return { reply: full, boxes, searchResults };
 }
 
 export async function fetchFaces(photoId) {

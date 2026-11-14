@@ -22,12 +22,13 @@ describe("ChatWidget", () => {
     expect(screen.queryByRole("region", { name: "Chat" })).not.toBeInTheDocument();
   });
 
-  it("says no photo is open when there isn't one", () => {
+  it("is about the library when no photo is open", () => {
     render(<ChatWidget photo={null} />);
     fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
 
-    expect(screen.getByText("No photo open")).toBeInTheDocument();
-    expect(screen.getByLabelText(/chat message/i)).toBeDisabled();
+    expect(screen.getByText("Your photo library")).toBeInTheDocument();
+    // Still usable: with no photo open the chat searches the library.
+    expect(screen.getByLabelText(/chat message/i)).toBeEnabled();
   });
 
   it("chats about the open photo and hands located boxes up", async () => {

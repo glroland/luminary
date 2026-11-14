@@ -1,9 +1,9 @@
 // Sort options for the gallery grid (App.jsx) -- date defaults to newest
 // first, matching the API's own fixed ORDER BY created_at DESC, so picking
 // this option changes nothing about what's on screen. Not shown while a
-// search is active: GET /api/photos/search's results are already ordered
-// most-similar-first, and re-sorting them by date/filename would throw that
-// relevance ordering away.
+// search's results are showing: they keep the order the search returned
+// them in (most-similar-first for a semantic search), and re-sorting them
+// by date/filename would throw that ordering away.
 export const SORT_OPTIONS = [
   { value: "date-desc", label: "Date (newest first)" },
   { value: "date-asc", label: "Date (oldest first)" },

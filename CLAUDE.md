@@ -390,23 +390,28 @@ cached) is also per-pod, in-memory state — same caveat.
   `description`, guarded so it only fires once per database (a database
   already past this point, or created fresh after it, is untouched).
 
-- `chat.py` backs `POST /api/photos/{photo_id}/chat`
-  (`routers/photos.py:chat_about_photo`), which reads the full original via
+- `chat.py` is the chat assistant, and — since there is no search box any
+  more — the app's only search UI. Two routes in `routers/photos.py` share
+  one helper, `_chat()`: `POST /api/photos/{photo_id}/chat`
+  (`chat_about_photo`) reads the full original via
   `storage.read_original_bytes` (unlike `stream_original`, chat needs the
-  whole image in memory, not a chunked HTTP response) and calls
-  `chat.ask(photo_bytes, content_type, message, history)`. There is one
-  chat model, an OpenAI-compatible endpoint; Florence-2 is no longer a
-  selectable backend (the old `backend` request field and the UI checkbox
-  that set it are gone) but a *tool* that chat model can call — see
-  "Object search" below. `chat_about_photo` must not have an `except
-  ValueError` branch: an earlier version had one (mapped to `400`), which
-  also silently caught `pydantic.ValidationError` bubbling up from inside
-  the `openai` SDK (e.g. parsing a non-conforming response from a
-  self-hosted OpenAI-compatible server — it **is** a `ValueError`
-  subclass) and misreported a real backend failure as a malformed request.
-  Let anything chat.ask() raises other than `ChatNotConfigured` fall
-  through to the generic `except Exception` → `502` (full traceback goes
-  to the log either way).
+  whole image in memory, not a chunked HTTP response), and
+  `POST /api/chat` (`chat_about_library`) is the same with no photo open.
+  Both call `chat.ask(photo_bytes, content_type, message, history)`, the
+  first two `None` when there's no photo — the message is then plain text
+  with no image part. There is one chat model, an OpenAI-compatible
+  endpoint; Florence-2 is no longer a selectable backend (the old
+  `backend` request field and the UI checkbox that set it are gone) but
+  one of the *tools* that chat model can call — see "Tools" below.
+  `_chat()` must not have an `except ValueError` branch: an earlier
+  version had one (mapped to `400`), which also silently caught
+  `pydantic.ValidationError` bubbling up from inside the `openai` SDK
+  (e.g. parsing a non-conforming response from a self-hosted
+  OpenAI-compatible server — it **is** a `ValueError` subclass) and
+  misreported a real backend failure as a malformed request. Let anything
+  chat.ask() raises other than `ChatNotConfigured` fall through to the
+  generic `except Exception` → `502` (full traceback goes to the log
+  either way).
 
   Both sides' real dependencies (`openai`; `torch`/`transformers`/
   `timm`/`einops`) are imported **lazily inside the functions that use
@@ -417,38 +422,65 @@ cached) is also per-pod, in-memory state — same caveat.
   naming what's missing — never let either reach the client as a bare
   `ImportError`/`500`.
 
-  **Object search** (the `locate_object` tool, `_LOCATE_OBJECT_TOOL`): the
-  chat model decides when a question needs something located and calls the
-  tool with the phrase to search for; `_run_tool_call` runs
-  `chat.locate_object(photo_bytes, phrase)` (Florence-2 phrase grounding,
-  on the *original* bytes, not the downscaled copy the chat model was
-  sent — boxes must be in the original photo's pixel space), appends the
-  text result to the conversation as a `role: "tool"` message, and
-  collects the boxes into `ChatReply.boxes` for the frontend to draw.
+  **Tools.** The model decides when to call one and with what text; each
+  has a handler in `_TOOL_HANDLERS` taking `(arguments, turn)` and
+  returning the text the model reads as the tool's result (appended to the
+  conversation as a `role: "tool"` message by `_run_tool_calls`). What a
+  tool *found* for the user travels separately, on the per-turn `_Turn`
+  object, and comes back as `ChatReply.boxes`/`.search_results`.
+
+  - `search_photos_by_filename` → `storage.search_photos_by_filename`
+    (`ILIKE` on `filename`, i.e. the path too), `search_photos_by_text` →
+    `storage.search_photos_by_text` (`ILIKE` across `filename`,
+    `description`, `vlm_description`, `location_name`, tagged individuals'
+    names and tag names), `search_photos_semantic` →
+    `storage.search_photos` (embedding similarity, the old sidebar
+    search), with an optional `match_level` mapped to a threshold by
+    `_MATCH_LEVELS` — default `loose`. For the two `ILIKE` searches every
+    whitespace-separated word must match (in the text search, each word in
+    any field), and `storage._like_patterns` escapes `%`/`_` so a filename
+    like `IMG_1234` matches literally. `ChatReply.search_results` is photo
+    *ids* only, best first — `None` means the model didn't search, `[]`
+    that it searched and found nothing; keep those distinct, the frontend
+    only switches the gallery to "Search Results" for a non-`None` value.
+    When a turn searches more than once, the last search *that found
+    something* wins (`_Turn.record_search`). The model itself is shown
+    only the first `_SEARCH_PREVIEW_COUNT` matches, as text.
+  - `locate_object` → `chat.locate_object(photo_bytes, phrase)`:
+    Florence-2 phrase grounding on the *original* bytes, not the
+    downscaled copy the chat model was sent — boxes must be in the
+    original photo's pixel space. Only offered while a photo is open and
+    `_object_search_available()` finds torch/transformers via
+    `importlib.util.find_spec` (a lookup, not an import).
+
   `_ask_openai` loops up to `_MAX_CHAT_ROUNDS` times; `_chat_tools()`
   omits `tools` on the last round so a turn always ends in an answer, and
-  omits the key entirely (never an empty list) whenever the tool isn't
-  offered. It's offered only when `LUMINARY_CHAT_OBJECT_SEARCH`
-  (`config.get_chat_object_search()`, default on) is set *and*
-  `_object_search_available()` finds torch/transformers via
-  `importlib.util.find_spec` (a lookup, not an import). The flag exists
-  because an OpenAI-compatible server without tool calling enabled (e.g.
-  vLLM without `--enable-auto-tool-choice`) rejects any request carrying
-  `tools`, which would otherwise break chat outright. A tool failure —
-  Florence-2 missing (`ChatNotConfigured`), a crash, malformed arguments —
-  is never raised: it's logged and handed back to the model as the tool's
-  result text, so the model can still answer from the photo itself.
+  omits the key entirely (never an empty list) when no tool is offered.
+  `LUMINARY_CHAT_TOOLS` (`config.get_chat_tools()`, default on) switches
+  all of them off: an OpenAI-compatible server without tool calling
+  enabled (e.g. vLLM without `--enable-auto-tool-choice`) rejects any
+  request carrying `tools`, which would otherwise break chat outright —
+  with it off there is no search at all. A tool failure — Florence-2 or
+  the embedding model missing, a crash, malformed arguments, an unknown
+  tool name — is never raised: it's logged and handed back to the model as
+  the tool's result text, so the model can still answer.
+
+  The tool descriptions are the only place the model is told what the app
+  is and that search results are displayed to the user — there is
+  deliberately no system message, since some self-hosted chat templates
+  reject the system role.
 
   **Streaming** (`LUMINARY_OPENAI_STREAMING`, off by default,
   `config.get_openai_streaming()`, `chat.should_stream()`): when on,
-  `chat_about_photo` calls `chat.ask_stream(...)` instead of
+  `_chat()` calls `chat.ask_stream(...)` instead of
   `chat.ask(...)` and wraps it in a
   `StreamingResponse(..., media_type="application/x-ndjson")` instead of
   returning `ChatResponse` JSON — the frontend tells which one it got from
   the response's own `content-type` header, not from a client-side copy of
   the setting. `ask_stream()` yields *events*, not bare strings — a dict
-  with one key, `{"text": ...}` for a reply piece or `{"boxes": [...]}`
-  after an object search found something — and the router writes each as
+  with one key, `{"text": ...}` for a reply piece, `{"boxes": [...]}`
+  after an object search found something, or `{"search_results": [...]}`
+  after a library search — and the router writes each as
   one JSON line. (It was `text/plain` before the tool existed; plain text
   had nowhere to carry boxes.) A streamed tool call arrives in fragments
   across chunks (id/name once, the arguments JSON in pieces, keyed by
@@ -811,9 +843,14 @@ cached) is also per-pod, in-memory state — same caveat.
   re-fetches the selected tag's ids) when the photo modal closes or the
   management page is left, since tags change in both places. The sidebar's contents
   keep a fixed 280px width while the `<aside>` animates open/closed — keep
-  that in step with `.sidebar-open`'s width. The "Search" section is
-  rendered in `.sidebar-footer`, pinned above "Manage", not in the
-  scrolling `<nav>` with the other sections. The site icon is
+  that in step with `.sidebar-open`'s width. "Search Results", the row under "All Images", is not a search box —
+  search is done by asking the chat (`ChatWidget.jsx`). `App.jsx` keeps
+  two pieces of state for it: `searchResults` (the active filter, `null`
+  when another filter or none is selected) and `lastSearchResults` (the
+  most recent search, `null` before the first), so clicking the row brings
+  the last search back after browsing elsewhere; the row's count is the
+  latter's length. Results stay in the order the search returned them and
+  are never sorted or grouped. The site icon is
   `web/public/favicon.svg` — the logo's lantern without the wordmark, a
   hand-kept copy of `Logo.jsx`'s `LanternArt`; change both together.
   The wordmark's cursive face is Dancing Script, bundled through the
@@ -946,31 +983,39 @@ cached) is also per-pod, in-memory state — same caveat.
   launcher button fixed to the viewport's bottom-right corner that opens a
   popup holding `PhotoChat.jsx`. It sits above the photo modal's overlay
   (`.chat-widget`'s `z-index`), so it's usable while a photo is open.
-  `App.jsx` passes it `selectedPhoto` — the photo open in the modal is
-  what the chat is about, since the chat API is per-photo — and lifts the
-  boxes the chat model's object search located (`chat.py`'s
-  `locate_object` tool) into its own `chatBoxes` state, handed to
-  `PhotoModal.jsx` to draw. With no photo open, `PhotoChat` disables
-  its form and says to open one; there is no photo-less chat endpoint yet.
+  `App.jsx` passes it `selectedPhoto` — with a photo open the model is
+  shown it; with none the chat is about the library (`POST /api/chat`).
+  Two things come back up from it. Boxes the model located in the open
+  photo (`chat.py`'s `locate_object` tool) are lifted into `App.jsx`'s
+  `chatBoxes` state and handed to `PhotoModal.jsx` to draw. Photo ids a
+  library search found go to `handleSearchResults`, which looks them up in
+  the already-loaded `photos` list (ids not in it are skipped), clears
+  every other filter, closes the open photo, switches to the gallery and
+  shows them as "Search Results".
   The popup is hidden (`hidden` attribute), not unmounted, when closed, so
   the conversation survives closing and reopening it.
   The launcher's icon (`LuminaryBubble`) is a speech bubble drawn as the
   logo's luminaria on a black disc, in `Logo.jsx`'s lantern palette
   (literal colours, same in both themes); its halo animates via CSS, not
   SMIL, so the reduced-motion block stills it.
-- `PhotoChat.jsx` talks to `POST /api/photos/{id}/chat` via
-  `client.js`'s `chatAboutPhoto(photoId, message, history, onChunk)`.
-  There is no backend picker: whether to search the photo for an object is
-  the chat model's call, server-side (see `chat.py`'s "Object search"). An
-  empty message is never sent. Message history sent on each call is built
-  from the component's own local `messages` state (`{role, text}` per
-  turn, oldest first) — there's no server-side conversation state, each
-  request carries the full relevant history itself. Resets
-  (`messages`/`draft`/`error`) when `photoId` changes. A failed request
-  (e.g. the `503` "not configured" case) surfaces `err.message` in a
-  `role="alert"` element rather than silently dropping the user's message.
-  Boxes that come back with a reply go up through `onBoxesChange`; they're
-  cleared again as soon as the next message is sent.
+- `PhotoChat.jsx` talks to the chat API via `client.js`'s
+  `chatAboutPhoto(photoId, message, history, onChunk)` — `photoId` may be
+  `null`, which posts to `/api/chat` instead of `/api/photos/{id}/chat`.
+  There is no backend picker and no search form: whether to search the
+  library, or the open photo for an object, is the chat model's call,
+  server-side (see `chat.py`'s "Tools"). An empty message is never sent.
+  Message history sent on each call is built from the component's own
+  local `messages` state (`{role, text}` per turn, oldest first) — there's
+  no server-side conversation state, each request carries the full
+  relevant history itself. The conversation deliberately does *not* reset
+  when `photoId` changes: a search closes the open photo to show its
+  results, and resetting would wipe the very reply that announced them.
+  Only the boxes are cleared on a photo change. A failed request (e.g. the
+  `503` "not configured" case) surfaces `err.message` in a `role="alert"`
+  element rather than silently dropping the user's message. Boxes that
+  come back with a reply go up through `onBoxesChange` (cleared again as
+  soon as the next message is sent); a non-`null` `searchResults` goes up
+  through `onSearchResults`.
 
   `chatAboutPhoto` itself (in `client.js`) decides streaming vs. JSON purely
   from the *response's* `content-type` — never a client-side copy of
@@ -978,8 +1023,9 @@ cached) is also per-pod, in-memory state — same caveat.
   knowledge of that server setting at all. For a streamed reply it reads
   `response.body` incrementally via `getReader()`/`TextDecoder`, splits it
   into JSON lines (keeping an unfinished trailing line for the next read),
-  invokes `onChunk` per `text` event and keeps the latest `boxes` event,
-  still resolving to `{reply, boxes}` at the end, so callers that don't
+  invokes `onChunk` per `text` event and keeps the latest `boxes` and
+  `search_results` events, still resolving to
+  `{reply, boxes, searchResults}` at the end, so callers that don't
   care about incremental display can ignore `onChunk` entirely. In
   `PhotoChat.jsx`, `handleSubmit`'s `onChunk`
   callback grows a single assistant message in place (tracked by index via

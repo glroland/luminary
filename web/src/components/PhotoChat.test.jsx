@@ -147,31 +147,57 @@ describe("PhotoChat", () => {
     await waitFor(() => expect(screen.getByText("a reply")).toBeInTheDocument());
   });
 
-  it("asks for a photo to be opened, and sends nothing, when there is none", () => {
-    const chatMock = vi.spyOn(client, "chatAboutPhoto");
+  it("chats about the library when no photo is open", async () => {
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockResolvedValue({ reply: "Found 3.", boxes: [], searchResults: ["a", "b", "c"] });
+    const onSearchResults = vi.fn();
 
-    render(<PhotoChat photoId={null} />);
+    render(<PhotoChat photoId={null} onSearchResults={onSearchResults} />);
 
-    expect(screen.getByText(/open a photo to chat about it/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/chat message/i)).toBeDisabled();
-    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
-    fireEvent.submit(screen.getByLabelText(/chat message/i).closest("form"));
-    expect(chatMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/ask me to find photos/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "find beach photos" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(screen.getByText("Found 3.")).toBeInTheDocument());
+    expect(chatMock).toHaveBeenCalledWith(null, "find beach photos", [], expect.any(Function));
+    expect(onSearchResults).toHaveBeenCalledWith(["a", "b", "c"]);
   });
 
-  it("resets the conversation when the photo changes", async () => {
-    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "a reply", boxes: [] });
+  it("reports an empty search, but not a reply that didn't search", async () => {
+    const chatMock = vi.spyOn(client, "chatAboutPhoto");
+    const onSearchResults = vi.fn();
+    render(<PhotoChat photoId="1" onSearchResults={onSearchResults} />);
 
-    const { rerender } = render(<PhotoChat photoId="1" />);
+    chatMock.mockResolvedValueOnce({ reply: "just chatting", boxes: [], searchResults: null });
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "hi" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(screen.getByText("just chatting")).toBeInTheDocument());
+    expect(onSearchResults).not.toHaveBeenCalled();
+
+    chatMock.mockResolvedValueOnce({ reply: "nothing found", boxes: [], searchResults: [] });
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "find unicorns" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(screen.getByText("nothing found")).toBeInTheDocument());
+    expect(onSearchResults).toHaveBeenCalledWith([]);
+  });
+
+  it("keeps the conversation, but clears the boxes, when the photo changes", async () => {
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "a reply", boxes: [], searchResults: null });
+    const onBoxesChange = vi.fn();
+
+    const { rerender } = render(<PhotoChat photoId="1" onBoxesChange={onBoxesChange} />);
 
     fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "Hello" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(screen.getByText("a reply")).toBeInTheDocument());
 
+    onBoxesChange.mockClear();
     await act(async () => {
-      rerender(<PhotoChat photoId="2" />);
+      rerender(<PhotoChat photoId={null} onBoxesChange={onBoxesChange} />);
     });
-    expect(screen.queryByText("Hello")).not.toBeInTheDocument();
-    expect(screen.getByText(/ask something about this photo/i)).toBeInTheDocument();
+    expect(screen.getByText("Hello")).toBeInTheDocument();
+    expect(screen.getByText("a reply")).toBeInTheDocument();
+    expect(onBoxesChange).toHaveBeenCalledWith([]);
   });
 });

@@ -222,71 +222,100 @@ describe("App", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
-  it("searches, narrows the grid by similarity, then clears via the sidebar's x button", async () => {
+  // Search runs through the chat: the reply carries the matching photo
+  // ids, which become the gallery's "Search Results".
+  async function searchViaChat(message) {
+    fireEvent.click(screen.getByRole("button", { name: /open chat/i }));
+    fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: message } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /send/i }));
+      await Promise.resolve();
+    });
+  }
+
+  function mockTwoPhotos() {
     const createdAt = new Date().toISOString();
     vi.spyOn(client, "fetchPhotos").mockResolvedValue([
       { id: "1", filename: "beach.jpg", width: 100, height: 100, created_at: createdAt },
       { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt },
     ]);
-    const searchMock = vi.spyOn(client, "searchPhotos").mockResolvedValue([
-      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt, similarity: 0.9 },
-    ]);
+  }
+
+  it("shows a chat search's matches as Search Results, and All Images clears it", async () => {
+    mockTwoPhotos();
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockResolvedValue({ reply: "Found one party photo.", boxes: [], searchResults: ["2"] });
 
     render(<App />);
     await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
-    fireEvent.change(screen.getByPlaceholderText(/search photo descriptions/i), {
-      target: { value: "a party" },
-    });
+    await searchViaChat("find party photos");
 
-    // The search section's own submit button shares its accessible name
-    // ("Search") with the collapsible section header above it -- find it
-    // by its distinguishing type="submit" instead of by role+name, same
-    // disambiguation Sidebar.test.jsx uses.
-    const submitButton = document.querySelector(".sidebar-search-actions button[type='submit']");
-    await act(async () => {
-      fireEvent.click(submitButton);
-      await Promise.resolve();
-    });
-
-    expect(searchMock).toHaveBeenCalledWith("a party", 0.5); // 0.5 = the default ("Moderate match") threshold
+    // No photo is open, so the chat is about the library as a whole.
+    expect(chatMock).toHaveBeenCalledWith(null, "find party photos", [], expect.any(Function));
     await waitFor(() => expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument());
     expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /clear search/i }));
-    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
-    expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
-  });
-
-  it("clears an active search when a different sidebar filter is selected", async () => {
-    const createdAt = new Date().toISOString();
-    vi.spyOn(client, "fetchPhotos").mockResolvedValue([
-      { id: "1", filename: "beach.jpg", width: 100, height: 100, created_at: createdAt },
-      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt },
-    ]);
-    vi.spyOn(client, "searchPhotos").mockResolvedValue([
-      { id: "2", filename: "party.jpg", width: 100, height: 100, created_at: createdAt, similarity: 0.9 },
-    ]);
-
-    render(<App />);
-    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
-    fireEvent.change(screen.getByPlaceholderText(/search photo descriptions/i), {
-      target: { value: "a party" },
-    });
-    const submitButton = document.querySelector(".sidebar-search-actions button[type='submit']");
-    await act(async () => {
-      fireEvent.click(submitButton);
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument());
+    expect(screen.getByText("Found one party photo.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search Results" })).toHaveClass("sidebar-all-images-active");
 
     fireEvent.click(screen.getByText("All Images"));
     await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
     expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
-    // The clear ("x") button only shows while a search is active.
-    expect(screen.queryByRole("button", { name: /clear search/i })).not.toBeInTheDocument();
+
+    // The row brings the last search back.
+    fireEvent.click(screen.getByRole("button", { name: "Search Results" }));
+    await waitFor(() => expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument());
+    expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
+  });
+
+  it("closes the open photo to show a search's results, keeping the conversation", async () => {
+    mockTwoPhotos();
+    const chatMock = vi
+      .spyOn(client, "chatAboutPhoto")
+      .mockResolvedValue({ reply: "Found the party.", boxes: [], searchResults: ["2"] });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByAltText("beach.jpg"));
+    await waitFor(() => expect(document.querySelector(".photo-modal")).toBeInTheDocument());
+
+    await searchViaChat("find party photos");
+
+    // The open photo is what the model was shown.
+    expect(chatMock).toHaveBeenCalledWith("1", "find party photos", [], expect.any(Function));
+    await waitFor(() => expect(document.querySelector(".photo-modal")).not.toBeInTheDocument());
+    expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
+    expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument();
+    expect(screen.getByText("Found the party.")).toBeInTheDocument();
+  });
+
+  it("leaves the gallery alone when a chat reply didn't search", async () => {
+    mockTwoPhotos();
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "Hello!", boxes: [], searchResults: null });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+
+    await searchViaChat("hi");
+
+    await waitFor(() => expect(screen.getByText("Hello!")).toBeInTheDocument());
+    expect(screen.getByAltText("beach.jpg")).toBeInTheDocument();
+    expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
+  });
+
+  it("says so when a search matched nothing, or none has been run yet", async () => {
+    mockTwoPhotos();
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({ reply: "Nothing found.", boxes: [], searchResults: [] });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Search Results" }));
+    expect(screen.getByText(/no search yet/i)).toBeInTheDocument();
+
+    await searchViaChat("find unicorns");
+    await waitFor(() => expect(screen.getByText(/no photos match your search/i)).toBeInTheDocument());
   });
 });

@@ -1,14 +1,26 @@
-"""Chat about a photo with an OpenAI-*compatible* multimodal chat endpoint
-(self-hosted or not -- LUMINARY_OPENAI_BASE_URL is never assumed to be
-api.openai.com), which can call one tool of ours: a visual object search
-run by a local Florence-2 vision-language model (see
-https://huggingface.co/microsoft/Florence-2-base), in-process via
-transformers/torch.
+"""The chat assistant: an OpenAI-*compatible* chat endpoint (self-hosted or
+not -- LUMINARY_OPENAI_BASE_URL is never assumed to be api.openai.com)
+that can call tools of ours. If a photo is open it's attached to the
+message, so the model can see it; with none open the chat is about the
+library as a whole.
 
-Both are optional dependencies (openai is light; torch/transformers are
-not) -- imported lazily inside the functions that need them, not at module
-import time, so the API starts and the rest of the test suite runs without
-requiring either to be installed or configured.
+The tools (see _TOOLS below; the model decides when to call one):
+
+- search_photos_by_filename / search_photos_semantic /
+  search_photos_by_text search the library. This is the app's only search
+  UI -- there is no search box. The photos a search finds travel back
+  alongside the reply (ChatReply.search_results, ids only) and the web UI
+  shows them as the gallery's "Search Results".
+- locate_object, only offered while a photo is open, finds an object in
+  that photo with a local Florence-2 vision-language model (see
+  https://huggingface.co/microsoft/Florence-2-base), in-process via
+  transformers/torch. The boxes found travel back the same way
+  (ChatReply.boxes) for the frontend to draw on the full-size image.
+
+openai and torch/transformers are optional dependencies (openai is light;
+the others are not) -- imported lazily inside the functions that need
+them, not at module import time, so the API starts and the rest of the
+test suite runs without requiring either to be installed or configured.
 
 Florence-2 is not a conversational VQA model: its API is a fixed set of task
 tokens (captioning, OCR, object detection, phrase grounding), not free-form
@@ -17,17 +29,12 @@ token: <CAPTION_TO_PHRASE_GROUNDING>, which takes a phrase and returns the
 bounding box(es) where it appears in the image (see run_example() in the
 model card) -- not a natural-language answer. That's why it's a *tool* of
 the chat model rather than a chat backend of its own (it used to be one,
-picked with a checkbox in the UI): the chat model decides when a question
-needs something located ("where's the dog?"), calls `locate_object` with
-the phrase to search for, and words the answer itself. The boxes found
-travel back alongside the reply (ChatReply.boxes) for the frontend to draw
-on the full-size image.
+picked with a checkbox in the UI).
 
-The tool is only offered when LUMINARY_CHAT_OBJECT_SEARCH is on (the
-default) and torch/transformers are importable -- see
-_object_search_available(). Turn it off for an OpenAI-compatible server
-that rejects requests carrying `tools` (e.g. vLLM started without tool
-calling enabled); chat then works as plain question answering.
+LUMINARY_CHAT_TOOLS (default on) switches every tool off, for an
+OpenAI-compatible server that rejects requests carrying `tools` (e.g. vLLM
+started without tool calling enabled); chat then works as plain question
+answering, and there is no search.
 
 The reply can optionally be streamed back token-by-token
 (LUMINARY_OPENAI_STREAMING, off by default) -- see should_stream()/
@@ -60,9 +67,11 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
+from typing import Optional
 
+from . import embeddings, storage
 from .config import (
-    get_chat_object_search,
+    get_chat_tools,
     get_florence_device,
     get_florence_model,
     get_openai_api_key,
@@ -89,20 +98,27 @@ class ChatNotConfigured(Exception):
 @dataclass
 class ChatReply:
     """Return shape of ask(): `text` is always the human-readable reply.
+
     `boxes` is non-empty only when the model called the locate_object tool
     this turn and it found something -- each is
     {"label": str, "x1"/"y1"/"x2"/"y2": float} in the *original* photo's
     pixel coordinate space (matching Photo.width/height from the API, not
     whatever resolution either model processed internally), so the frontend
     can position an overlay directly against the full-size image without
-    knowing anything about Florence-2's internals."""
+    knowing anything about Florence-2's internals.
+
+    `search_results` is None unless the model searched the library this
+    turn; then it's the ids of the photos found, best match first ([] if
+    nothing matched)."""
 
     text: str
     boxes: list[dict] = field(default_factory=list)
+    search_results: Optional[list[str]] = None
 
 
-def ask(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> ChatReply:
-    """Ask a question about a photo, returning the full reply at once.
+def ask(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]) -> ChatReply:
+    """Send one chat message, returning the full reply at once.
+    `photo_bytes`/`content_type` are the open photo, or None when none is.
     `history` is a list of {"role": "user"|"assistant", "text": str}
     dicts, oldest first."""
     return _ask_openai(photo_bytes, content_type, message, history)
@@ -115,12 +131,12 @@ def should_stream() -> bool:
     return get_openai_streaming()
 
 
-def ask_stream(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+def ask_stream(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]):
     """Streaming counterpart to ask(), for when should_stream() is True.
     Returns an iterator of events, each a dict with exactly one key:
-    {"text": str} for the next piece of the reply, or {"boxes": [...]}
-    (same shape as ChatReply.boxes, the turn's full list so far) once a
-    locate_object call has found something."""
+    {"text": str} for the next piece of the reply, {"boxes": [...]} or
+    {"search_results": [...]} (same shapes as ChatReply's, the turn's
+    current value) once a tool call has produced them."""
     return _ask_openai_stream(photo_bytes, content_type, message, history)
 
 
@@ -184,7 +200,7 @@ def build_openai_client(openai_cls, api_key: str):
     return openai_cls(api_key=api_key, base_url=get_openai_base_url(), **kwargs)
 
 
-def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+def _prepare_openai_call(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]):
     """Shared setup for both the blocking and streaming openai calls: validate
     config, build the client and the messages payload. Raises
     ChatNotConfigured synchronously (not deferred into a generator) so a
@@ -203,10 +219,14 @@ def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, hi
 
     client = build_openai_client(OpenAI, api_key)
 
+    messages = [{"role": turn["role"], "content": turn["text"]} for turn in history]
+    if photo_bytes is None:
+        messages.append({"role": "user", "content": message})
+        return client, model, messages
+
     photo_bytes, content_type = _downscale_for_chat(photo_bytes, content_type)
     image_data_url = f"data:{content_type};base64,{base64.b64encode(photo_bytes).decode('ascii')}"
 
-    messages = [{"role": turn["role"], "content": turn["text"]} for turn in history]
     # The image is attached to the current message on every call (rather
     # than once at the start of the conversation) so it works the same way
     # regardless of whether a given OpenAI-compatible server retains image
@@ -224,64 +244,137 @@ def _prepare_openai_call(photo_bytes: bytes, content_type: str, message: str, hi
     return client, model, messages
 
 
-# The model may call the tool, read the result, and call it again (e.g. a
-# second phrase after the first found nothing). The last round is always
+# The model may call a tool, read the result, and call another (e.g. a
+# looser search after the first found nothing). The last round is always
 # made without tools, so a turn can't loop: it has to end in an answer.
 _MAX_CHAT_ROUNDS = 4
 
-_LOCATE_OBJECT_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "locate_object",
-        "description": (
-            "Search the photo for an object with a visual grounding model and get back the "
-            "bounding box of each match. The matches are also highlighted on the photo for "
-            "the user. Call this when the user asks to find, locate, point out or show where "
-            "something is, or when you need to confirm whether a specific object is present. "
-            "Don't call it for questions you can answer just by looking at the photo."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "object": {
-                    "type": "string",
-                    "description": 'What to search for, as a short noun phrase, e.g. "the dog" or "red car".',
-                }
-            },
-            "required": ["object"],
+# search_photos_semantic's `match_level`: the minimum cosine similarity
+# between the query and a photo's description. Starting points, not
+# verified-correct values -- the same spread the old sidebar search box
+# offered.
+_MATCH_LEVELS = {"loose": 0.3, "moderate": 0.5, "strict": 0.7, "very_strict": 0.85}
+_DEFAULT_MATCH_LEVEL = "loose"
+
+# How many of a search's matches are described to the model. All of them
+# reach the user (as ids, in ChatReply.search_results); the model only
+# needs enough to say something sensible about what was found.
+_SEARCH_PREVIEW_COUNT = 10
+
+_SEARCH_NOTE = (
+    "The matching photos are shown to the user in the gallery, under \"Search Results\" -- "
+    "summarise what was found rather than listing every file."
+)
+
+
+def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": properties, "required": required},
+        },
+    }
+
+
+_FILENAME_SEARCH_TOOL = _tool(
+    "search_photos_by_filename",
+    "Find photos in the user's library by file name or folder path (case-insensitive; every word "
+    "given must appear in the path). Use when the user refers to a file or folder name, e.g. "
+    '"IMG_1234" or "the vacation/2019 folder". ' + _SEARCH_NOTE,
+    {"text": {"type": "string", "description": "Text to look for in the file name or path."}},
+    ["text"],
+)
+
+_SEMANTIC_SEARCH_TOOL = _tool(
+    "search_photos_semantic",
+    "Find photos in the user's library by meaning: matches photos whose description is similar to "
+    "the query even when the words differ. Use for what a photo shows or is about, e.g. "
+    '"kids playing in snow" or "a birthday party". ' + _SEARCH_NOTE,
+    {
+        "query": {"type": "string", "description": "A description of the photos to find."},
+        "match_level": {
+            "type": "string",
+            "enum": list(_MATCH_LEVELS),
+            "description": (
+                f'How close a match has to be. Defaults to "{_DEFAULT_MATCH_LEVEL}". Use a stricter '
+                "level if the user wants only close matches or a search returned too many unrelated photos."
+            ),
         },
     },
-}
+    ["query"],
+)
+
+_TEXT_SEARCH_TOOL = _tool(
+    "search_photos_by_text",
+    "Find photos in the user's library by plain text match (case-insensitive) across everything "
+    "known about them: file name and path, description, location, names of people tagged in the "
+    "photo, and tags. Every word given must appear somewhere. Use for specific names, places or "
+    'words, e.g. "Alice", "Boone" or "Grandfather Mountain". ' + _SEARCH_NOTE,
+    {"text": {"type": "string", "description": "The word(s) to look for."}},
+    ["text"],
+)
+
+_LOCATE_OBJECT_TOOL = _tool(
+    "locate_object",
+    "Search the open photo for an object with a visual grounding model and get back the bounding "
+    "box of each match. The matches are also highlighted on the photo for the user. Call this when "
+    "the user asks to find, locate, point out or show where something is in this photo, or when "
+    "you need to confirm whether a specific object is present. Don't call it for questions you can "
+    "answer just by looking at the photo.",
+    {"object": {"type": "string", "description": 'What to search for, as a short noun phrase, e.g. "the dog" or "red car".'}},
+    ["object"],
+)
+
+_SEARCH_TOOLS = [_FILENAME_SEARCH_TOOL, _SEMANTIC_SEARCH_TOOL, _TEXT_SEARCH_TOOL]
+
+
+class _Turn:
+    """What one chat turn's tool calls work on and produce."""
+
+    def __init__(self, photo_bytes: Optional[bytes]):
+        self.photo_bytes = photo_bytes  # the open photo's original bytes, or None
+        self.boxes: list[dict] = []
+        self.search_results: Optional[list[str]] = None
+
+    def record_search(self, photos: list[dict]) -> None:
+        # When the model searches more than once in a turn, the last search
+        # that found something is what the user is shown -- a follow-up that
+        # comes back empty doesn't wipe out an earlier search's matches.
+        if photos or self.search_results is None:
+            self.search_results = [photo["id"] for photo in photos]
 
 
 def _object_search_available() -> bool:
-    """Whether to offer the model the locate_object tool at all: switched
-    on (LUMINARY_CHAT_OBJECT_SEARCH), and Florence-2's dependencies are
-    installed. find_spec() only looks the packages up -- it doesn't import
-    them, so this stays cheap and keeps torch a lazy import."""
-    if not get_chat_object_search():
-        return False
+    """Whether Florence-2's dependencies are installed, i.e. whether
+    locate_object can be offered. find_spec() only looks the packages up --
+    it doesn't import them, so this stays cheap and keeps torch a lazy
+    import."""
     try:
         return all(importlib.util.find_spec(name) is not None for name in ("torch", "transformers"))
     except (ImportError, ValueError):
         return False
 
 
-def _chat_tools(round_index: int) -> dict:
+def _chat_tools(round_index: int, turn: _Turn) -> dict:
     """Extra kwargs for one chat.completions.create() call: the tool list,
     or nothing -- `tools` is left out entirely rather than sent empty, since
     some OpenAI-compatible servers reject an empty list."""
-    if round_index < _MAX_CHAT_ROUNDS - 1 and _object_search_available():
-        return {"tools": [_LOCATE_OBJECT_TOOL]}
-    return {}
+    if round_index >= _MAX_CHAT_ROUNDS - 1 or not get_chat_tools():
+        return {}
+    tools = list(_SEARCH_TOOLS)
+    if turn.photo_bytes is not None and _object_search_available():
+        tools.append(_LOCATE_OBJECT_TOOL)
+    return {"tools": tools}
 
 
-def _run_tool_calls(messages: list, content: str, calls: list[dict], photo_bytes: bytes, boxes: list) -> None:
+def _run_tool_calls(messages: list, content: str, calls: list[dict], turn: _Turn) -> None:
     """Record the model's tool calls (each {"id", "name", "arguments"},
     `arguments` still the raw JSON string) and their results on `messages`,
-    ready for the next round, appending any boxes found to `boxes`. A tool
+    ready for the next round; what they found lands on `turn`. A tool
     failure never fails the chat: it's reported back to the model as the
-    tool's result, so the model can still answer from the photo itself."""
+    tool's result, so the model can still answer without it."""
     messages.append(
         {
             "role": "assistant",
@@ -297,43 +390,120 @@ def _run_tool_calls(messages: list, content: str, calls: list[dict], photo_bytes
         }
     )
     for call in calls:
-        messages.append(
-            {"role": "tool", "tool_call_id": call["id"], "content": _run_tool_call(call, photo_bytes, boxes)}
-        )
+        messages.append({"role": "tool", "tool_call_id": call["id"], "content": _run_tool_call(call, turn)})
 
 
-def _run_tool_call(call: dict, photo_bytes: bytes, boxes: list) -> str:
-    if call["name"] != _LOCATE_OBJECT_TOOL["function"]["name"]:
+def _run_tool_call(call: dict, turn: _Turn) -> str:
+    handler = _TOOL_HANDLERS.get(call["name"])
+    if handler is None:
         return f"Unknown tool: {call['name']}"
     try:
         arguments = json.loads(call["arguments"] or "{}")
-        phrase = arguments.get("object") if isinstance(arguments, dict) else None
     except ValueError:
-        phrase = None
-    if not isinstance(phrase, str) or not phrase.strip():
-        return 'Invalid arguments: "object" must be a non-empty string.'
-
+        arguments = None
+    if not isinstance(arguments, dict):
+        return "Invalid arguments: expected a JSON object."
     try:
-        text, found = locate_object(photo_bytes, phrase.strip())
+        return handler(arguments, turn)
+    except Exception:
+        logger.exception("Chat tool %s(%r) failed", call["name"], arguments)
+        return "The tool failed."
+
+
+def _text_argument(arguments: dict, name: str) -> Optional[str]:
+    value = arguments.get(name)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _search_result_text(photos: list[dict], what: str, turn: _Turn) -> str:
+    """Record a search's matches on the turn and describe them to the model."""
+    logger.info("Chat model searched the library for %s: %d match(es)", what, len(photos))
+    turn.record_search(photos)
+    if not photos:
+        return f"No photos matched {what}."
+
+    lines = []
+    for photo in photos[:_SEARCH_PREVIEW_COUNT]:
+        details = [photo["filename"]]
+        if photo.get("location_name"):
+            details.append(photo["location_name"])
+        if photo.get("description"):
+            details.append(photo["description"][:200])
+        lines.append("- " + " | ".join(details))
+    more = len(photos) - len(lines)
+    if more > 0:
+        lines.append(f"(and {more} more)")
+    count = f"{len(photos)} photo{'' if len(photos) == 1 else 's'}"
+    if len(photos) >= storage.SEARCH_RESULTS_LIMIT:
+        count = f"at least {count} (the search stops there)"
+    return (
+        f"Found {count} matching {what}. They are now shown to the user in the gallery "
+        'under "Search Results".\n' + "\n".join(lines)
+    )
+
+
+def _tool_search_by_filename(arguments: dict, turn: _Turn) -> str:
+    text = _text_argument(arguments, "text")
+    if text is None:
+        return 'Invalid arguments: "text" must be a non-empty string.'
+    return _search_result_text(storage.search_photos_by_filename(text), f'the file name/path "{text}"', turn)
+
+
+def _tool_search_semantic(arguments: dict, turn: _Turn) -> str:
+    query = _text_argument(arguments, "query")
+    if query is None:
+        return 'Invalid arguments: "query" must be a non-empty string.'
+    level = arguments.get("match_level") or _DEFAULT_MATCH_LEVEL
+    if level not in _MATCH_LEVELS:
+        return f'Invalid arguments: "match_level" must be one of {", ".join(_MATCH_LEVELS)}.'
+    try:
+        photos = storage.search_photos(query, _MATCH_LEVELS[level])
+    except embeddings.EmbeddingNotConfigured:
+        logger.warning("Chat model called search_photos_semantic, but the embedding model isn't available")
+        return "Semantic search isn't available on this server. Try search_photos_by_text instead."
+    return _search_result_text(photos, f'"{query}" ({level} semantic match)', turn)
+
+
+def _tool_search_by_text(arguments: dict, turn: _Turn) -> str:
+    text = _text_argument(arguments, "text")
+    if text is None:
+        return 'Invalid arguments: "text" must be a non-empty string.'
+    return _search_result_text(storage.search_photos_by_text(text), f'the text "{text}"', turn)
+
+
+def _tool_locate_object(arguments: dict, turn: _Turn) -> str:
+    phrase = _text_argument(arguments, "object")
+    if phrase is None:
+        return 'Invalid arguments: "object" must be a non-empty string.'
+    if turn.photo_bytes is None:
+        return "No photo is open, so there is nothing to search in."
+    try:
+        text, found = locate_object(turn.photo_bytes, phrase)
     except ChatNotConfigured:
         logger.warning("Chat model called locate_object, but Florence-2 isn't available")
         return "Object search isn't available on this server."
-    except Exception:
-        logger.exception("locate_object(%r) failed", phrase)
-        return "Object search failed."
-
     logger.info("Chat model searched the photo for %r: %d match(es)", phrase, len(found))
-    boxes.extend(found)
+    turn.boxes.extend(found)
     return text
 
 
-def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: list[dict]) -> ChatReply:
+_TOOL_HANDLERS = {
+    "search_photos_by_filename": _tool_search_by_filename,
+    "search_photos_semantic": _tool_search_semantic,
+    "search_photos_by_text": _tool_search_by_text,
+    "locate_object": _tool_locate_object,
+}
+
+
+def _ask_openai(
+    photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]
+) -> ChatReply:
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
-    boxes: list[dict] = []
+    turn = _Turn(photo_bytes)
     for round_index in range(_MAX_CHAT_ROUNDS):
         try:
             response = client.chat.completions.create(
-                model=model, messages=messages, max_tokens=500, **_chat_tools(round_index)
+                model=model, messages=messages, max_tokens=500, **_chat_tools(round_index, turn)
             )
         except Exception as exc:
             _log_upstream_error_body(exc)
@@ -347,11 +517,11 @@ def _ask_openai(photo_bytes: bytes, content_type: str, message: str, history: li
             {"id": call.id, "name": call.function.name, "arguments": call.function.arguments}
             for call in tool_calls
         ]
-        _run_tool_calls(messages, reply.content, calls, photo_bytes, boxes)
-    return ChatReply(text=reply.content or "", boxes=boxes)
+        _run_tool_calls(messages, reply.content, calls, turn)
+    return ChatReply(text=reply.content or "", boxes=turn.boxes, search_results=turn.search_results)
 
 
-def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, history: list[dict]):
+def _ask_openai_stream(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]):
     # _prepare_openai_call() runs here, eagerly -- not inside generate()
     # below -- specifically so ChatNotConfigured still raises synchronously
     # when this is called, rather than only once the returned generator is
@@ -361,11 +531,11 @@ def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, hist
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
 
     def generate():
-        boxes: list[dict] = []
+        turn = _Turn(photo_bytes)
         try:
             for round_index in range(_MAX_CHAT_ROUNDS):
                 stream = client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=500, stream=True, **_chat_tools(round_index)
+                    model=model, messages=messages, max_tokens=500, stream=True, **_chat_tools(round_index, turn)
                 )
                 content = ""
                 # A tool call arrives in fragments across chunks, keyed by
@@ -389,10 +559,13 @@ def _ask_openai_stream(photo_bytes: bytes, content_type: str, message: str, hist
                                 call["arguments"] += fragment.function.arguments
                 if not calls:
                     return
-                found_before = len(boxes)
-                _run_tool_calls(messages, content, [calls[index] for index in sorted(calls)], photo_bytes, boxes)
-                if len(boxes) > found_before:
-                    yield {"boxes": list(boxes)}
+                boxes_before = len(turn.boxes)
+                search_before = turn.search_results
+                _run_tool_calls(messages, content, [calls[index] for index in sorted(calls)], turn)
+                if len(turn.boxes) > boxes_before:
+                    yield {"boxes": list(turn.boxes)}
+                if turn.search_results is not search_before:
+                    yield {"search_results": turn.search_results}
         except Exception as exc:
             _log_upstream_error_body(exc)
             raise

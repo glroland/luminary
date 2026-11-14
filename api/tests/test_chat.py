@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app import chat, config
+from app import chat, config, storage
 from conftest import sync_and_wait, write_image
 
 
@@ -28,7 +28,7 @@ def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
 
     def fake_ask(photo_bytes, content_type, message, history):
         captured["args"] = (content_type, message, history)
-        return chat.ChatReply(text="a red square", boxes=[box])
+        return chat.ChatReply(text="a red square", boxes=[box], search_results=["p1", "p2"])
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
@@ -37,7 +37,7 @@ def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
         json={"message": "what is this?", "history": [{"role": "user", "text": "hi"}]},
     )
     assert response.status_code == 200
-    assert response.json() == {"reply": "a red square", "boxes": [box]}
+    assert response.json() == {"reply": "a red square", "boxes": [box], "search_results": ["p1", "p2"]}
     content_type, message, history = captured["args"]
     assert content_type == "image/jpeg"
     assert message == "what is this?"
@@ -130,7 +130,7 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
     import openai
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
-    monkeypatch.setattr(chat, "_object_search_available", lambda: False)
+    monkeypatch.setenv("LUMINARY_CHAT_TOOLS", "false")
 
     reply = chat.ask(
         b"fake-bytes",
@@ -143,7 +143,7 @@ def test_openai_backend_sends_image_and_history_to_the_client(monkeypatch):
     assert captured["api_key"] == "test-key"
     assert captured["base_url"] == "http://localhost:9999/v1"
     assert captured["model"] == "my-vision-model"
-    # No object search available: `tools` is left out, not sent empty.
+    # Tools switched off: `tools` is left out, not sent empty.
     assert "tools" not in captured
 
     messages = captured["messages"]
@@ -428,19 +428,301 @@ def _install_fake_openai(monkeypatch, responses):
 _DOG_BOX = {"label": "the dog", "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}
 
 
-def test_object_search_is_offered_only_when_enabled_and_installed(monkeypatch):
+def _offered_tools(monkeypatch, photo_bytes):
+    calls = _install_fake_openai(monkeypatch, [_FakeResponse(_FakeMessage(content="ok"))])
+    chat.ask(photo_bytes, "image/jpeg" if photo_bytes else None, "hi", [])
+    return [tool["function"]["name"] for tool in calls[0].get("tools", [])]
+
+
+_SEARCH_TOOL_NAMES = ["search_photos_by_filename", "search_photos_semantic", "search_photos_by_text"]
+
+
+def test_search_tools_are_offered_with_or_without_a_photo(monkeypatch):
+    monkeypatch.setattr(chat, "_object_search_available", lambda: True)
+    # locate_object needs a photo to look in; the search tools don't.
+    assert _offered_tools(monkeypatch, None) == _SEARCH_TOOL_NAMES
+    assert _offered_tools(monkeypatch, b"bytes") == _SEARCH_TOOL_NAMES + ["locate_object"]
+
+
+def test_locate_object_is_not_offered_without_florence(monkeypatch):
     import importlib.util
 
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    monkeypatch.delenv("LUMINARY_CHAT_OBJECT_SEARCH", raising=False)
-    assert chat._object_search_available() is True
-
-    monkeypatch.setenv("LUMINARY_CHAT_OBJECT_SEARCH", "false")
-    assert chat._object_search_available() is False
-
-    monkeypatch.setenv("LUMINARY_CHAT_OBJECT_SEARCH", "true")
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
-    assert chat._object_search_available() is False
+    assert _offered_tools(monkeypatch, b"bytes") == _SEARCH_TOOL_NAMES
+
+
+def test_no_tools_are_offered_when_switched_off(monkeypatch):
+    monkeypatch.setenv("LUMINARY_CHAT_TOOLS", "false")
+    assert _offered_tools(monkeypatch, b"bytes") == []
+
+
+def test_chat_without_a_photo_sends_a_plain_text_message(monkeypatch):
+    calls = _install_fake_openai(monkeypatch, [_FakeResponse(_FakeMessage(content="ok"))])
+
+    chat.ask(None, None, "find my beach photos", [])
+
+    assert calls[0]["messages"][-1] == {"role": "user", "content": "find my beach photos"}
+
+
+def _photo(photo_id, filename, **extra):
+    return {"id": photo_id, "filename": filename, "location_name": None, "description": None, **extra}
+
+
+def _ask_with_tool_calls(monkeypatch, *tool_calls, photo_bytes=None):
+    """Run one chat turn in which the model makes `tool_calls` (one round
+    each), then answers. Returns (reply, the recorded create() calls)."""
+    responses = [_FakeResponse(_FakeMessage(tool_calls=[call])) for call in tool_calls]
+    responses.append(_FakeResponse(_FakeMessage(content="done")))
+    calls = _install_fake_openai(monkeypatch, responses)
+    reply = chat.ask(photo_bytes, "image/jpeg" if photo_bytes else None, "hi", [])
+    return reply, calls
+
+
+def test_filename_search_tool_returns_matching_ids(monkeypatch):
+    searched = []
+
+    def fake_search(text):
+        searched.append(text)
+        return [_photo("p1", "vacation/beach.jpg", location_name="Boone", description="A sandy beach.")]
+
+    monkeypatch.setattr(storage, "search_photos_by_filename", fake_search)
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch, _FakeToolCall("c1", "search_photos_by_filename", '{"text": "beach"}')
+    )
+
+    assert searched == ["beach"]
+    assert reply.search_results == ["p1"]
+    result = calls[1]["messages"][-1]["content"]
+    # The model is told what was found, and that the user can see it.
+    assert "Found 1 photo " in result
+    assert "vacation/beach.jpg | Boone | A sandy beach." in result
+    assert "Search Results" in result
+
+
+def test_text_search_tool_returns_matching_ids(monkeypatch):
+    monkeypatch.setattr(
+        storage, "search_photos_by_text", lambda text: [_photo("p2", "a.jpg"), _photo("p3", "b.jpg")]
+    )
+
+    reply, _ = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "Alice"}'))
+
+    assert reply.search_results == ["p2", "p3"]
+
+
+@pytest.mark.parametrize(
+    "arguments,threshold",
+    [
+        ('{"query": "a party"}', 0.3),  # loose is the default
+        ('{"query": "a party", "match_level": "strict"}', 0.7),
+        ('{"query": "a party", "match_level": null}', 0.3),
+    ],
+)
+def test_semantic_search_tool_maps_match_level_to_a_threshold(monkeypatch, arguments, threshold):
+    searched = []
+
+    def fake_search(query, level_threshold):
+        searched.append((query, level_threshold))
+        return [_photo("p1", "party.jpg")]
+
+    monkeypatch.setattr(storage, "search_photos", fake_search)
+
+    reply, _ = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_semantic", arguments))
+
+    assert searched == [("a party", threshold)]
+    assert reply.search_results == ["p1"]
+
+
+def test_semantic_search_tool_rejects_an_unknown_match_level(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos", lambda *args: pytest.fail("must not search"))
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch, _FakeToolCall("c1", "search_photos_semantic", '{"query": "x", "match_level": "exact"}')
+    )
+
+    assert reply.search_results is None
+    assert "match_level" in calls[1]["messages"][-1]["content"]
+
+
+def test_semantic_search_tool_reports_a_missing_embedding_model(monkeypatch):
+    from app import embeddings
+
+    def fake_search(query, threshold):
+        raise embeddings.EmbeddingNotConfigured("no torch")
+
+    monkeypatch.setattr(storage, "search_photos", fake_search)
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_semantic", '{"query": "x"}'))
+
+    assert reply.text == "done"
+    assert reply.search_results is None
+    assert "isn't available" in calls[1]["messages"][-1]["content"]
+
+
+def test_a_search_with_no_matches_reports_an_empty_result(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda text: [])
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "zzz"}'))
+
+    # [] ("searched, nothing matched") is distinct from None ("didn't search").
+    assert reply.search_results == []
+    assert "No photos matched" in calls[1]["messages"][-1]["content"]
+
+
+def test_a_later_empty_search_does_not_wipe_an_earlier_searchs_matches(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_filename", lambda text: [_photo("p1", "a.jpg")])
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda text: [])
+
+    reply, _ = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_photos_by_filename", '{"text": "a"}'),
+        _FakeToolCall("c2", "search_photos_by_text", '{"text": "zzz"}'),
+    )
+
+    assert reply.search_results == ["p1"]
+
+
+def test_a_later_search_with_matches_replaces_an_earlier_one(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_filename", lambda text: [_photo("p1", "a.jpg")])
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda text: [_photo("p2", "b.jpg")])
+
+    reply, _ = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_photos_by_filename", '{"text": "a"}'),
+        _FakeToolCall("c2", "search_photos_by_text", '{"text": "b"}'),
+    )
+
+    assert reply.search_results == ["p2"]
+
+
+def test_a_long_result_list_is_only_previewed_to_the_model(monkeypatch):
+    photos = [_photo(f"p{n}", f"photo-{n}.jpg") for n in range(25)]
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda text: photos)
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "photo"}'))
+
+    # Every match reaches the user; the model sees a preview.
+    assert len(reply.search_results) == 25
+    result = calls[1]["messages"][-1]["content"]
+    assert "Found 25 photos" in result
+    assert result.count("\n- ") == chat._SEARCH_PREVIEW_COUNT
+    assert "(and 15 more)" in result
+
+
+def test_an_unknown_tool_is_reported_to_the_model(monkeypatch):
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "delete_everything", "{}"))
+
+    assert reply.text == "done"
+    assert "Unknown tool" in calls[1]["messages"][-1]["content"]
+
+
+# --- The search tools' queries (real database) -------------------------------
+
+
+def _index(client, tmp_path, *filenames):
+    for filename in filenames:
+        write_image(tmp_path / "photos" / filename)
+    sync_and_wait(client)
+    return {photo["filename"]: photo["id"] for photo in client.get("/api/photos").json()["photos"]}
+
+
+def _set(photo_id, **columns):
+    from app.database import get_connection
+
+    assignments = ", ".join(f"{column} = %s" for column in columns)
+    with get_connection() as conn:
+        conn.execute(f"UPDATE photos SET {assignments} WHERE id = %s", (*columns.values(), photo_id))
+        conn.commit()
+
+
+def _filenames(photos):
+    return sorted(photo["filename"] for photo in photos)
+
+
+def test_search_photos_by_filename_matches_name_and_path_case_insensitively(client, tmp_path):
+    _index(client, tmp_path, "vacation/2019/Beach.jpg", "vacation/2020/hills.jpg", "IMG_1234.jpg", "IMGX1234.jpg")
+
+    assert _filenames(storage.search_photos_by_filename("beach")) == ["vacation/2019/Beach.jpg"]
+    assert _filenames(storage.search_photos_by_filename("VACATION")) == [
+        "vacation/2019/Beach.jpg",
+        "vacation/2020/hills.jpg",
+    ]
+    # Every word must match, in any order.
+    assert _filenames(storage.search_photos_by_filename("hills vacation")) == ["vacation/2020/hills.jpg"]
+    # "_" is a literal underscore, not LIKE's any-character wildcard.
+    assert _filenames(storage.search_photos_by_filename("IMG_")) == ["IMG_1234.jpg"]
+    assert storage.search_photos_by_filename("nothing-like-this") == []
+    assert storage.search_photos_by_filename("   ") == []
+
+
+def test_search_photos_by_filename_ignores_other_fields(client, tmp_path):
+    ids = _index(client, tmp_path, "a.jpg")
+    _set(ids["a.jpg"], description="A sandy beach.")
+
+    assert storage.search_photos_by_filename("beach") == []
+    assert _filenames(storage.search_photos_by_text("beach")) == ["a.jpg"]
+
+
+def test_search_photos_by_text_looks_across_every_text_field(client, tmp_path):
+    from app import people, tags
+
+    ids = _index(client, tmp_path, "desc.jpg", "caption.jpg", "place.jpg", "trip/name.jpg", "person.jpg", "tag.jpg")
+    _set(ids["desc.jpg"], description="Kids at a Lighthouse.")
+    _set(ids["caption.jpg"], vlm_description="a lighthouse on a cliff")
+    _set(ids["place.jpg"], location_name="Lighthouse Point, Florida")
+
+    individual = people.create_individual("Lighthouse Larry")
+    from app.database import get_connection
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO faces (id, photo_id, x1, y1, x2, y2, person_id) VALUES ('f1', %s, 0, 0, 1, 1, %s)",
+            (ids["person.jpg"], individual["id"]),
+        )
+        conn.commit()
+    tag = tags.create_tag("lighthouses")
+    tags.tag_photo(ids["tag.jpg"], tag["id"])
+
+    assert _filenames(storage.search_photos_by_text("LIGHTHOUSE")) == [
+        "caption.jpg",
+        "desc.jpg",
+        "person.jpg",
+        "place.jpg",
+        "tag.jpg",
+    ]
+    assert _filenames(storage.search_photos_by_text("trip")) == ["trip/name.jpg"]
+    # Each word may match in a different field.
+    assert _filenames(storage.search_photos_by_text("florida place")) == ["place.jpg"]
+    assert storage.search_photos_by_text("florida desc") == []
+    assert storage.search_photos_by_text("") == []
+
+
+# --- The chat routes ---------------------------------------------------------
+
+
+def test_library_chat_needs_no_photo(client, monkeypatch):
+    captured = {}
+
+    def fake_ask(photo_bytes, content_type, message, history):
+        captured["args"] = (photo_bytes, content_type, message)
+        return chat.ChatReply(text="Found two.", search_results=["p1", "p2"])
+
+    monkeypatch.setattr(chat, "ask", fake_ask)
+
+    response = client.post("/api/chat", json={"message": "find beach photos"})
+
+    assert response.status_code == 200
+    assert response.json() == {"reply": "Found two.", "boxes": [], "search_results": ["p1", "p2"]}
+    assert captured["args"] == (None, None, "find beach photos")
+
+
+def test_library_chat_returns_503_when_not_configured(client, monkeypatch):
+    def fake_ask(*args, **kwargs):
+        raise chat.ChatNotConfigured("set LUMINARY_OPENAI_API_KEY")
+
+    monkeypatch.setattr(chat, "ask", fake_ask)
+
+    assert client.post("/api/chat", json={"message": "hi"}).status_code == 503
 
 
 def test_chat_model_can_call_locate_object_and_then_answer(monkeypatch):
@@ -465,7 +747,7 @@ def test_chat_model_can_call_locate_object_and_then_answer(monkeypatch):
     assert reply == chat.ChatReply(text="The dog is in the corner.", boxes=[_DOG_BOX])
     # The search runs on the original bytes, with the model's own phrase.
     assert searched == [(b"original-bytes", "the dog")]
-    assert calls[0]["tools"] == [chat._LOCATE_OBJECT_TOOL]
+    assert chat._LOCATE_OBJECT_TOOL in calls[0]["tools"]
     # Round two carries the model's call and the tool's result back to it.
     assistant, tool = calls[1]["messages"][-2:]
     assert assistant["role"] == "assistant"
@@ -525,6 +807,16 @@ def test_malformed_tool_arguments_are_reported_to_the_model(monkeypatch, argumen
 
     assert chat.ask(b"bytes", "image/jpeg", "hi", []).text == "done"
     assert "Invalid arguments" in calls[1]["messages"][-1]["content"]
+
+
+def test_locate_object_without_an_open_photo_is_reported_to_the_model(monkeypatch):
+    # Not offered without a photo, but a model can still ask for it.
+    monkeypatch.setattr(chat, "locate_object", lambda *args: pytest.fail("the tool must not run"))
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "locate_object", '{"object": "dog"}'))
+
+    assert reply.boxes == []
+    assert "No photo is open" in calls[1]["messages"][-1]["content"]
 
 
 def test_the_last_round_is_made_without_tools_so_a_turn_cannot_loop(monkeypatch):
@@ -670,6 +962,36 @@ def test_ask_stream_runs_a_streamed_tool_call_then_streams_the_answer(monkeypatc
     assert calls[1]["messages"][-2]["tool_calls"][0]["function"]["arguments"] == '{"object": "the dog"}'
 
 
+def test_ask_stream_reports_search_results_as_an_event(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda text: [_photo("p1", "a.jpg")])
+
+    class Delta:
+        def __init__(self, content=None, tool_calls=None):
+            self.content = content
+            self.tool_calls = tool_calls
+
+    class Chunk:
+        def __init__(self, delta):
+            class Choice:
+                pass
+
+            choice = Choice()
+            choice.delta = delta
+            self.choices = [choice]
+
+    _install_fake_openai(
+        monkeypatch,
+        [
+            iter([Chunk(Delta(tool_calls=[_FakeToolCall("c1", "search_photos_by_text", '{"text": "a"}')]))]),
+            iter([Chunk(Delta("Found one."))]),
+        ],
+    )
+
+    events = list(chat.ask_stream(None, None, "find a", []))
+
+    assert events == [{"search_results": ["p1"]}, {"text": "Found one."}]
+
+
 def test_chat_endpoint_streams_when_enabled(client, tmp_path, monkeypatch):
     photo_id = _get_synced_photo_id(client, tmp_path)
 
@@ -732,7 +1054,7 @@ def test_chat_endpoint_does_not_stream_by_default(client, tmp_path, monkeypatch)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json() == {"reply": "a plain reply", "boxes": []}
+    assert response.json() == {"reply": "a plain reply", "boxes": [], "search_results": None}
 
 
 @pytest.mark.parametrize("raw,expected", [(None, True), ("true", True), ("false", False), ("0", False), ("off", False)])

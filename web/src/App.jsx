@@ -4,7 +4,7 @@ import Logo from "./components/Logo.jsx";
 import ManagementPage from "./components/ManagementPage.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
-import Sidebar, { SEARCH_THRESHOLD_OPTIONS } from "./components/Sidebar.jsx";
+import Sidebar from "./components/Sidebar.jsx";
 import SortControl, { SORT_OPTIONS } from "./components/SortControl.jsx";
 import {
   fetchIndividualFaces,
@@ -13,7 +13,6 @@ import {
   fetchSyncStatus,
   fetchTagPhotoIds,
   fetchTags,
-  searchPhotos,
   startSync,
 } from "./api/client.js";
 import { applyTheme, getStoredTheme } from "./theme.js";
@@ -124,19 +123,17 @@ export default function App() {
   const [selectedTag, setSelectedTag] = useState(null);
   const [tagPhotoIds, setTagPhotoIds] = useState(null);
   const [tagsVersion, setTagsVersion] = useState(0);
-  // The sidebar's "Search" section (free-text similarity search over
-  // photos.description, see enrich.py/embeddings.py). searchQuery/
-  // searchThreshold are just the controlled form fields; searchResults is
-  // what actually narrows the grid -- null means no search is active
-  // (same "null = no filter" convention as selectedDirectory/
-  // selectedIndividual above), an array (possibly empty, meaning "no
-  // matches") means one is. Already sorted most-similar-first by the API
-  // itself (GET /api/photos/search) -- never re-sorted here.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchThreshold, setSearchThreshold] = useState(SEARCH_THRESHOLD_OPTIONS[1].value);
+  // Search is done by asking the chat (ChatWidget.jsx): the model runs a
+  // search tool server-side and the reply carries the matching photo ids
+  // (handleSearchResults below). searchResults is what narrows the grid --
+  // null means the search filter isn't selected (same "null = no filter"
+  // convention as selectedDirectory/selectedIndividual above), an array
+  // (possibly empty, meaning "no matches") means it is. Kept in the API's
+  // own best-match-first order -- never re-sorted here. lastSearchResults
+  // remembers the most recent search (null before the first one) so the
+  // sidebar's "Search Results" row can bring it back after browsing away.
   const [searchResults, setSearchResults] = useState(null);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState(null);
+  const [lastSearchResults, setLastSearchResults] = useState(null);
   // Bumped by resetGrid() whenever the filter/sort/search changes, and
   // used as PhotoGrid's `key` -- remounting it is what sends its
   // infinite-scroll window (see PhotoGrid.jsx) back to the first batch.
@@ -305,45 +302,37 @@ export default function App() {
     handleSelectPhoto(photo);
   }
 
-  async function handleSearch() {
-    const query = searchQuery.trim();
-    if (!query) return;
-    setSearchLoading(true);
-    setSearchError(null);
-    try {
-      const results = await searchPhotos(query, searchThreshold);
-      setSearchResults(results);
-      // Same "selecting one filter clears the others" rule the other
-      // sidebar sections already follow (see onSelectDirectory/
-      // onSelectIndividual/onSelectDate/onAllImages below).
-      setSelectedDirectory(null);
-      setSelectedIndividual(null);
-      setSelectedTag(null);
-      setSelectedDate(null);
-      setView("gallery");
-      resetGrid();
-    } catch (err) {
-      setSearchError(err.message);
-    } finally {
-      setSearchLoading(false);
-    }
+  // Shows `results` as the gallery's "Search Results": every other filter
+  // is cleared (same "selecting one filter clears the others" rule the
+  // sidebar sections follow) and any open photo is closed, since the
+  // results are what the user asked to see.
+  function showSearchResults(results) {
+    setSearchResults(results);
+    setSelectedDirectory(null);
+    setSelectedIndividual(null);
+    setSelectedTag(null);
+    setSelectedDate(null);
+    setSelectedPhoto(null);
+    setView("gallery");
+    resetGrid();
   }
 
-  // Cancels an active search (the sidebar's small "x") -- resets the form
-  // fields too, not just the results, so re-opening "Search" starts clean
-  // rather than showing a stale query for a filter that's no longer applied.
-  function handleClearSearch() {
-    setSearchResults(null);
-    setSearchQuery("");
-    setSearchThreshold(SEARCH_THRESHOLD_OPTIONS[1].value);
-    setSearchError(null);
+  // The chat ran a search: `ids` are the matching photo ids, best first.
+  // They're looked up in the already-loaded list, like
+  // handleNavigateToPhoto above; an id not in it (indexed since the list
+  // was loaded) is skipped.
+  function handleSearchResults(ids) {
+    const byId = new Map(photos.map((photo) => [photo.id, photo]));
+    const results = ids.map((id) => byId.get(id)).filter(Boolean);
+    setLastSearchResults(results);
+    showSearchResults(results);
   }
 
   // Memoised so the array keeps its identity across unrelated re-renders
   // (sync-status polling, the modal opening) -- PhotoGrid's own memoised
-  // section grouping depends on that. Search results are already ordered
-  // most-similar-first by the API -- never re-sorted here (see
-  // SortControl.jsx's comment).
+  // section grouping depends on that. Search results keep the order the
+  // search returned them in -- never re-sorted here (see SortControl.jsx's
+  // comment).
   const visiblePhotos = useMemo(() => {
     if (searchResults !== null) return searchResults;
     const filtered =
@@ -453,15 +442,9 @@ export default function App() {
           resetGrid();
         }}
         onManage={() => setView("manage")}
-        searchQuery={searchQuery}
-        onSearchQueryChange={setSearchQuery}
-        searchThreshold={searchThreshold}
-        onSearchThresholdChange={setSearchThreshold}
-        onSearch={handleSearch}
-        onClearSearch={handleClearSearch}
+        searchResultCount={lastSearchResults === null ? null : lastSearchResults.length}
         searchActive={searchResults !== null}
-        searchLoading={searchLoading}
-        searchError={searchError}
+        onSearchResults={() => showSearchResults(lastSearchResults ?? [])}
       />
       <div className="app-main">
         <header className="app-header">
@@ -536,6 +519,7 @@ export default function App() {
               setSelectedTag(null);
               setSelectedDate(null);
               setSearchResults(null);
+              setLastSearchResults(null);
               setIndividuals([]);
               setTags([]);
               setSelectedPhoto(null);
@@ -557,7 +541,13 @@ export default function App() {
             onToggleSidebar={handleToggleSidebar}
             sidebarOpen={sidebarOpen}
             onSelect={handleSelectPhoto}
-            emptyMessage={searchResults !== null ? "No photos match your search." : "No photos yet."}
+            emptyMessage={
+              searchResults === null
+                ? "No photos yet."
+                : lastSearchResults === null
+                  ? "No search yet. Ask the chat to find photos."
+                  : "No photos match your search."
+            }
           />
         )}
         {/* `photos` here is the list the arrow keys/filmstrip step through:
@@ -575,8 +565,9 @@ export default function App() {
           }}
         />
       </div>
-      {/* Whatever photo is open in the modal is what the chat is about. */}
-      <ChatWidget photo={selectedPhoto} onBoxesChange={setChatBoxes} />
+      {/* The chat sees whatever photo is open in the modal, and is also
+          how the library is searched. */}
+      <ChatWidget photo={selectedPhoto} onBoxesChange={setChatBoxes} onSearchResults={handleSearchResults} />
     </div>
   );
 }
