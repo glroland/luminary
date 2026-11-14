@@ -16,7 +16,7 @@ global:
   # come from the same registry and build.
   image:
     repository: registry.home.glroland.com/luminary
-    tag: "7"
+    tag: "8"
   # Base64-encoded .dockerconfigjson for pulling the api/web images above --
   # same registry credential used by both, hence shared here rather than
   # duplicated per component. Note this value is plaintext-equivalent
