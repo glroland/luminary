@@ -118,6 +118,7 @@ class _SyncProgress:
             "inserted": 0,
             "updated": 0,
             "deleted": 0,
+            "failed": 0,
             "error": None,
         }
 
@@ -144,6 +145,7 @@ class _SyncProgress:
                 "inserted": 0,
                 "updated": 0,
                 "deleted": 0,
+                "failed": 0,
                 "error": None,
             }
             return True
@@ -155,7 +157,7 @@ class _SyncProgress:
     def record(self, outcome: str) -> None:
         with self._lock:
             self._state["processed"] += 1
-            if outcome in ("inserted", "updated"):
+            if outcome in ("inserted", "updated", "failed"):
                 self._state[outcome] += 1
 
     def finish(self, deleted: int) -> None:
@@ -177,6 +179,7 @@ class _SyncProgress:
                 "inserted": 0,
                 "updated": 0,
                 "deleted": 0,
+                "failed": 0,
                 "error": None,
             }
 
@@ -259,7 +262,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     that's safe: faces are always stored before `face_detection_done` is
     set, never after.
     """
-    info = fs.info(path)
+    info = storage.retry_transient(fs.info, path)
     size = info.get("size") or 0
 
     content_changed = not existing_row or existing_row["size_bytes"] != size
@@ -342,8 +345,10 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
         # on its own rather than being folded into that try/except.
         fields["checksum"] = _compute_checksum(fs, path, relative_path)
 
-    rgb_image = None
-    try:
+    def decode():
+        # Re-runnable as a whole (it only overwrites `fields`), so a
+        # transient backend error mid-read can simply be retried.
+        rgb = None
         with fs.open(path, "rb") as f:
             with Image.open(f) as raw_image:
                 # Camera sensors commonly store pixels in landscape with an
@@ -374,14 +379,19 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                         # new, independent in-memory image, so it stays usable
                         # below after the `with fs.open(...)`/`Image.open(...)`
                         # blocks (and the file handle they own) have closed.
-                        rgb_image = image.convert("RGB")
+                        rgb = image.convert("RGB")
 
                     if needs_thumbnail:
-                        thumbnail = rgb_image.copy()
+                        thumbnail = rgb.copy()
                         thumbnail.thumbnail(THUMBNAIL_SIZE)
                         buffer = io.BytesIO()
                         thumbnail.save(buffer, "JPEG")
                         fields["thumbnail"] = buffer.getvalue()
+        return rgb
+
+    rgb_image = None
+    try:
+        rgb_image = storage.retry_transient(decode)
     except Exception:
         logger.warning(
             "Could not read/thumbnail %r; indexing metadata only", relative_path, exc_info=True
@@ -540,7 +550,7 @@ def _compute_checksum(fs, path: str, relative_path: str) -> Optional[str]:
     so this file is retried on the next sync rather than failing the whole
     run."""
     try:
-        return storage.compute_checksum(fs, path)
+        return storage.retry_transient(storage.compute_checksum, fs, path)
     except Exception:
         logger.warning("Could not compute checksum for %r", relative_path, exc_info=True)
         return None
@@ -591,9 +601,17 @@ async def _run_sync() -> None:
             relative_path = path[len(root) + 1 :]
             seen.add(relative_path)
             async with semaphore:
-                outcome = await loop.run_in_executor(
-                    _executor, _sync_one_file, fs, path, relative_path, existing.get(relative_path)
-                )
+                try:
+                    outcome = await loop.run_in_executor(
+                        _executor, _sync_one_file, fs, path, relative_path, existing.get(relative_path)
+                    )
+                except Exception:
+                    # One file's backend/database failure skips that file,
+                    # not the whole run. It's already in `seen` above, so
+                    # an existing row is left exactly as it was (never
+                    # deleted as "missing") and the next sync retries it.
+                    logger.warning("Could not sync %r; skipping it this run", relative_path, exc_info=True)
+                    outcome = "failed"
             progress.record(outcome)
 
         await asyncio.gather(*(handle(path) for path in paths))
@@ -602,10 +620,11 @@ async def _run_sync() -> None:
         progress.finish(deleted=deleted)
         summary = progress.snapshot()
         logger.info(
-            "Sync completed: %d inserted, %d updated, %d deleted (of %d found)",
+            "Sync completed: %d inserted, %d updated, %d deleted, %d failed (of %d found)",
             summary["inserted"],
             summary["updated"],
             summary["deleted"],
+            summary["failed"],
             summary["total"],
         )
         _trigger_face_refresh()

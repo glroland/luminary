@@ -63,6 +63,7 @@ class SyncStatus(BaseModel):
     inserted: int = 0
     updated: int = 0
     deleted: int = 0
+    failed: int = 0  # files skipped this run after a backend/database error
     error: Optional[str] = None
 
 

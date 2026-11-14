@@ -261,6 +261,18 @@ Postgres) lives in `storage.py`/`sync.py`:
   silent (bare `except: pass` / `progress.fail()` with no log call) —
   don't reintroduce a silent except around backend I/O in this module.
 
+  Anything else `_sync_one_file` raises for one file (its `fs.info`, the
+  database write) is caught in `_run_sync`'s `handle`, logged at
+  `WARNING`, and counted in the status's `failed` field — that file is
+  skipped, the run continues. `handle` adds the path to `seen` *before*
+  processing, which is what keeps a skipped file's existing row from
+  being deleted as "missing"; keep that ordering. Backend calls in
+  `_sync_one_file` (and `storage.read_original_bytes`) go through
+  `storage.retry_transient`, which retries with backoff on SMB's "0
+  credits are available" error: every thread shares one SMB connection,
+  and `smbprotocol` raises instead of waiting when concurrent requests
+  have used up the server-granted credit pool.
+
 Moving metadata to Postgres means multiple API replicas *could* share that
 part of the storage layer, but on-disk originals/thumbnails were never the
 only obstacle: `sync.py`'s in-memory progress state and background thread

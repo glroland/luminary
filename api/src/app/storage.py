@@ -1,6 +1,7 @@
 import io
 import hashlib
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -58,6 +59,38 @@ def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
 
     fs, root = fsspec.core.url_to_fs(uri, **credentials)
     return fs, root.rstrip("/") or "/"
+
+
+# SMB flow control: every in-flight request spends "credits" the server
+# hands back with its response. All threads share one SMB connection, and
+# smbprotocol raises immediately rather than waiting when concurrent
+# requests have the pool at zero -- transient by nature, it clears as soon
+# as any other request completes.
+_TRANSIENT_RETRY_ATTEMPTS = 5
+_TRANSIENT_RETRY_INITIAL_DELAY = 0.2
+
+
+def _is_transient_backend_error(exc: Exception) -> bool:
+    # Matched on the message rather than the exception class so this module
+    # doesn't need smbprotocol importable for non-SMB backends.
+    return "credits are available" in str(exc)
+
+
+def retry_transient(fn, *args, **kwargs):
+    """Call `fn`, retrying with exponential backoff on a transient photos
+    backend error (see _is_transient_backend_error). Anything else, or the
+    last attempt's failure, propagates unchanged. `fn` must be safe to
+    call more than once."""
+    delay = _TRANSIENT_RETRY_INITIAL_DELAY
+    for attempt in range(1, _TRANSIENT_RETRY_ATTEMPTS + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if attempt == _TRANSIENT_RETRY_ATTEMPTS or not _is_transient_backend_error(exc):
+                raise
+            logger.debug("Transient photos backend error (attempt %d), retrying: %s", attempt, exc)
+            time.sleep(delay)
+            delay *= 2
 
 
 def _iter_file(fs: fsspec.AbstractFileSystem, path: str, chunk_size: int = 1024 * 1024):
@@ -252,10 +285,14 @@ def read_original_bytes(metadata: dict) -> Optional[bytes]:
     the whole image rather than a streamed response), or None if missing."""
     fs, root = _fs_and_root()
     path = f"{root}/{metadata['filename']}"
-    if not fs.exists(path):
-        return None
-    with fs.open(path, "rb") as f:
-        return f.read()
+
+    def read() -> Optional[bytes]:
+        if not fs.exists(path):
+            return None
+        with fs.open(path, "rb") as f:
+            return f.read()
+
+    return retry_transient(read)
 
 
 # Formats sync indexes that browsers other than Safari can't render in an

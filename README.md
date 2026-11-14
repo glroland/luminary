@@ -89,7 +89,7 @@ target/               (generated, gitignored) local venv and pytest cache --
 | GET    | `/api/photos/{id}/original` | Original file, streamed from the photos backend |
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
 | POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
-| GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, error}` |
+| GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, failed, error}` |
 | POST   | `/api/photos/{id}/chat`     | Ask about a photo — `{backend: "openai"\|"florence", message, history}` → `{reply}` (JSON), or a streamed `text/plain` body if `LUMINARY_OPENAI_STREAMING` is on; see "Photo chat" below |
 
 `POST /api/sync` is the only way photos enter the index — point

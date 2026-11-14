@@ -633,6 +633,7 @@ def test_sync_status_defaults_to_idle(client):
         "inserted": 0,
         "updated": 0,
         "deleted": 0,
+        "failed": 0,
         "error": None,
     }
 
@@ -684,3 +685,60 @@ def test_sync_thumbnail_backfill_keeps_created_at_when_the_file_has_no_exif_date
 
     sync_and_wait(client)
     assert client.get(f"/api/photos/{photo_id}").json()["created_at"].startswith("2020-02-02")
+
+
+def test_sync_skips_a_file_whose_processing_fails_without_failing_the_run_or_deleting_its_row(
+    client, tmp_path, monkeypatch
+):
+    from app import sync
+
+    write_image(tmp_path / "photos" / "good.jpg")
+    write_image(tmp_path / "photos" / "bad.jpg")
+    sync_and_wait(client)
+    before = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+    assert set(before) == {"good.jpg", "bad.jpg"}
+
+    real_sync_one_file = sync._sync_one_file
+
+    def flaky(fs, path, relative_path, existing_row):
+        if relative_path == "bad.jpg":
+            raise RuntimeError("backend hiccup")
+        return real_sync_one_file(fs, path, relative_path, existing_row)
+
+    monkeypatch.setattr(sync, "_sync_one_file", flaky)
+
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["failed"] == 1
+    assert status["deleted"] == 0
+    assert status["processed"] == 2
+
+    after = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+    assert after == before
+
+
+def test_sync_retries_a_transient_smb_credit_error(client, tmp_path, monkeypatch):
+    from app import storage
+
+    monkeypatch.setattr(storage, "_TRANSIENT_RETRY_INITIAL_DELAY", 0)
+    write_image(tmp_path / "photos" / "sample.jpg")
+
+    fs, _ = storage._fs_and_root()
+    real_info = type(fs).info
+    calls = {"count": 0}
+
+    def flaky_info(self, path, **kwargs):
+        # Only the per-file lookup, not the directory scan's own calls.
+        if str(path).endswith("sample.jpg"):
+            calls["count"] += 1
+        if str(path).endswith("sample.jpg") and calls["count"] <= 2:
+            raise OSError("Request requires 1 credits but only 0 credits are available")
+        return real_info(self, path, **kwargs)
+
+    monkeypatch.setattr(type(fs), "info", flaky_info)
+
+    status = sync_and_wait(client)
+    assert status["status"] == "completed"
+    assert status["failed"] == 0
+    assert status["inserted"] == 1
+    assert calls["count"] >= 3

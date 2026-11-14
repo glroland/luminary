@@ -271,3 +271,26 @@ def test_search_photos_propagates_a_misconfigured_embeddings_backend(client, mon
 
     with pytest.raises(embeddings.EmbeddingNotConfigured):
         storage.search_photos("a cat", threshold=0.5)
+
+
+def test_retry_transient_gives_up_after_its_attempts_and_does_not_retry_other_errors(monkeypatch):
+    from app import storage
+
+    monkeypatch.setattr(storage, "_TRANSIENT_RETRY_INITIAL_DELAY", 0)
+    calls = {"credits": 0, "other": 0}
+
+    def always_out_of_credits():
+        calls["credits"] += 1
+        raise OSError("Request requires 1 credits but only 0 credits are available")
+
+    def other_failure():
+        calls["other"] += 1
+        raise OSError("no such file")
+
+    with pytest.raises(OSError):
+        storage.retry_transient(always_out_of_credits)
+    assert calls["credits"] == storage._TRANSIENT_RETRY_ATTEMPTS
+
+    with pytest.raises(OSError):
+        storage.retry_transient(other_failure)
+    assert calls["other"] == 1
