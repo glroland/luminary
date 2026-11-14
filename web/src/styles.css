@@ -1099,24 +1099,35 @@ textarea {
   pointer-events: none;
 }
 
+/* The launcher is just its icon -- a speech bubble drawn as the logo's
+   luminaria on a black disc (ChatWidget.jsx's LuminaryBubble) -- with no button
+   chrome of its own. Its colours are the logo's, literal in the SVG and
+   the same in both themes; only the glow around it follows the theme. */
 .chat-launcher {
   pointer-events: auto;
-  width: 54px;
-  height: 54px;
+  width: 68px;
+  height: 68px;
+  padding: 0;
   border: none;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: none;
   cursor: pointer;
-  box-shadow: 0 6px 18px var(--shadow);
+  filter: drop-shadow(0 0 8px var(--logo-text-glow));
   transition: transform 0.15s ease;
 }
 
 .chat-launcher:hover {
-  transform: scale(1.06);
+  transform: scale(1.08);
+}
+
+.chat-launcher-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.chat-launcher-halo {
+  transform-origin: 32px 32px;
+  animation: logo-flicker 4s ease-in-out infinite;
 }
 
 .chat-popup {

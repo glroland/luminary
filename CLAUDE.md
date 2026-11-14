@@ -929,6 +929,10 @@ cached) is also per-pod, in-memory state — same caveat.
   its form and says to open one; there is no photo-less chat endpoint yet.
   The popup is hidden (`hidden` attribute), not unmounted, when closed, so
   the conversation survives closing and reopening it.
+  The launcher's icon (`LuminaryBubble`) is a speech bubble drawn as the
+  logo's luminaria on a black disc, in `Logo.jsx`'s lantern palette
+  (literal colours, same in both themes); its halo animates via CSS, not
+  SMIL, so the reduced-motion block stills it.
 - `PhotoChat.jsx` talks to `POST /api/photos/{id}/chat` via
   `client.js`'s `chatAboutPhoto(photoId, backend, message, history, onChunk)`.
   A checkbox picks `backend` ("florence" when checked, "openai" otherwise,
