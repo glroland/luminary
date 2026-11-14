@@ -1,3 +1,4 @@
+import io
 import hashlib
 import logging
 import uuid
@@ -6,7 +7,7 @@ from typing import Optional
 
 import fsspec
 import psycopg
-from PIL import Image
+from PIL import Image, ImageOps
 from PIL.ExifTags import IFD
 
 from . import embeddings
@@ -255,6 +256,23 @@ def read_original_bytes(metadata: dict) -> Optional[bytes]:
         return None
     with fs.open(path, "rb") as f:
         return f.read()
+
+
+# Formats sync indexes that browsers other than Safari can't render in an
+# <img> -- the original is transcoded to JPEG on its way out instead (see
+# routers/photos.py's get_photo_original). In memory only: nothing is
+# written back to the photos backend.
+TRANSCODED_CONTENT_TYPES = {"image/heic", "image/heif"}
+
+
+def transcode_to_jpeg(original_bytes: bytes) -> bytes:
+    """Decode `original_bytes` and re-encode as a full-resolution JPEG,
+    with any EXIF orientation baked in."""
+    with Image.open(io.BytesIO(original_bytes)) as raw_image:
+        image = ImageOps.exif_transpose(raw_image) or raw_image
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, "JPEG", quality=90)
+        return buffer.getvalue()
 
 
 def delete_photo(photo_id: str) -> bool:

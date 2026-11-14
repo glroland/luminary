@@ -1,6 +1,11 @@
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
-pillow==10.4.0
+pillow==13.0.0
+# Registers a HEIC/HEIF decoder with Pillow (app/__init__.py) -- Pillow has
+# none of its own, so every iPhone-default .heic in a library otherwise
+# fails Image.open() with UnidentifiedImageError. Bundles libheif in its
+# wheels; no system package to install in the Containerfile.
+pillow-heif==1.8.1
 python-multipart==0.0.9
 fsspec==2026.9.0
 s3fs==2026.9.0

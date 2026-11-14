@@ -87,13 +87,21 @@ def get_photo(photo_id: str) -> dict:
 
 
 @router.get("/photos/{photo_id}/original")
-def get_photo_original(photo_id: str) -> StreamingResponse:
+def get_photo_original(photo_id: str) -> Response:
     photo = storage.get_photo(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
 
     try:
+        if photo["content_type"] in storage.TRANSCODED_CONTENT_TYPES:
+            # HEIC/HEIF: only Safari can display it, so serve a JPEG instead.
+            original_bytes = storage.read_original_bytes(photo)
+            if original_bytes is None:
+                raise HTTPException(status_code=404, detail="Photo not found")
+            return Response(storage.transcode_to_jpeg(original_bytes), media_type="image/jpeg")
         stream = storage.stream_original(photo)
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(
             "Failed to read original for photo %s (%s) from the photos backend",

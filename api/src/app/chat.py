@@ -140,8 +140,11 @@ def _downscale_for_chat(photo_bytes: bytes, content_type: str) -> tuple[bytes, s
 
     try:
         image = Image.open(io.BytesIO(photo_bytes))
+        # HEIC/HEIF is always re-encoded, whatever its size: vision
+        # endpoints generally accept JPEG/PNG/WebP/GIF only.
+        needs_reencode = image.format == "HEIF"
         image = ImageOps.exif_transpose(image) or image
-        if max(image.size) <= _MAX_CHAT_IMAGE_DIMENSION:
+        if max(image.size) <= _MAX_CHAT_IMAGE_DIMENSION and not needs_reencode:
             return photo_bytes, content_type
         image.thumbnail((_MAX_CHAT_IMAGE_DIMENSION, _MAX_CHAT_IMAGE_DIMENSION), Image.LANCZOS)
         buffer = io.BytesIO()

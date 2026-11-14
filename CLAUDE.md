@@ -147,7 +147,13 @@ Postgres) lives in `storage.py`/`sync.py`:
   serves originals via `StreamingResponse` over `storage.stream_original`
   rather than FastAPI's `FileResponse` (which requires a local path);
   thumbnails are served as a plain `Response` read straight from the
-  database. `list_photos`/`get_photo` select an explicit column list
+  database. HEIC/HEIF needs two extra things: Pillow has no HEIF
+  decoder of its own, so `app/__init__.py` registers `pillow-heif`'s once
+  at package import (process-global — don't re-register per module), and
+  since only Safari can display HEIC, `get_photo_original` transcodes
+  those (`storage.TRANSCODED_CONTENT_TYPES`/`transcode_to_jpeg`, in
+  memory) to JPEG rather than streaming the raw bytes.
+  `list_photos`/`get_photo` select an explicit column list
   (`storage.METADATA_COLUMNS`) that excludes the thumbnail blob, so listing
   photos never pulls thumbnail bytes off disk — only `get_thumbnail` does
   that, per photo, on demand. There are no DB migrations (see `database.py`
