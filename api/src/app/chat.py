@@ -7,10 +7,13 @@ library as a whole.
 The tools (see _TOOLS below; the model decides when to call one):
 
 - search_photos_by_filename / search_photos_semantic /
-  search_photos_by_text search the library. This is the app's only search
+  search_photos_by_text / search_photos_by_individual /
+  search_photos_by_tag search the library. This is the app's only search
   UI -- there is no search box. The photos a search finds travel back
   alongside the reply (ChatReply.search_results, ids only) and the web UI
   shows them as the gallery's "Search Results".
+- list_individuals / list_tags tell the model which people and tags
+  exist. Their result is only text for the model to answer from.
 - locate_object, only offered while a photo is open, finds an object in
   that photo with a local Florence-2 vision-language model (see
   https://huggingface.co/microsoft/Florence-2-base), in-process via
@@ -327,7 +330,49 @@ _LOCATE_OBJECT_TOOL = _tool(
     ["object"],
 )
 
-_SEARCH_TOOLS = [_FILENAME_SEARCH_TOOL, _SEMANTIC_SEARCH_TOOL, _TEXT_SEARCH_TOOL]
+_LIST_INDIVIDUALS_TOOL = _tool(
+    "list_individuals",
+    "List the people (individuals) catalogued in the user's library, with how many photos each is "
+    "tagged in. Use to answer who is in the library, or to find the right name before calling "
+    "search_photos_by_individual.",
+    {},
+    [],
+)
+
+_INDIVIDUAL_SEARCH_TOOL = _tool(
+    "search_photos_by_individual",
+    "Find the photos a person is tagged in. Use when the user asks for photos of someone by name, "
+    'e.g. "photos of Alice". ' + _SEARCH_NOTE,
+    {"name": {"type": "string", "description": "The person's name, or part of it."}},
+    ["name"],
+)
+
+_LIST_TAGS_TOOL = _tool(
+    "list_tags",
+    "List the tags used in the user's library, with how many photos carry each. Use to answer what "
+    "tags exist, or to find the right tag before calling search_photos_by_tag.",
+    {},
+    [],
+)
+
+_TAG_SEARCH_TOOL = _tool(
+    "search_photos_by_tag",
+    "Find the photos carrying a tag. Use when the user asks for photos by tag, e.g. "
+    '"photos tagged favorites". ' + _SEARCH_NOTE,
+    {"name": {"type": "string", "description": "The tag's name, or part of it."}},
+    ["name"],
+)
+
+# Everything offered whether or not a photo is open.
+_SEARCH_TOOLS = [
+    _FILENAME_SEARCH_TOOL,
+    _SEMANTIC_SEARCH_TOOL,
+    _TEXT_SEARCH_TOOL,
+    _LIST_INDIVIDUALS_TOOL,
+    _INDIVIDUAL_SEARCH_TOOL,
+    _LIST_TAGS_TOOL,
+    _TAG_SEARCH_TOOL,
+]
 
 
 class _Turn:
@@ -471,6 +516,46 @@ def _tool_search_by_text(arguments: dict, turn: _Turn) -> str:
     return _search_result_text(storage.search_photos_by_text(text), f'the text "{text}"', turn)
 
 
+def _name_list_text(entries: list[dict], kind: str) -> str:
+    """Text for the list_individuals/list_tags tools. The whole list goes to
+    the model -- unlike a photo search there's no gallery view of it, so
+    the model's answer is the only way the user sees it."""
+    if not entries:
+        return f"There are no {kind} in the library yet."
+    lines = [f"- {entry['name']} ({entry['photo_count']} photo{'' if entry['photo_count'] == 1 else 's'})" for entry in entries]
+    return f"{len(entries)} {kind}:\n" + "\n".join(lines)
+
+
+def _tool_list_individuals(arguments: dict, turn: _Turn) -> str:
+    return _name_list_text(storage.list_individual_names(), "individuals")
+
+
+def _tool_list_tags(arguments: dict, turn: _Turn) -> str:
+    return _name_list_text(storage.list_tag_names(), "tags")
+
+
+def _named_search(arguments: dict, turn: _Turn, search, kind: str, list_tool: str) -> str:
+    """Shared by search_photos_by_individual/_by_tag: `search` is the
+    storage function, returning (names matched, photos)."""
+    name = _text_argument(arguments, "name")
+    if name is None:
+        return 'Invalid arguments: "name" must be a non-empty string.'
+    matched, photos = search(name)
+    if not matched:
+        # Not recorded as a search: nothing was looked for, so the user's
+        # gallery shouldn't switch to an empty result.
+        return f'There is no {kind} matching "{name}". Call {list_tool} to see the ones that exist.'
+    return _search_result_text(photos, f"the {kind} {', '.join(matched)}", turn)
+
+
+def _tool_search_by_individual(arguments: dict, turn: _Turn) -> str:
+    return _named_search(arguments, turn, storage.search_photos_by_individual, "individual", "list_individuals")
+
+
+def _tool_search_by_tag(arguments: dict, turn: _Turn) -> str:
+    return _named_search(arguments, turn, storage.search_photos_by_tag, "tag", "list_tags")
+
+
 def _tool_locate_object(arguments: dict, turn: _Turn) -> str:
     phrase = _text_argument(arguments, "object")
     if phrase is None:
@@ -491,6 +576,10 @@ _TOOL_HANDLERS = {
     "search_photos_by_filename": _tool_search_by_filename,
     "search_photos_semantic": _tool_search_semantic,
     "search_photos_by_text": _tool_search_by_text,
+    "list_individuals": _tool_list_individuals,
+    "search_photos_by_individual": _tool_search_by_individual,
+    "list_tags": _tool_list_tags,
+    "search_photos_by_tag": _tool_search_by_tag,
     "locate_object": _tool_locate_object,
 }
 

@@ -339,6 +339,91 @@ def search_photos_by_text(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> list[
         return [dict(row) for row in rows]
 
 
+def list_individual_names() -> list[dict]:
+    """Every catalogued individual as {"name", "photo_count"} (photos with
+    at least one face tagged to them, manually or automatically), by name.
+    Backs chat.py's list_individuals tool."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT i.name, COUNT(DISTINCT f.photo_id) AS photo_count
+            FROM individuals i
+            LEFT JOIN faces f ON f.person_id = i.id
+            GROUP BY i.id, i.name
+            ORDER BY i.name
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_tag_names() -> list[dict]:
+    """Every tag as {"name", "photo_count"}, by name. Backs chat.py's
+    list_tags tool."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.name, COUNT(pt.photo_id) AS photo_count
+            FROM tags t
+            LEFT JOIN photo_tags pt ON pt.tag_id = t.id
+            GROUP BY t.id, t.name
+            ORDER BY t.name
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def _match_names(conn, table: str, name: str) -> list[dict]:
+    """Rows ({"id", "name"}) of `table` (individuals or tags) that `name`
+    refers to: an exact match ignoring case if there is one, otherwise
+    every name containing it -- so "alice" finds "Alice Smith", but
+    doesn't also drag in "Alice Jones" when there's someone called just
+    "Alice"."""
+    exact = conn.execute(
+        f"SELECT id, name FROM {table} WHERE lower(name) = lower(%s) ORDER BY name", (name.strip(),)
+    ).fetchall()
+    if exact:
+        return [dict(row) for row in exact]
+    patterns = _like_patterns(name)
+    if not patterns:
+        return []
+    where = " AND ".join(["name ILIKE %s"] * len(patterns))
+    rows = conn.execute(f"SELECT id, name FROM {table} WHERE {where} ORDER BY name", patterns).fetchall()
+    return [dict(row) for row in rows]
+
+
+def search_photos_by_individual(name: str, limit: int = SEARCH_RESULTS_LIMIT) -> tuple[list[str], list[dict]]:
+    """Photos with a face tagged (manually or automatically) to the
+    individual(s) `name` refers to -- see _match_names. Returns (the names
+    matched, the photos, newest first); both empty when nobody matches.
+    Backs chat.py's search_photos_by_individual tool."""
+    with get_connection() as conn:
+        matched = _match_names(conn, "individuals", name)
+        if not matched:
+            return [], []
+        rows = conn.execute(
+            f"SELECT {METADATA_COLUMNS} FROM photos WHERE id IN "
+            "(SELECT photo_id FROM faces WHERE person_id = ANY(%s)) ORDER BY created_at DESC LIMIT %s",
+            ([row["id"] for row in matched], limit),
+        ).fetchall()
+        return [row["name"] for row in matched], [dict(row) for row in rows]
+
+
+def search_photos_by_tag(name: str, limit: int = SEARCH_RESULTS_LIMIT) -> tuple[list[str], list[dict]]:
+    """Photos carrying the tag(s) `name` refers to -- same matching and
+    return shape as search_photos_by_individual. Backs chat.py's
+    search_photos_by_tag tool."""
+    with get_connection() as conn:
+        matched = _match_names(conn, "tags", name)
+        if not matched:
+            return [], []
+        rows = conn.execute(
+            f"SELECT {METADATA_COLUMNS} FROM photos WHERE id IN "
+            "(SELECT photo_id FROM photo_tags WHERE tag_id = ANY(%s)) ORDER BY created_at DESC LIMIT %s",
+            ([row["id"] for row in matched], limit),
+        ).fetchall()
+        return [row["name"] for row in matched], [dict(row) for row in rows]
+
+
 def stream_original(metadata: dict):
     """Return a byte-chunk iterator for the original described by `metadata`
     (as returned by get_photo), or None if the file is missing."""

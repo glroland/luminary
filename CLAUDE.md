@@ -446,6 +446,20 @@ cached) is also per-pod, in-memory state — same caveat.
     When a turn searches more than once, the last search *that found
     something* wins (`_Turn.record_search`). The model itself is shown
     only the first `_SEARCH_PREVIEW_COUNT` matches, as text.
+  - `search_photos_by_individual` / `search_photos_by_tag` →
+    `storage.search_photos_by_individual` / `_by_tag`, which return
+    `(names matched, photos)`. `storage._match_names` resolves the model's
+    text to individuals/tags: an exact case-insensitive name if there is
+    one, otherwise every name containing it. A name matching *nothing* is
+    deliberately not recorded as a search (`search_results` stays `None`,
+    the gallery doesn't flip to an empty result) — the model is told to
+    call the list tool instead; a real individual tagged in no photos is a
+    search, with `[]`.
+  - `list_individuals` / `list_tags` → `storage.list_individual_names` /
+    `list_tag_names`: every name with its photo count, as text for the
+    model. Not searches — they never touch `search_results`, and unlike a
+    photo search the *whole* list goes to the model, since its answer is
+    the only place the user sees it.
   - `locate_object` → `chat.locate_object(photo_bytes, phrase)`:
     Florence-2 phrase grounding on the *original* bytes, not the
     downscaled copy the chat model was sent — boxes must be in the

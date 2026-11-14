@@ -434,7 +434,15 @@ def _offered_tools(monkeypatch, photo_bytes):
     return [tool["function"]["name"] for tool in calls[0].get("tools", [])]
 
 
-_SEARCH_TOOL_NAMES = ["search_photos_by_filename", "search_photos_semantic", "search_photos_by_text"]
+_SEARCH_TOOL_NAMES = [
+    "search_photos_by_filename",
+    "search_photos_semantic",
+    "search_photos_by_text",
+    "list_individuals",
+    "search_photos_by_individual",
+    "list_tags",
+    "search_photos_by_tag",
+]
 
 
 def test_search_tools_are_offered_with_or_without_a_photo(monkeypatch):
@@ -609,6 +617,72 @@ def test_a_long_result_list_is_only_previewed_to_the_model(monkeypatch):
     assert "(and 15 more)" in result
 
 
+@pytest.mark.parametrize(
+    "tool,storage_function,kind",
+    [("list_individuals", "list_individual_names", "individuals"), ("list_tags", "list_tag_names", "tags")],
+)
+def test_list_tools_give_the_model_every_name_with_its_photo_count(monkeypatch, tool, storage_function, kind):
+    entries = [{"name": "Alice", "photo_count": 2}, {"name": "Bob", "photo_count": 1}]
+    monkeypatch.setattr(storage, storage_function, lambda: entries)
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", tool, "{}"))
+
+    assert calls[1]["messages"][-1]["content"] == f"2 {kind}:\n- Alice (2 photos)\n- Bob (1 photo)"
+    # Listing isn't a photo search: the gallery is left alone.
+    assert reply.search_results is None
+
+
+def test_list_tools_say_so_when_there_is_nothing_to_list(monkeypatch):
+    monkeypatch.setattr(storage, "list_tag_names", lambda: [])
+
+    _, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "list_tags", ""))
+
+    assert "no tags" in calls[1]["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize(
+    "tool,storage_function",
+    [
+        ("search_photos_by_individual", "search_photos_by_individual"),
+        ("search_photos_by_tag", "search_photos_by_tag"),
+    ],
+)
+def test_named_search_tools_return_matching_ids(monkeypatch, tool, storage_function):
+    searched = []
+
+    def fake_search(name):
+        searched.append(name)
+        return ["Alice Smith"], [_photo("p1", "a.jpg"), _photo("p2", "b.jpg")]
+
+    monkeypatch.setattr(storage, storage_function, fake_search)
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", tool, '{"name": "alice"}'))
+
+    assert searched == ["alice"]
+    assert reply.search_results == ["p1", "p2"]
+    # The model is told which name its text actually matched.
+    assert "Alice Smith" in calls[1]["messages"][-1]["content"]
+
+
+def test_a_named_search_for_someone_tagged_in_nothing_is_an_empty_result(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_individual", lambda name: (["Alice"], []))
+
+    reply, _ = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_individual", '{"name": "alice"}'))
+
+    assert reply.search_results == []
+
+
+def test_a_named_search_for_an_unknown_name_is_not_a_search(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_tag", lambda name: ([], []))
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_tag", '{"name": "nope"}'))
+
+    # The gallery isn't switched to an empty result for a name that doesn't
+    # exist; the model is pointed at the list instead.
+    assert reply.search_results is None
+    assert "list_tags" in calls[1]["messages"][-1]["content"]
+
+
 def test_an_unknown_tool_is_reported_to_the_model(monkeypatch):
     reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "delete_everything", "{}"))
 
@@ -695,6 +769,78 @@ def test_search_photos_by_text_looks_across_every_text_field(client, tmp_path):
     assert _filenames(storage.search_photos_by_text("florida place")) == ["place.jpg"]
     assert storage.search_photos_by_text("florida desc") == []
     assert storage.search_photos_by_text("") == []
+
+
+def _tag_face(face_id, photo_id, person_id):
+    from app.database import get_connection
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO faces (id, photo_id, x1, y1, x2, y2, person_id) VALUES (%s, %s, 0, 0, 1, 1, %s)",
+            (face_id, photo_id, person_id),
+        )
+        conn.commit()
+
+
+def test_individual_listing_and_search(client, tmp_path):
+    from app import people
+
+    ids = _index(client, tmp_path, "one.jpg", "two.jpg", "three.jpg")
+    alice = people.create_individual("Alice")
+    alice_jones = people.create_individual("Alice Jones")
+    people.create_individual("Bob")
+    # Two of Alice's faces in one photo still count as one photo.
+    _tag_face("f1", ids["one.jpg"], alice["id"])
+    _tag_face("f2", ids["one.jpg"], alice["id"])
+    _tag_face("f3", ids["two.jpg"], alice["id"])
+    _tag_face("f4", ids["three.jpg"], alice_jones["id"])
+
+    assert storage.list_individual_names() == [
+        {"name": "Alice", "photo_count": 2},
+        {"name": "Alice Jones", "photo_count": 1},
+        {"name": "Bob", "photo_count": 0},
+    ]
+
+    # An exact name (ignoring case) wins over names that merely contain it.
+    names, photos = storage.search_photos_by_individual("alice")
+    assert names == ["Alice"]
+    assert _filenames(photos) == ["one.jpg", "two.jpg"]
+
+    # Otherwise part of a name is enough.
+    names, photos = storage.search_photos_by_individual("jones")
+    assert names == ["Alice Jones"]
+    assert _filenames(photos) == ["three.jpg"]
+
+    assert storage.search_photos_by_individual("bob") == (["Bob"], [])
+    assert storage.search_photos_by_individual("nobody") == ([], [])
+
+
+def test_tag_listing_and_search(client, tmp_path):
+    from app import tags
+
+    ids = _index(client, tmp_path, "one.jpg", "two.jpg", "three.jpg")
+    favorites = tags.create_tag("Favorites")
+    trips = tags.create_tag("Road trips")
+    tags.create_tag("unused")
+    tags.tag_photo(ids["one.jpg"], favorites["id"])
+    tags.tag_photo(ids["two.jpg"], favorites["id"])
+    tags.tag_photo(ids["three.jpg"], trips["id"])
+
+    assert storage.list_tag_names() == [
+        {"name": "Favorites", "photo_count": 2},
+        {"name": "Road trips", "photo_count": 1},
+        {"name": "unused", "photo_count": 0},
+    ]
+
+    names, photos = storage.search_photos_by_tag("FAVORITES")
+    assert names == ["Favorites"]
+    assert _filenames(photos) == ["one.jpg", "two.jpg"]
+
+    names, photos = storage.search_photos_by_tag("trips")
+    assert names == ["Road trips"]
+    assert _filenames(photos) == ["three.jpg"]
+
+    assert storage.search_photos_by_tag("nope") == ([], [])
 
 
 # --- The chat routes ---------------------------------------------------------

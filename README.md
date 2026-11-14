@@ -299,7 +299,7 @@ it; with none open (`POST /api/chat`) the chat is about the library as a
 whole.
 
 **The chat is also the app's search.** There is no search box: ask the
-chat to find photos and the model picks one of three search tools, passing
+chat to find photos and the model picks one of five search tools, passing
 the search text itself.
 
 | Tool                         | Finds photos by                                                                 |
@@ -307,6 +307,15 @@ the search text itself.
 | `search_photos_by_filename`  | Text in the file name or folder path (case-insensitive; every word must appear) |
 | `search_photos_semantic`     | Meaning — photos whose description is similar to the query (see "Similarity search" below). Optional `match_level`: `loose` (the default, similarity ≥ 0.3), `moderate` (0.5), `strict` (0.7), `very_strict` (0.85) |
 | `search_photos_by_text`      | Plain text match across everything known about a photo: file name and path, description, Florence-2 caption, location, names of people tagged in it, and tags (every word must appear somewhere) |
+| `search_photos_by_individual`| Person — photos with a face tagged to the named individual, manually or automatically |
+| `search_photos_by_tag`       | Tag — photos carrying the named tag |
+
+For the last two, a name matches exactly (ignoring case) if it can, and
+otherwise by any name containing it — "alice" finds "Alice Smith" unless
+someone is called just "Alice". Two more tools, `list_individuals` and
+`list_tags`, give the model every person and tag with its photo count, so
+it can answer "who's in my library?" or look up the right name first;
+those only produce text, not gallery results.
 
 The response's `search_results` carries the matching photo ids, best match
 first (`[]` if a search matched nothing, `null` if the model didn't search).
@@ -314,7 +323,7 @@ The web UI closes any open photo and shows them in the gallery under the
 sidebar's **Search Results** row; that row brings the last search back
 after browsing elsewhere. A search returns at most 500 photos.
 
-**Object search.** While a photo is open the model has a fourth tool,
+**Object search.** While a photo is open the model has one more tool,
 `locate_object`, for questions like "where's the dog?" or "is there a stop
 sign?". It passes the phrase to search for; the API runs it through a local
 [Florence-2](https://huggingface.co/microsoft/Florence-2-base)
