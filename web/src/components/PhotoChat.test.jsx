@@ -31,7 +31,7 @@ describe("PhotoChat", () => {
       expect(screen.getByText("It's a red square.")).toBeInTheDocument();
     });
 
-    expect(chatMock).toHaveBeenCalledWith("1", "Where was this taken?", [], expect.any(Function));
+    expect(chatMock).toHaveBeenCalledWith("1", "Where was this taken?", [], expect.any(Function), null);
   });
 
   it("has no backend checkbox -- the model decides when to search for an object", () => {
@@ -62,7 +62,8 @@ describe("PhotoChat", () => {
         { role: "user", text: "first question" },
         { role: "assistant", text: "first reply" },
       ],
-      expect.any(Function)
+      expect.any(Function),
+      null
     );
   });
 
@@ -148,20 +149,28 @@ describe("PhotoChat", () => {
   });
 
   it("chats about the library when no photo is open", async () => {
+    const found = [
+      { id: "a", filename: "a.jpg", score: 0.9 },
+      { id: "b", filename: "b.jpg", score: 0.6 },
+      { id: "c", filename: "c.jpg", score: 0.4 },
+    ];
     const chatMock = vi
       .spyOn(client, "chatAboutPhoto")
-      .mockResolvedValue({ reply: "Found 3.", boxes: [], searchResults: ["a", "b", "c"] });
+      .mockResolvedValue({ reply: "Found 3.", boxes: [], searchResults: found });
     const onSearchResults = vi.fn();
+    // The list an earlier search left: sent along so the model's tools can
+    // filter or truncate it.
+    const previous = [{ id: "z", filename: "z.jpg", score: 1 }];
 
-    render(<PhotoChat photoId={null} onSearchResults={onSearchResults} />);
+    render(<PhotoChat photoId={null} searchList={previous} onSearchResults={onSearchResults} />);
 
     expect(screen.getByText(/ask me to find photos/i)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/chat message/i), { target: { value: "find beach photos" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(screen.getByText("Found 3.")).toBeInTheDocument());
-    expect(chatMock).toHaveBeenCalledWith(null, "find beach photos", [], expect.any(Function));
-    expect(onSearchResults).toHaveBeenCalledWith(["a", "b", "c"]);
+    expect(chatMock).toHaveBeenCalledWith(null, "find beach photos", [], expect.any(Function), previous);
+    expect(onSearchResults).toHaveBeenCalledWith(found);
   });
 
   it("reports an empty search, but not a reply that didn't search", async () => {

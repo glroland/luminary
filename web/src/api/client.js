@@ -58,13 +58,13 @@ export async function fetchSyncStatus() {
 // ids, best first, or null if the model didn't search this turn. Pass
 // onChunk to also be notified of each reply piece as it arrives (never
 // called for a JSON reply).
-export async function chatAboutPhoto(photoId, message, history, onChunk) {
+export async function chatAboutPhoto(photoId, message, history, onChunk, searchList = null) {
   let response;
   try {
     response = await fetch(`${API_BASE}${photoId ? `/photos/${photoId}/chat` : "/chat"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history }),
+      body: JSON.stringify({ message, history, search_list: searchList }),
     });
   } catch {
     throw new Error("Could not connect to the API. Is it running?");

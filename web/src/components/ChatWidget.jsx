@@ -7,8 +7,9 @@ import PhotoChat from "./PhotoChat.jsx";
 // view. `photo` is whichever photo is open in PhotoModal, or null: with
 // one open the model is shown it and can answer questions about it; with
 // or without one, the chat is also how the library is searched (there is
-// no search box). `onSearchResults` hands the ids a search found up to
-// App.jsx, which shows them as the gallery's "Search Results";
+// no search box). `onSearchResults` hands the search list a search built
+// up to App.jsx, which shows it as the gallery's "Search Results", and
+// `searchList` is that list handed back for the next message to work on;
 // `onBoxesChange` hands up the boxes located in the open photo, which
 // App.jsx passes to PhotoModal to draw over the image.
 //
@@ -18,7 +19,7 @@ import PhotoChat from "./PhotoChat.jsx";
 //
 // PhotoChat stays mounted while the popup is closed (the popup is only
 // hidden), so closing and reopening it doesn't lose the conversation.
-export default function ChatWidget({ photo, onBoxesChange, onSearchResults }) {
+export default function ChatWidget({ photo, searchList, onBoxesChange, onSearchResults }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -35,7 +36,11 @@ export default function ChatWidget({ photo, onBoxesChange, onSearchResults }) {
             ×
           </button>
         </header>
-        <PhotoChat photoId={photo?.id ?? null} onBoxesChange={onBoxesChange} onSearchResults={onSearchResults} />
+        <PhotoChat
+          photoId={photo?.id ?? null}
+          searchList={searchList}
+          onBoxesChange={onBoxesChange} onSearchResults={onSearchResults}
+        />
       </section>
 
       <button

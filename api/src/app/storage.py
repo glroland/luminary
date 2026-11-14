@@ -227,7 +227,9 @@ def find_similar_photos(photo_id: str, limit: int = SIMILAR_PHOTOS_LIMIT) -> lis
 SEARCH_RESULTS_LIMIT = 500
 
 
-def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
+def search_photos(
+    query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
+) -> list[dict]:
     """Free-text search over `description` via `description_embedding`
     similarity (chat.py's search_photos_semantic tool, GET /api/photos/search) --
     embeds `query` with the same local model as photos' own descriptions
@@ -237,6 +239,12 @@ def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMI
     cosine similarity to it is at least `threshold` (0-1, higher = more
     similar), ordered most-similar first. Each result dict carries all of
     METADATA_COLUMNS plus a `similarity` key.
+
+    `photo_ids`, here and on the other search_photos_* functions below,
+    restricts the search to those photos (None = the whole library). It's
+    how chat.py filters its existing search list by a second search: the
+    restriction is applied in SQL, before `limit`, so a match already in
+    the list can't be cut off by the cap.
 
     Unlike find_similar_photos, a missing/misconfigured embeddings backend
     is **not** swallowed here -- embeddings.embed_text raises
@@ -256,12 +264,13 @@ def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMI
                     SELECT {METADATA_COLUMNS}, 1 - (description_embedding <=> %s) AS similarity
                     FROM photos
                     WHERE description_embedding IS NOT NULL
+                      AND (%s::text[] IS NULL OR id = ANY(%s::text[]))
                 ) scored
                 WHERE similarity >= %s
                 ORDER BY similarity DESC
                 LIMIT %s
                 """,
-                (embedding, threshold, limit),
+                (embedding, photo_ids, photo_ids, threshold, limit),
             ).fetchall()
             return [dict(r) for r in rows]
     except psycopg.errors.UndefinedColumn:
@@ -270,6 +279,11 @@ def search_photos(query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMI
             'See db/create_extensions.sql and the README\'s "Database" section.'
         )
         return []
+
+
+# Appended to a search's WHERE clause; takes the `photo_ids` argument twice
+# (None = no restriction). See search_photos' docstring.
+_RESTRICT_TO_IDS = "(%s::text[] IS NULL OR id = ANY(%s::text[]))"
 
 
 def _like_patterns(text: str) -> list[str]:
@@ -283,7 +297,9 @@ def _like_patterns(text: str) -> list[str]:
     return patterns
 
 
-def search_photos_by_filename(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
+def search_photos_by_filename(
+    text: str, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
+) -> list[dict]:
     """Photos whose `filename` -- the path relative to the photos root, so
     folders too -- contains every word of `text`, case-insensitively,
     ordered by filename. Backs chat.py's search_photos_by_filename tool."""
@@ -293,8 +309,9 @@ def search_photos_by_filename(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> l
     where = " AND ".join(["filename ILIKE %s"] * len(patterns))
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT {METADATA_COLUMNS} FROM photos WHERE {where} ORDER BY filename LIMIT %s",
-            (*patterns, limit),
+            f"SELECT {METADATA_COLUMNS} FROM photos WHERE {where} AND {_RESTRICT_TO_IDS} "
+            "ORDER BY filename LIMIT %s",
+            (*patterns, photo_ids, photo_ids, limit),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -317,7 +334,9 @@ _TEXT_SEARCH_TERM = """(
 )"""
 
 
-def search_photos_by_text(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> list[dict]:
+def search_photos_by_text(
+    text: str, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
+) -> list[dict]:
     """Plain case-insensitive text search across everything textual known
     about a photo: filename/path, description, the raw Florence-2 caption,
     location name, tagged individuals' names, and tag names. Every word of
@@ -330,10 +349,13 @@ def search_photos_by_text(text: str, limit: int = SEARCH_RESULTS_LIMIT) -> list[
     where = " AND ".join(_TEXT_SEARCH_TERM.format(n=n) for n in range(len(patterns)))
     params = {f"t{n}": pattern for n, pattern in enumerate(patterns)}
     params["limit"] = limit
+    params["ids"] = photo_ids
     columns = ", ".join(f"p.{column.strip()}" for column in METADATA_COLUMNS.split(","))
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT {columns} FROM photos p WHERE {where} ORDER BY p.created_at DESC LIMIT %(limit)s",
+            f"SELECT {columns} FROM photos p WHERE {where} "
+            "AND (%(ids)s::text[] IS NULL OR p.id = ANY(%(ids)s::text[])) "
+            "ORDER BY p.created_at DESC LIMIT %(limit)s",
             params,
         ).fetchall()
         return [dict(row) for row in rows]
@@ -391,7 +413,9 @@ def _match_names(conn, table: str, name: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def search_photos_by_individual(name: str, limit: int = SEARCH_RESULTS_LIMIT) -> tuple[list[str], list[dict]]:
+def search_photos_by_individual(
+    name: str, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
+) -> tuple[list[str], list[dict]]:
     """Photos with a face tagged (manually or automatically) to the
     individual(s) `name` refers to -- see _match_names. Returns (the names
     matched, the photos, newest first); both empty when nobody matches.
@@ -402,13 +426,16 @@ def search_photos_by_individual(name: str, limit: int = SEARCH_RESULTS_LIMIT) ->
             return [], []
         rows = conn.execute(
             f"SELECT {METADATA_COLUMNS} FROM photos WHERE id IN "
-            "(SELECT photo_id FROM faces WHERE person_id = ANY(%s)) ORDER BY created_at DESC LIMIT %s",
-            ([row["id"] for row in matched], limit),
+            f"(SELECT photo_id FROM faces WHERE person_id = ANY(%s)) AND {_RESTRICT_TO_IDS} "
+            "ORDER BY created_at DESC LIMIT %s",
+            ([row["id"] for row in matched], photo_ids, photo_ids, limit),
         ).fetchall()
         return [row["name"] for row in matched], [dict(row) for row in rows]
 
 
-def search_photos_by_tag(name: str, limit: int = SEARCH_RESULTS_LIMIT) -> tuple[list[str], list[dict]]:
+def search_photos_by_tag(
+    name: str, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
+) -> tuple[list[str], list[dict]]:
     """Photos carrying the tag(s) `name` refers to -- same matching and
     return shape as search_photos_by_individual. Backs chat.py's
     search_photos_by_tag tool."""
@@ -418,8 +445,9 @@ def search_photos_by_tag(name: str, limit: int = SEARCH_RESULTS_LIMIT) -> tuple[
             return [], []
         rows = conn.execute(
             f"SELECT {METADATA_COLUMNS} FROM photos WHERE id IN "
-            "(SELECT photo_id FROM photo_tags WHERE tag_id = ANY(%s)) ORDER BY created_at DESC LIMIT %s",
-            ([row["id"] for row in matched], limit),
+            f"(SELECT photo_id FROM photo_tags WHERE tag_id = ANY(%s)) AND {_RESTRICT_TO_IDS} "
+            "ORDER BY created_at DESC LIMIT %s",
+            ([row["id"] for row in matched], photo_ids, photo_ids, limit),
         ).fetchall()
         return [row["name"] for row in matched], [dict(row) for row in rows]
 

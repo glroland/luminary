@@ -9,9 +9,15 @@ The tools (see _TOOLS below; the model decides when to call one):
 - search_photos_by_filename / search_photos_semantic /
   search_photos_by_text / search_photos_by_individual /
   search_photos_by_tag search the library. This is the app's only search
-  UI -- there is no search box. The photos a search finds travel back
-  alongside the reply (ChatReply.search_results, ids only) and the web UI
-  shows them as the gallery's "Search Results".
+  UI -- there is no search box. Their matches go into the *search list*,
+  a scored list of photos kept outside the model's context (see _Turn):
+  a search replaces it, filters it or adds to it, and the model is told
+  only how many photos it holds and their score statistics. The list
+  travels back alongside the reply (ChatReply.search_results) and the web
+  UI shows it as the gallery's "Search Results", best score first.
+- search_list_stats / truncate_search_list report on that list (count,
+  highest/median/lowest score, how many are above or below a given
+  score) and drop its entries below a score.
 - list_individuals / list_tags tell the model which people and tags
   exist. Their result is only text for the model to answer from.
 - locate_object, only offered while a photo is open, finds an object in
@@ -110,21 +116,30 @@ class ChatReply:
     can position an overlay directly against the full-size image without
     knowing anything about Florence-2's internals.
 
-    `search_results` is None unless the model searched the library this
-    turn; then it's the ids of the photos found, best match first ([] if
-    nothing matched)."""
+    `search_results` is None unless a tool set the search list this turn
+    (a search, or a truncation); then it's the whole list as it now
+    stands -- {"id", "filename", "score"} entries, score 0-1, best score
+    first ([] if a first search matched nothing). See _Turn."""
 
     text: str
     boxes: list[dict] = field(default_factory=list)
-    search_results: Optional[list[str]] = None
+    search_results: Optional[list[dict]] = None
 
 
-def ask(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]) -> ChatReply:
+def ask(
+    photo_bytes: Optional[bytes],
+    content_type: Optional[str],
+    message: str,
+    history: list[dict],
+    search_list: Optional[list[dict]] = None,
+) -> ChatReply:
     """Send one chat message, returning the full reply at once.
     `photo_bytes`/`content_type` are the open photo, or None when none is.
     `history` is a list of {"role": "user"|"assistant", "text": str}
-    dicts, oldest first."""
-    return _ask_openai(photo_bytes, content_type, message, history)
+    dicts, oldest first. `search_list` is the search list as the previous
+    turn left it ({"id", "filename", "score"} entries; see _Turn), which
+    this turn's tools can filter, add to or truncate."""
+    return _ask_openai(photo_bytes, content_type, message, history, search_list)
 
 
 def should_stream() -> bool:
@@ -134,13 +149,19 @@ def should_stream() -> bool:
     return get_openai_streaming()
 
 
-def ask_stream(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]):
+def ask_stream(
+    photo_bytes: Optional[bytes],
+    content_type: Optional[str],
+    message: str,
+    history: list[dict],
+    search_list: Optional[list[dict]] = None,
+):
     """Streaming counterpart to ask(), for when should_stream() is True.
     Returns an iterator of events, each a dict with exactly one key:
     {"text": str} for the next piece of the reply, {"boxes": [...]} or
     {"search_results": [...]} (same shapes as ChatReply's, the turn's
     current value) once a tool call has produced them."""
-    return _ask_openai_stream(photo_bytes, content_type, message, history)
+    return _ask_openai_stream(photo_bytes, content_type, message, history, search_list)
 
 
 # --- The chat model: an OpenAI-compatible multimodal endpoint ---------------
@@ -247,10 +268,12 @@ def _prepare_openai_call(photo_bytes: Optional[bytes], content_type: Optional[st
     return client, model, messages
 
 
-# The model may call a tool, read the result, and call another (e.g. a
-# looser search after the first found nothing). The last round is always
-# made without tools, so a turn can't loop: it has to end in an answer.
-_MAX_CHAT_ROUNDS = 4
+# The model may call a tool, read the result, and call another (search,
+# filter that by a second search, check the scores, truncate). The last
+# round is always made without tools, so a turn can't loop: it has to end
+# in an answer. Tool results are a few lines each (see _search_list_text),
+# so several rounds stay cheap even for a small context window.
+_MAX_CHAT_ROUNDS = 6
 
 # search_photos_semantic's `match_level`: the minimum cosine similarity
 # between the query and a photo's description. Starting points, not
@@ -259,15 +282,36 @@ _MAX_CHAT_ROUNDS = 4
 _MATCH_LEVELS = {"loose": 0.3, "moderate": 0.5, "strict": 0.7, "very_strict": 0.85}
 _DEFAULT_MATCH_LEVEL = "loose"
 
-# How many of a search's matches are described to the model. All of them
-# reach the user (as ids, in ChatReply.search_results); the model only
-# needs enough to say something sensible about what was found.
-_SEARCH_PREVIEW_COUNT = 10
+# How many of the search list's entries (the best-scoring ones) are named
+# to the model. The list itself never enters the model's context -- it
+# lives on the _Turn, the user sees it in the gallery, and the model works
+# on it through counts and score statistics. A few names are just enough
+# for it to say something concrete about what was found.
+_SEARCH_PREVIEW_COUNT = 3
+
+# What a search does with the search list (the tools' `mode` argument).
+_SEARCH_MODES = ("new", "filter", "add")
+_DEFAULT_SEARCH_MODE = "new"
+
+# The score of a match that has no degree to it: a file name, text, person
+# or tag either matches or doesn't. Only the semantic search grades its
+# matches (cosine similarity).
+_EXACT_MATCH_SCORE = 1.0
 
 _SEARCH_NOTE = (
-    "The matching photos are shown to the user in the gallery, under \"Search Results\" -- "
-    "summarise what was found rather than listing every file."
+    "Matches go into the search list, which the user sees in the gallery under \"Search Results\", "
+    "best score first. You are told how many matched and their scores, not every file."
 )
+
+_MODE_PROPERTY = {
+    "type": "string",
+    "enum": list(_SEARCH_MODES),
+    "description": (
+        'What to do with the search list. "new" (default): replace it with these matches. '
+        '"filter": keep only the photos already in the list that also match (to narrow a previous '
+        'search). "add": add these matches to the list.'
+    ),
+}
 
 
 def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -286,7 +330,10 @@ _FILENAME_SEARCH_TOOL = _tool(
     "Find photos in the user's library by file name or folder path (case-insensitive; every word "
     "given must appear in the path). Use when the user refers to a file or folder name, e.g. "
     '"IMG_1234" or "the vacation/2019 folder". ' + _SEARCH_NOTE,
-    {"text": {"type": "string", "description": "Text to look for in the file name or path."}},
+    {
+        "text": {"type": "string", "description": "Text to look for in the file name or path."},
+        "mode": _MODE_PROPERTY,
+    },
     ["text"],
 )
 
@@ -294,7 +341,8 @@ _SEMANTIC_SEARCH_TOOL = _tool(
     "search_photos_semantic",
     "Find photos in the user's library by meaning: matches photos whose description is similar to "
     "the query even when the words differ. Use for what a photo shows or is about, e.g. "
-    '"kids playing in snow" or "a birthday party". ' + _SEARCH_NOTE,
+    '"kids playing in snow" or "a birthday party". Each match is scored by how similar it is. '
+    + _SEARCH_NOTE,
     {
         "query": {"type": "string", "description": "A description of the photos to find."},
         "match_level": {
@@ -305,6 +353,7 @@ _SEMANTIC_SEARCH_TOOL = _tool(
                 "level if the user wants only close matches or a search returned too many unrelated photos."
             ),
         },
+        "mode": _MODE_PROPERTY,
     },
     ["query"],
 )
@@ -315,7 +364,7 @@ _TEXT_SEARCH_TOOL = _tool(
     "known about them: file name and path, description, location, names of people tagged in the "
     "photo, and tags. Every word given must appear somewhere. Use for specific names, places or "
     'words, e.g. "Alice", "Boone" or "Grandfather Mountain". ' + _SEARCH_NOTE,
-    {"text": {"type": "string", "description": "The word(s) to look for."}},
+    {"text": {"type": "string", "description": "The word(s) to look for."}, "mode": _MODE_PROPERTY},
     ["text"],
 )
 
@@ -343,7 +392,7 @@ _INDIVIDUAL_SEARCH_TOOL = _tool(
     "search_photos_by_individual",
     "Find the photos a person is tagged in. Use when the user asks for photos of someone by name, "
     'e.g. "photos of Alice". ' + _SEARCH_NOTE,
-    {"name": {"type": "string", "description": "The person's name, or part of it."}},
+    {"name": {"type": "string", "description": "The person's name, or part of it."}, "mode": _MODE_PROPERTY},
     ["name"],
 )
 
@@ -359,8 +408,28 @@ _TAG_SEARCH_TOOL = _tool(
     "search_photos_by_tag",
     "Find the photos carrying a tag. Use when the user asks for photos by tag, e.g. "
     '"photos tagged favorites". ' + _SEARCH_NOTE,
-    {"name": {"type": "string", "description": "The tag's name, or part of it."}},
+    {"name": {"type": "string", "description": "The tag's name, or part of it."}, "mode": _MODE_PROPERTY},
     ["name"],
+)
+
+_SCORE_DESCRIPTION = "A match score as a percentage, 0 to 100."
+
+_SEARCH_LIST_STATS_TOOL = _tool(
+    "search_list_stats",
+    "Describe the current search list (the photos shown to the user under \"Search Results\", kept "
+    "from earlier messages too) without changing it: how many photos it holds and their highest, "
+    "median and lowest match score. Give a score to also learn how many photos are at or above it "
+    "and how many below -- useful before truncate_search_list.",
+    {"score": {"type": "number", "description": _SCORE_DESCRIPTION + " Optional."}},
+    [],
+)
+
+_TRUNCATE_SEARCH_LIST_TOOL = _tool(
+    "truncate_search_list",
+    "Remove every photo scoring below min_score from the search list, keeping the better matches. "
+    "Use when a search returned too many weak matches or the user asks for only the best ones.",
+    {"min_score": {"type": "number", "description": _SCORE_DESCRIPTION + " Photos scoring below it are removed."}},
+    ["min_score"],
 )
 
 # Everything offered whether or not a photo is open.
@@ -372,23 +441,42 @@ _SEARCH_TOOLS = [
     _INDIVIDUAL_SEARCH_TOOL,
     _LIST_TAGS_TOOL,
     _TAG_SEARCH_TOOL,
+    _SEARCH_LIST_STATS_TOOL,
+    _TRUNCATE_SEARCH_LIST_TOOL,
 ]
 
 
 class _Turn:
-    """What one chat turn's tool calls work on and produce."""
+    """What one chat turn's tool calls work on and produce.
 
-    def __init__(self, photo_bytes: Optional[bytes]):
+    `search_list` is the search list: {"id", "filename", "score"} entries
+    (score 0-1), best score first. It is deliberately kept here, outside
+    the conversation sent to the model -- a model with a small context
+    window can't carry hundreds of file names back and forth -- and the
+    tools populate, filter and truncate it, telling the model only its
+    size and score statistics. It starts as whatever the caller passed in
+    (the list a previous turn left, which the web UI holds and sends back
+    with each message; there is no server-side conversation state).
+
+    `search_results` stays None until a tool sets the list this turn, and
+    is then that list -- the part of the reply that tells the web UI what
+    to show."""
+
+    def __init__(self, photo_bytes: Optional[bytes], search_list: Optional[list[dict]] = None):
         self.photo_bytes = photo_bytes  # the open photo's original bytes, or None
         self.boxes: list[dict] = []
-        self.search_results: Optional[list[str]] = None
+        self.search_list: list[dict] = _by_score(search_list or [])
+        self.search_results: Optional[list[dict]] = None
 
-    def record_search(self, photos: list[dict]) -> None:
-        # When the model searches more than once in a turn, the last search
-        # that found something is what the user is shown -- a follow-up that
-        # comes back empty doesn't wipe out an earlier search's matches.
-        if photos or self.search_results is None:
-            self.search_results = [photo["id"] for photo in photos]
+    def set_search_list(self, entries: list[dict]) -> None:
+        self.search_list = _by_score(entries)
+        self.search_results = self.search_list
+
+
+def _by_score(entries: list[dict]) -> list[dict]:
+    # sorted() is stable, so equally-scored entries keep the order the
+    # search returned them in (newest first, or by file name).
+    return sorted(entries, key=lambda entry: entry["score"], reverse=True)
 
 
 def _object_search_available() -> bool:
@@ -460,38 +548,125 @@ def _text_argument(arguments: dict, name: str) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _search_result_text(photos: list[dict], what: str, turn: _Turn) -> str:
-    """Record a search's matches on the turn and describe them to the model."""
-    logger.info("Chat model searched the library for %s: %d match(es)", what, len(photos))
-    turn.record_search(photos)
-    if not photos:
-        return f"No photos matched {what}."
+def _score_argument(arguments: dict, name: str) -> Optional[float]:
+    """A score argument as a 0-1 fraction, or None if it isn't a usable
+    number. The tools ask for a percentage, matching what the model is
+    shown (and what the user sees on each tile) -- but a value of 1 or
+    less is taken as a fraction, since a model that writes 0.6 means 60%,
+    not "under one percent"."""
+    value = arguments.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
+        return None
+    return float(value) if value <= 1 else value / 100
 
-    lines = []
-    for photo in photos[:_SEARCH_PREVIEW_COUNT]:
-        details = [photo["filename"]]
-        if photo.get("location_name"):
-            details.append(photo["location_name"])
-        if photo.get("description"):
-            details.append(photo["description"][:200])
-        lines.append("- " + " | ".join(details))
-    more = len(photos) - len(lines)
-    if more > 0:
-        lines.append(f"(and {more} more)")
-    count = f"{len(photos)} photo{'' if len(photos) == 1 else 's'}"
-    if len(photos) >= storage.SEARCH_RESULTS_LIMIT:
-        count = f"at least {count} (the search stops there)"
-    return (
-        f"Found {count} matching {what}. They are now shown to the user in the gallery "
-        'under "Search Results".\n' + "\n".join(lines)
+
+def _percent(score: float) -> str:
+    return f"{round(score * 100)}%"
+
+
+def _count(n: int) -> str:
+    return f"{n} photo{'' if n == 1 else 's'}"
+
+
+def _median(scores: list[float]) -> float:
+    ordered = sorted(scores)
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _search_list_text(turn: _Turn, preview: bool = True) -> str:
+    """The search list as the model sees it: its size and score statistics,
+    plus the names of the few best matches -- never the list itself."""
+    entries = turn.search_list
+    if not entries:
+        return "The search list is empty."
+    scores = [entry["score"] for entry in entries]
+    text = (
+        f"The search list holds {_count(len(entries))}, shown to the user in the gallery under "
+        f'"Search Results", best score first. Scores: highest {_percent(scores[0])}, '
+        f"median {_percent(_median(scores))}, lowest {_percent(scores[-1])}."
     )
+    if preview:
+        best = [f"- {entry['filename']} ({_percent(entry['score'])})" for entry in entries[:_SEARCH_PREVIEW_COUNT]]
+        text += "\nBest matches:\n" + "\n".join(best)
+    return text
+
+
+def _search_mode(arguments: dict) -> Optional[str]:
+    mode = arguments.get("mode") or _DEFAULT_SEARCH_MODE
+    return mode if mode in _SEARCH_MODES else None
+
+
+_INVALID_MODE = f'Invalid arguments: "mode" must be one of {", ".join(_SEARCH_MODES)}.'
+_NOTHING_TO_FILTER = 'The search list is empty, so there is nothing to filter. Search with mode "new" first.'
+
+
+def _restriction(turn: _Turn, mode: str) -> dict:
+    """Extra kwargs for a storage search: in "filter" mode it only looks
+    among the photos already in the search list."""
+    return {"photo_ids": [entry["id"] for entry in turn.search_list]} if mode == "filter" else {}
+
+
+def _apply_search(turn: _Turn, mode: str, photos: list[dict], what: str) -> str:
+    """Apply one search's matches to the turn's search list per `mode` and
+    describe the outcome to the model. A photo's score is its `similarity`
+    when the search graded it (semantic), else _EXACT_MATCH_SCORE.
+
+    A search that would leave nothing never empties a list that has
+    photos in it -- the list is left as it was and the model is told so,
+    so one over-narrow follow-up doesn't throw away what the user is
+    looking at."""
+    logger.info("Chat model searched the library for %s (mode %s): %d match(es)", what, mode, len(photos))
+    found = [
+        {
+            "id": photo["id"],
+            "filename": photo["filename"],
+            "score": round(min(1.0, max(0.0, float(photo.get("similarity", _EXACT_MATCH_SCORE)))), 4),
+        }
+        for photo in photos
+    ]
+    current = {entry["id"]: entry for entry in turn.search_list}
+
+    if not found:
+        if not current:
+            # Still a search, with an empty result: the gallery shows it.
+            turn.set_search_list([])
+            return f"No photos matched {what}. The search list is empty."
+        among = f"None of the {_count(len(current))} in the search list matched" if mode == "filter" else "No photos matched"
+        return f"{among} {what}. The search list was left unchanged.\n" + _search_list_text(turn, preview=False)
+
+    if mode == "filter":
+        # In both searches' results: as good a match as the weaker of the two.
+        entries = [{**entry, "score": min(entry["score"], current[entry["id"]]["score"])} for entry in found if entry["id"] in current]
+        outcome = f"Of the {_count(len(current))} in the search list, {len(entries)} also matched {what}; the rest were removed."
+    elif mode == "add":
+        merged = dict(current)
+        for entry in found:
+            known = merged.get(entry["id"])
+            merged[entry["id"]] = entry if known is None else {**known, "score": max(known["score"], entry["score"])}
+        entries = list(merged.values())
+        outcome = f"Found {_count(len(found))} matching {what}; {len(entries) - len(current)} of them were not already in the search list and were added."
+    else:
+        entries = found
+        outcome = f"Found {_count(len(found))} matching {what}."
+    if mode != "filter" and len(found) >= storage.SEARCH_RESULTS_LIMIT:
+        outcome += f" (A search stops at {storage.SEARCH_RESULTS_LIMIT} matches; there may be more.)"
+
+    turn.set_search_list(entries)
+    return outcome + "\n" + _search_list_text(turn)
 
 
 def _tool_search_by_filename(arguments: dict, turn: _Turn) -> str:
     text = _text_argument(arguments, "text")
     if text is None:
         return 'Invalid arguments: "text" must be a non-empty string.'
-    return _search_result_text(storage.search_photos_by_filename(text), f'the file name/path "{text}"', turn)
+    mode = _search_mode(arguments)
+    if mode is None:
+        return _INVALID_MODE
+    if mode == "filter" and not turn.search_list:
+        return _NOTHING_TO_FILTER
+    photos = storage.search_photos_by_filename(text, **_restriction(turn, mode))
+    return _apply_search(turn, mode, photos, f'the file name/path "{text}"')
 
 
 def _tool_search_semantic(arguments: dict, turn: _Turn) -> str:
@@ -501,19 +676,30 @@ def _tool_search_semantic(arguments: dict, turn: _Turn) -> str:
     level = arguments.get("match_level") or _DEFAULT_MATCH_LEVEL
     if level not in _MATCH_LEVELS:
         return f'Invalid arguments: "match_level" must be one of {", ".join(_MATCH_LEVELS)}.'
+    mode = _search_mode(arguments)
+    if mode is None:
+        return _INVALID_MODE
+    if mode == "filter" and not turn.search_list:
+        return _NOTHING_TO_FILTER
     try:
-        photos = storage.search_photos(query, _MATCH_LEVELS[level])
+        photos = storage.search_photos(query, _MATCH_LEVELS[level], **_restriction(turn, mode))
     except embeddings.EmbeddingNotConfigured:
         logger.warning("Chat model called search_photos_semantic, but the embedding model isn't available")
         return "Semantic search isn't available on this server. Try search_photos_by_text instead."
-    return _search_result_text(photos, f'"{query}" ({level} semantic match)', turn)
+    return _apply_search(turn, mode, photos, f'"{query}" ({level} semantic match)')
 
 
 def _tool_search_by_text(arguments: dict, turn: _Turn) -> str:
     text = _text_argument(arguments, "text")
     if text is None:
         return 'Invalid arguments: "text" must be a non-empty string.'
-    return _search_result_text(storage.search_photos_by_text(text), f'the text "{text}"', turn)
+    mode = _search_mode(arguments)
+    if mode is None:
+        return _INVALID_MODE
+    if mode == "filter" and not turn.search_list:
+        return _NOTHING_TO_FILTER
+    photos = storage.search_photos_by_text(text, **_restriction(turn, mode))
+    return _apply_search(turn, mode, photos, f'the text "{text}"')
 
 
 def _name_list_text(entries: list[dict], kind: str) -> str:
@@ -540,12 +726,17 @@ def _named_search(arguments: dict, turn: _Turn, search, kind: str, list_tool: st
     name = _text_argument(arguments, "name")
     if name is None:
         return 'Invalid arguments: "name" must be a non-empty string.'
-    matched, photos = search(name)
+    mode = _search_mode(arguments)
+    if mode is None:
+        return _INVALID_MODE
+    if mode == "filter" and not turn.search_list:
+        return _NOTHING_TO_FILTER
+    matched, photos = search(name, **_restriction(turn, mode))
     if not matched:
-        # Not recorded as a search: nothing was looked for, so the user's
-        # gallery shouldn't switch to an empty result.
+        # Not recorded as a search: nothing was looked for, so the search
+        # list (and the user's gallery) is left alone.
         return f'There is no {kind} matching "{name}". Call {list_tool} to see the ones that exist.'
-    return _search_result_text(photos, f"the {kind} {', '.join(matched)}", turn)
+    return _apply_search(turn, mode, photos, f"the {kind} {', '.join(matched)}")
 
 
 def _tool_search_by_individual(arguments: dict, turn: _Turn) -> str:
@@ -554,6 +745,40 @@ def _tool_search_by_individual(arguments: dict, turn: _Turn) -> str:
 
 def _tool_search_by_tag(arguments: dict, turn: _Turn) -> str:
     return _named_search(arguments, turn, storage.search_photos_by_tag, "tag", "list_tags")
+
+
+def _tool_search_list_stats(arguments: dict, turn: _Turn) -> str:
+    text = _search_list_text(turn)
+    if "score" not in arguments or arguments["score"] is None or not turn.search_list:
+        return text
+    score = _score_argument(arguments, "score")
+    if score is None:
+        return 'Invalid arguments: "score" must be a number from 0 to 100.'
+    at_or_above = sum(1 for entry in turn.search_list if entry["score"] >= score)
+    return (
+        f"{text}\n{at_or_above} at or above {_percent(score)}, "
+        f"{len(turn.search_list) - at_or_above} below."
+    )
+
+
+def _tool_truncate_search_list(arguments: dict, turn: _Turn) -> str:
+    min_score = _score_argument(arguments, "min_score")
+    if min_score is None:
+        return 'Invalid arguments: "min_score" must be a number from 0 to 100.'
+    if not turn.search_list:
+        return "The search list is empty, so there is nothing to truncate."
+    kept = [entry for entry in turn.search_list if entry["score"] >= min_score]
+    removed = len(turn.search_list) - len(kept)
+    logger.info("Chat model truncated the search list at %s: %d removed, %d kept", _percent(min_score), removed, len(kept))
+    if not kept:
+        # Same rule as _apply_search: never empty a list that has photos.
+        return (
+            f"No photo scores {_percent(min_score)} or higher, so nothing was removed.\n"
+            + _search_list_text(turn, preview=False)
+        )
+    if removed:
+        turn.set_search_list(kept)
+    return f"Removed {_count(removed)} scoring below {_percent(min_score)}.\n" + _search_list_text(turn, preview=False)
 
 
 def _tool_locate_object(arguments: dict, turn: _Turn) -> str:
@@ -580,15 +805,21 @@ _TOOL_HANDLERS = {
     "search_photos_by_individual": _tool_search_by_individual,
     "list_tags": _tool_list_tags,
     "search_photos_by_tag": _tool_search_by_tag,
+    "search_list_stats": _tool_search_list_stats,
+    "truncate_search_list": _tool_truncate_search_list,
     "locate_object": _tool_locate_object,
 }
 
 
 def _ask_openai(
-    photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]
+    photo_bytes: Optional[bytes],
+    content_type: Optional[str],
+    message: str,
+    history: list[dict],
+    search_list: Optional[list[dict]] = None,
 ) -> ChatReply:
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
-    turn = _Turn(photo_bytes)
+    turn = _Turn(photo_bytes, search_list)
     for round_index in range(_MAX_CHAT_ROUNDS):
         try:
             response = client.chat.completions.create(
@@ -610,7 +841,13 @@ def _ask_openai(
     return ChatReply(text=reply.content or "", boxes=turn.boxes, search_results=turn.search_results)
 
 
-def _ask_openai_stream(photo_bytes: Optional[bytes], content_type: Optional[str], message: str, history: list[dict]):
+def _ask_openai_stream(
+    photo_bytes: Optional[bytes],
+    content_type: Optional[str],
+    message: str,
+    history: list[dict],
+    search_list: Optional[list[dict]] = None,
+):
     # _prepare_openai_call() runs here, eagerly -- not inside generate()
     # below -- specifically so ChatNotConfigured still raises synchronously
     # when this is called, rather than only once the returned generator is
@@ -620,7 +857,7 @@ def _ask_openai_stream(photo_bytes: Optional[bytes], content_type: Optional[str]
     client, model, messages = _prepare_openai_call(photo_bytes, content_type, message, history)
 
     def generate():
-        turn = _Turn(photo_bytes)
+        turn = _Turn(photo_bytes, search_list)
         try:
             for round_index in range(_MAX_CHAT_ROUNDS):
                 stream = client.chat.completions.create(

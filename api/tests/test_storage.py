@@ -241,6 +241,17 @@ def test_search_photos_orders_by_similarity_descending(client, monkeypatch):
     assert results[2]["similarity"] == pytest.approx(0.0, abs=1e-3)
 
 
+def test_search_photos_can_be_restricted_to_a_set_of_photos(client, monkeypatch):
+    _insert_photo_with_embedding("photo-identical", "a cat on a sofa", 1.0, 0.0)
+    _insert_photo_with_embedding("photo-diagonal", "a cat sleeping on a couch", 1.0, 1.0)
+    monkeypatch.setattr(storage.embeddings, "embed_text", lambda text, is_query=False: _embedding_vector(1.0, 0.0))
+
+    results = storage.search_photos("a cat", threshold=0.0, photo_ids=["photo-diagonal", "not-a-photo"])
+
+    assert [r["id"] for r in results] == ["photo-diagonal"]
+    assert storage.search_photos("a cat", threshold=0.0, photo_ids=[]) == []
+
+
 def test_search_photos_filters_out_results_below_threshold(client, monkeypatch):
     _insert_photo_with_embedding("photo-orthogonal", "a mountain at dusk", 0.0, 1.0)
     _insert_photo_with_embedding("photo-identical", "a cat on a sofa", 1.0, 0.0)

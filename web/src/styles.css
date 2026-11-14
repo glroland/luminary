@@ -377,6 +377,30 @@ textarea {
   font-weight: 600;
 }
 
+/* A search result's match score, pinned to the tile's bottom-right corner
+   (always shown, above the hover strip). Literal colours for the same
+   reason as the strip: it sits on a photo. The strip's text stops short
+   of it on a scored tile. */
+.photo-card-score {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.35rem;
+  z-index: 1;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.68);
+  color: #ffffff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.photo-card-scored .photo-card-overlay {
+  padding-right: 3.2rem;
+}
+
 /* Description tooltip, shown after the pointer has rested on the card for
    1s (the transition-delay on :hover). Leaving the card hides it at once,
    since the non-hover rule has no delay. pointer-events: none so it never

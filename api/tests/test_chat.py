@@ -26,18 +26,25 @@ def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
 
     box = {"label": "square", "x1": 1.0, "y1": 2.0, "x2": 3.0, "y2": 4.0}
 
-    def fake_ask(photo_bytes, content_type, message, history):
+    def fake_ask(photo_bytes, content_type, message, history, search_list=None):
         captured["args"] = (content_type, message, history)
-        return chat.ChatReply(text="a red square", boxes=[box], search_results=["p1", "p2"])
+        captured["search_list"] = search_list
+        return chat.ChatReply(text="a red square", boxes=[box], search_results=[{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}])
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
     response = client.post(
         f"/api/photos/{photo_id}/chat",
-        json={"message": "what is this?", "history": [{"role": "user", "text": "hi"}]},
+        json={
+            "message": "what is this?",
+            "history": [{"role": "user", "text": "hi"}],
+            "search_list": [{"id": "p2", "filename": "b.jpg", "score": 0.5}],
+        },
     )
     assert response.status_code == 200
-    assert response.json() == {"reply": "a red square", "boxes": [box], "search_results": ["p1", "p2"]}
+    assert response.json() == {"reply": "a red square", "boxes": [box], "search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}]}
+    # The search list the client holds is handed to the chat, not the model.
+    assert captured["search_list"] == [{"id": "p2", "filename": "b.jpg", "score": 0.5}]
     content_type, message, history = captured["args"]
     assert content_type == "image/jpeg"
     assert message == "what is this?"
@@ -442,6 +449,8 @@ _SEARCH_TOOL_NAMES = [
     "search_photos_by_individual",
     "list_tags",
     "search_photos_by_tag",
+    "search_list_stats",
+    "truncate_search_list",
 ]
 
 
@@ -476,13 +485,18 @@ def _photo(photo_id, filename, **extra):
     return {"id": photo_id, "filename": filename, "location_name": None, "description": None, **extra}
 
 
-def _ask_with_tool_calls(monkeypatch, *tool_calls, photo_bytes=None):
+def _ids(reply):
+    return [entry["id"] for entry in reply.search_results]
+
+
+def _ask_with_tool_calls(monkeypatch, *tool_calls, photo_bytes=None, search_list=None):
     """Run one chat turn in which the model makes `tool_calls` (one round
-    each), then answers. Returns (reply, the recorded create() calls)."""
+    each), then answers. `search_list` is the search list an earlier turn
+    left. Returns (reply, the recorded create() calls)."""
     responses = [_FakeResponse(_FakeMessage(tool_calls=[call])) for call in tool_calls]
     responses.append(_FakeResponse(_FakeMessage(content="done")))
     calls = _install_fake_openai(monkeypatch, responses)
-    reply = chat.ask(photo_bytes, "image/jpeg" if photo_bytes else None, "hi", [])
+    reply = chat.ask(photo_bytes, "image/jpeg" if photo_bytes else None, "hi", [], search_list)
     return reply, calls
 
 
@@ -500,12 +514,15 @@ def test_filename_search_tool_returns_matching_ids(monkeypatch):
     )
 
     assert searched == ["beach"]
-    assert reply.search_results == ["p1"]
     result = calls[1]["messages"][-1]["content"]
     # The model is told what was found, and that the user can see it.
+    assert reply.search_results == [{"id": "p1", "filename": "vacation/beach.jpg", "score": 1.0}]
     assert "Found 1 photo " in result
-    assert "vacation/beach.jpg | Boone | A sandy beach." in result
+    assert "holds 1 photo" in result
+    assert "- vacation/beach.jpg (100%)" in result
     assert "Search Results" in result
+    # ...but not handed the photo's details: the list stays out of its context.
+    assert "A sandy beach." not in result
 
 
 def test_text_search_tool_returns_matching_ids(monkeypatch):
@@ -515,7 +532,7 @@ def test_text_search_tool_returns_matching_ids(monkeypatch):
 
     reply, _ = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "Alice"}'))
 
-    assert reply.search_results == ["p2", "p3"]
+    assert _ids(reply) == ["p2", "p3"]
 
 
 @pytest.mark.parametrize(
@@ -538,7 +555,7 @@ def test_semantic_search_tool_maps_match_level_to_a_threshold(monkeypatch, argum
     reply, _ = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_semantic", arguments))
 
     assert searched == [("a party", threshold)]
-    assert reply.search_results == ["p1"]
+    assert _ids(reply) == ["p1"]
 
 
 def test_semantic_search_tool_rejects_an_unknown_match_level(monkeypatch):
@@ -577,6 +594,186 @@ def test_a_search_with_no_matches_reports_an_empty_result(monkeypatch):
     assert "No photos matched" in calls[1]["messages"][-1]["content"]
 
 
+def test_semantic_matches_are_scored_by_similarity_and_listed_best_first(monkeypatch):
+    photos = [
+        _photo("p1", "a.jpg", similarity=0.9),
+        _photo("p2", "b.jpg", similarity=0.6),
+        _photo("p3", "c.jpg", similarity=0.4),
+    ]
+    monkeypatch.setattr(storage, "search_photos", lambda query, threshold: list(reversed(photos)))
+
+    reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_semantic", '{"query": "x"}'))
+
+    assert [(entry["id"], entry["score"]) for entry in reply.search_results] == [("p1", 0.9), ("p2", 0.6), ("p3", 0.4)]
+    result = calls[1]["messages"][-1]["content"]
+    assert "highest 90%, median 60%, lowest 40%" in result
+
+
+def _semantic(monkeypatch, scores):
+    """Fake storage.search_photos returning photo p<n> per score, honouring
+    the `photo_ids` restriction a filter-mode search passes."""
+    photos = [_photo(f"p{n}", f"photo-{n}.jpg", similarity=score) for n, score in enumerate(scores, start=1)]
+
+    def fake_search(query, threshold, photo_ids=None):
+        return [photo for photo in photos if photo_ids is None or photo["id"] in photo_ids]
+
+    monkeypatch.setattr(storage, "search_photos", fake_search)
+
+
+def test_filter_mode_keeps_only_listed_photos_that_also_match(monkeypatch):
+    _semantic(monkeypatch, [0.9, 0.6, 0.4])
+    restricted_to = []
+
+    def fake_individual(name, photo_ids=None):
+        restricted_to.append(photo_ids)
+        return ["Alice"], [_photo("p2", "photo-2.jpg"), _photo("p3", "photo-3.jpg")]
+
+    monkeypatch.setattr(storage, "search_photos_by_individual", fake_individual)
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_photos_semantic", '{"query": "beach"}'),
+        _FakeToolCall("c2", "search_photos_by_individual", '{"name": "alice", "mode": "filter"}'),
+    )
+
+    # The second search only looked among the photos already in the list...
+    assert restricted_to == [["p1", "p2", "p3"]]
+    # ...and a photo in both keeps the weaker of its two scores.
+    assert [(entry["id"], entry["score"]) for entry in reply.search_results] == [("p2", 0.6), ("p3", 0.4)]
+    assert "Of the 3 photos in the search list, 2 also matched" in calls[-1]["messages"][-1]["content"]
+
+
+def test_filter_mode_that_matches_nothing_leaves_the_list_unchanged(monkeypatch):
+    _semantic(monkeypatch, [0.9, 0.6])
+    monkeypatch.setattr(storage, "search_photos_by_tag", lambda name, photo_ids=None: (["trip"], []))
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_photos_semantic", '{"query": "beach"}'),
+        _FakeToolCall("c2", "search_photos_by_tag", '{"name": "trip", "mode": "filter"}'),
+    )
+
+    assert _ids(reply) == ["p1", "p2"]
+    assert "left unchanged" in calls[-1]["messages"][-1]["content"]
+
+
+def test_filter_mode_with_an_empty_list_does_not_search(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda *args, **kwargs: pytest.fail("must not search"))
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "x", "mode": "filter"}')
+    )
+
+    assert reply.search_results is None
+    assert "nothing to filter" in calls[-1]["messages"][-1]["content"]
+
+
+def test_add_mode_merges_matches_into_the_list(monkeypatch):
+    _semantic(monkeypatch, [0.9, 0.4])
+    monkeypatch.setattr(
+        storage, "search_photos_by_filename", lambda text: [_photo("p2", "photo-2.jpg"), _photo("p9", "z.jpg")]
+    )
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_photos_semantic", '{"query": "beach"}'),
+        _FakeToolCall("c2", "search_photos_by_filename", '{"text": "z", "mode": "add"}'),
+    )
+
+    # p2 was in both: it keeps the better score. Best score first overall.
+    assert [(entry["id"], entry["score"]) for entry in reply.search_results] == [("p2", 1.0), ("p9", 1.0), ("p1", 0.9)]
+    assert "1 of them were not already in the search list" in calls[-1]["messages"][-1]["content"]
+
+
+def test_an_unknown_mode_is_rejected(monkeypatch):
+    monkeypatch.setattr(storage, "search_photos_by_text", lambda *args, **kwargs: pytest.fail("must not search"))
+
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "x", "mode": "narrow"}')
+    )
+
+    assert reply.search_results is None
+    assert '"mode" must be one of' in calls[-1]["messages"][-1]["content"]
+
+
+_PREVIOUS_LIST = [
+    {"id": "p3", "filename": "c.jpg", "score": 0.4},
+    {"id": "p1", "filename": "a.jpg", "score": 0.9},
+    {"id": "p2", "filename": "b.jpg", "score": 0.6},
+    {"id": "p4", "filename": "d.jpg", "score": 0.3},
+]
+
+
+@pytest.mark.parametrize("score", ["50", "0.5"])  # a percentage, or the fraction a model may write instead
+def test_stats_tool_describes_the_list_from_an_earlier_turn(monkeypatch, score):
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_list_stats", f'{{"score": {score}}}'),
+        search_list=_PREVIOUS_LIST,
+    )
+
+    result = calls[-1]["messages"][-1]["content"]
+    assert "holds 4 photos" in result
+    assert "highest 90%, median 50%, lowest 30%" in result
+    assert "2 at or above 50%, 2 below." in result
+    # Looking isn't changing: nothing new for the gallery to show.
+    assert reply.search_results is None
+
+
+def test_stats_tool_without_a_score_or_a_list(monkeypatch):
+    _, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_list_stats", "{}"))
+
+    assert calls[-1]["messages"][-1]["content"] == "The search list is empty."
+
+
+def test_truncate_tool_drops_entries_below_the_score(monkeypatch):
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "truncate_search_list", '{"min_score": 50}'),
+        search_list=_PREVIOUS_LIST,
+    )
+
+    assert [(entry["id"], entry["score"]) for entry in reply.search_results] == [("p1", 0.9), ("p2", 0.6)]
+    result = calls[-1]["messages"][-1]["content"]
+    assert "Removed 2 photos scoring below 50%" in result
+    assert "holds 2 photos" in result
+
+
+def test_truncate_tool_never_empties_the_list(monkeypatch):
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "truncate_search_list", '{"min_score": 95}'),
+        search_list=_PREVIOUS_LIST,
+    )
+
+    assert reply.search_results is None
+    assert "nothing was removed" in calls[-1]["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize("arguments", ["{}", '{"min_score": "high"}', '{"min_score": 250}', '{"min_score": true}'])
+def test_truncate_tool_rejects_a_bad_score(monkeypatch, arguments):
+    reply, calls = _ask_with_tool_calls(
+        monkeypatch, _FakeToolCall("c1", "truncate_search_list", arguments), search_list=_PREVIOUS_LIST
+    )
+
+    assert reply.search_results is None
+    assert '"min_score" must be a number' in calls[-1]["messages"][-1]["content"]
+
+
+def test_a_later_search_can_filter_the_list_from_an_earlier_turn(monkeypatch):
+    monkeypatch.setattr(
+        storage, "search_photos_by_text", lambda text, photo_ids=None: [_photo("p2", "b.jpg"), _photo("p3", "c.jpg")]
+    )
+
+    reply, _ = _ask_with_tool_calls(
+        monkeypatch,
+        _FakeToolCall("c1", "search_photos_by_text", '{"text": "boone", "mode": "filter"}'),
+        search_list=_PREVIOUS_LIST,
+    )
+
+    assert [(entry["id"], entry["score"]) for entry in reply.search_results] == [("p2", 0.6), ("p3", 0.4)]
+
+
 def test_a_later_empty_search_does_not_wipe_an_earlier_searchs_matches(monkeypatch):
     monkeypatch.setattr(storage, "search_photos_by_filename", lambda text: [_photo("p1", "a.jpg")])
     monkeypatch.setattr(storage, "search_photos_by_text", lambda text: [])
@@ -587,7 +784,7 @@ def test_a_later_empty_search_does_not_wipe_an_earlier_searchs_matches(monkeypat
         _FakeToolCall("c2", "search_photos_by_text", '{"text": "zzz"}'),
     )
 
-    assert reply.search_results == ["p1"]
+    assert _ids(reply) == ["p1"]
 
 
 def test_a_later_search_with_matches_replaces_an_earlier_one(monkeypatch):
@@ -600,7 +797,7 @@ def test_a_later_search_with_matches_replaces_an_earlier_one(monkeypatch):
         _FakeToolCall("c2", "search_photos_by_text", '{"text": "b"}'),
     )
 
-    assert reply.search_results == ["p2"]
+    assert _ids(reply) == ["p2"]
 
 
 def test_a_long_result_list_is_only_previewed_to_the_model(monkeypatch):
@@ -609,12 +806,13 @@ def test_a_long_result_list_is_only_previewed_to_the_model(monkeypatch):
 
     reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", "search_photos_by_text", '{"text": "photo"}'))
 
-    # Every match reaches the user; the model sees a preview.
+    # Every match reaches the user; the model is told how many there are
+    # and shown only the first few names.
     assert len(reply.search_results) == 25
     result = calls[1]["messages"][-1]["content"]
     assert "Found 25 photos" in result
     assert result.count("\n- ") == chat._SEARCH_PREVIEW_COUNT
-    assert "(and 15 more)" in result
+    assert "photo-24.jpg" not in result
 
 
 @pytest.mark.parametrize(
@@ -659,7 +857,7 @@ def test_named_search_tools_return_matching_ids(monkeypatch, tool, storage_funct
     reply, calls = _ask_with_tool_calls(monkeypatch, _FakeToolCall("c1", tool, '{"name": "alice"}'))
 
     assert searched == ["alice"]
-    assert reply.search_results == ["p1", "p2"]
+    assert _ids(reply) == ["p1", "p2"]
     # The model is told which name its text actually matched.
     assert "Alice Smith" in calls[1]["messages"][-1]["content"]
 
@@ -727,6 +925,18 @@ def test_search_photos_by_filename_matches_name_and_path_case_insensitively(clie
     assert _filenames(storage.search_photos_by_filename("IMG_")) == ["IMG_1234.jpg"]
     assert storage.search_photos_by_filename("nothing-like-this") == []
     assert storage.search_photos_by_filename("   ") == []
+
+
+def test_filename_and_text_searches_can_be_restricted_to_a_set_of_photos(client, tmp_path):
+    ids = _index(client, tmp_path, "beach/one.jpg", "beach/two.jpg", "beach/three.jpg")
+    some = [ids["beach/one.jpg"], ids["beach/three.jpg"]]
+
+    assert _filenames(storage.search_photos_by_filename("beach", photo_ids=some)) == ["beach/one.jpg", "beach/three.jpg"]
+    assert _filenames(storage.search_photos_by_text("beach", photo_ids=some)) == ["beach/one.jpg", "beach/three.jpg"]
+    # An empty set is "none of them", not "no restriction".
+    assert storage.search_photos_by_filename("beach", photo_ids=[]) == []
+    assert storage.search_photos_by_text("beach", photo_ids=[]) == []
+    assert len(storage.search_photos_by_text("beach", photo_ids=None)) == 3
 
 
 def test_search_photos_by_filename_ignores_other_fields(client, tmp_path):
@@ -814,6 +1024,11 @@ def test_individual_listing_and_search(client, tmp_path):
     assert storage.search_photos_by_individual("bob") == (["Bob"], [])
     assert storage.search_photos_by_individual("nobody") == ([], [])
 
+    # Restricted to a set of photos (a filter on the chat's search list).
+    names, photos = storage.search_photos_by_individual("alice", photo_ids=[ids["two.jpg"], ids["three.jpg"]])
+    assert names == ["Alice"]
+    assert _filenames(photos) == ["two.jpg"]
+
 
 def test_tag_listing_and_search(client, tmp_path):
     from app import tags
@@ -842,6 +1057,10 @@ def test_tag_listing_and_search(client, tmp_path):
 
     assert storage.search_photos_by_tag("nope") == ([], [])
 
+    names, photos = storage.search_photos_by_tag("favorites", photo_ids=[ids["two.jpg"], ids["three.jpg"]])
+    assert names == ["Favorites"]
+    assert _filenames(photos) == ["two.jpg"]
+
 
 # --- The chat routes ---------------------------------------------------------
 
@@ -849,17 +1068,17 @@ def test_tag_listing_and_search(client, tmp_path):
 def test_library_chat_needs_no_photo(client, monkeypatch):
     captured = {}
 
-    def fake_ask(photo_bytes, content_type, message, history):
-        captured["args"] = (photo_bytes, content_type, message)
-        return chat.ChatReply(text="Found two.", search_results=["p1", "p2"])
+    def fake_ask(photo_bytes, content_type, message, history, search_list=None):
+        captured["args"] = (photo_bytes, content_type, message, search_list)
+        return chat.ChatReply(text="Found two.", search_results=[{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}])
 
     monkeypatch.setattr(chat, "ask", fake_ask)
 
     response = client.post("/api/chat", json={"message": "find beach photos"})
 
     assert response.status_code == 200
-    assert response.json() == {"reply": "Found two.", "boxes": [], "search_results": ["p1", "p2"]}
-    assert captured["args"] == (None, None, "find beach photos")
+    assert response.json() == {"reply": "Found two.", "boxes": [], "search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}, {"id": "p2", "filename": "b.jpg", "score": 0.5}]}
+    assert captured["args"] == (None, None, "find beach photos", None)
 
 
 def test_library_chat_returns_503_when_not_configured(client, monkeypatch):
@@ -1135,13 +1354,13 @@ def test_ask_stream_reports_search_results_as_an_event(monkeypatch):
 
     events = list(chat.ask_stream(None, None, "find a", []))
 
-    assert events == [{"search_results": ["p1"]}, {"text": "Found one."}]
+    assert events == [{"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]}, {"text": "Found one."}]
 
 
 def test_chat_endpoint_streams_when_enabled(client, tmp_path, monkeypatch):
     photo_id = _get_synced_photo_id(client, tmp_path)
 
-    def fake_ask_stream(photo_bytes, content_type, message, history):
+    def fake_ask_stream(photo_bytes, content_type, message, history, search_list=None):
         return iter([{"text": "Hel"}, {"boxes": [_DOG_BOX]}, {"text": "lo"}])
 
     monkeypatch.setattr(chat, "should_stream", lambda: True)

@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Photo(BaseModel):
@@ -72,9 +72,23 @@ class ChatMessage(BaseModel):
     text: str
 
 
+class SearchListEntry(BaseModel):
+    # One photo in the chat's search list -- see chat._Turn. `filename` is
+    # the path relative to the photos root; `score` is 0-1, higher = a
+    # better match (cosine similarity for a semantic search, 1 for an
+    # exact file name/text/person/tag match).
+    id: str
+    filename: str
+    score: float = Field(ge=0, le=1)
+
+
 class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = []
+    # The search list as an earlier reply's `search_results` left it, sent
+    # back so this message's tools can filter/truncate it. The list is
+    # never part of the conversation the model reads.
+    search_list: Optional[list[SearchListEntry]] = None
 
 
 class BoundingBox(BaseModel):
@@ -93,11 +107,11 @@ class ChatResponse(BaseModel):
     # Non-empty only when the chat model ran its object search this turn
     # and found something. See chat.ChatReply.
     boxes: list[BoundingBox] = []
-    # Photo ids, best match first, when the chat model searched the library
-    # this turn -- [] if it searched and nothing matched, null if it didn't
-    # search at all. The web UI shows these as the gallery's "Search
-    # Results".
-    search_results: Optional[list[str]] = None
+    # The search list, best score first, when the chat model changed it
+    # this turn (searched, filtered or truncated) -- [] if a first search
+    # matched nothing, null if it wasn't touched. The web UI shows these
+    # as the gallery's "Search Results".
+    search_results: Optional[list[SearchListEntry]] = None
 
 
 class FaceBox(BaseModel):

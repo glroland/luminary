@@ -4,13 +4,18 @@ import { chatAboutPhoto } from "../api/client.js";
 // `photoId` is the photo open in PhotoModal, which the model is shown and
 // can be asked about -- or null when none is open, when the chat is about
 // the library as a whole. Either way the model can search the library
-// (see chat.py's tools); the ids it finds go up through `onSearchResults`,
-// and boxes it locates in the open photo through `onBoxesChange`.
+// (see chat.py's tools); the search list it builds ({id, filename, score}
+// entries, best score first) goes up through `onSearchResults`, and boxes
+// it locates in the open photo through `onBoxesChange`.
+//
+// `searchList` is that same list coming back down: it is sent with every
+// message, so the model's tools can filter or truncate an earlier search
+// without the list ever being part of the conversation text.
 //
 // The conversation carries on across photos being opened and closed: a
 // search closes the open photo to show its results, and that mustn't wipe
 // the reply that announced them. Only the boxes are per-photo.
-export default function PhotoChat({ photoId, onBoxesChange, onSearchResults }) {
+export default function PhotoChat({ photoId, searchList = null, onBoxesChange, onSearchResults }) {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -56,7 +61,7 @@ export default function PhotoChat({ photoId, onBoxesChange, onSearchResults }) {
     }
 
     try {
-      const { reply, boxes, searchResults } = await chatAboutPhoto(photoId, text, history, handleChunk);
+      const { reply, boxes, searchResults } = await chatAboutPhoto(photoId, text, history, handleChunk, searchList);
       if (streamingIndexRef.current === null) {
         // A plain (non-streaming) reply: no chunks arrived via handleChunk,
         // so the message was never started above -- append it now.

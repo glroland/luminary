@@ -20,6 +20,10 @@ function formatDate(createdAt) {
 // styles.css). There are no hover timers/state here, so moving the mouse
 // across the grid never re-renders anything.
 //
+// A photo shown as a search result carries `search_score` (0-1, set by
+// App.jsx's handleSearchResults); it's shown as a percentage badge in the
+// tile's bottom-right corner, always visible rather than hover-only.
+//
 // `loaded` is the one piece of state: it flips once the thumbnail has
 // arrived (or failed -- an errored image must not stay invisible) and
 // drives the fade-in and the end of the shimmer placeholder. The ref
@@ -28,6 +32,7 @@ function formatDate(createdAt) {
 export default function PhotoCard({ photo, onSelect, onContextMenu }) {
   const [loaded, setLoaded] = useState(false);
   const date = formatDate(photo.created_at);
+  const hasScore = typeof photo.search_score === "number";
 
   function handleClick(event) {
     // The tile's centre, in viewport px: where PhotoModal's open animation
@@ -51,7 +56,7 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
 
   return (
     <div
-      className={`photo-card${loaded ? " photo-card-loaded" : ""}`}
+      className={`photo-card${loaded ? " photo-card-loaded" : ""}${hasScore ? " photo-card-scored" : ""}`}
       onContextMenu={onContextMenu}
       onMouseEnter={handleMouseEnter}
     >
@@ -72,6 +77,11 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
             {date && <span className="photo-card-overlay-date">{date}</span>}
             {photo.location_name && <span>{photo.location_name}</span>}
           </div>
+        )}
+        {hasScore && (
+          <span className="photo-card-score" title="Match score">
+            {Math.round(photo.search_score * 100)}%
+          </span>
         )}
       </div>
       <div className="photo-card-tooltip" role="tooltip">

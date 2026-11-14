@@ -213,6 +213,10 @@ def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
     """Shared by both chat routes. `photo_bytes`/`content_type` are None
     when no photo is open; `subject` only labels log lines."""
     history = [turn.model_dump() for turn in body.history]
+    # The search list as the web UI last received it -- the server keeps no
+    # conversation state, so this is how a follow-up message can narrow or
+    # truncate an earlier search. See chat._Turn.
+    search_list = None if body.search_list is None else [entry.model_dump() for entry in body.search_list]
 
     if chat.should_stream():
         # chat.ask_stream() validates config and builds the request
@@ -224,7 +228,7 @@ def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
         # status code any more; that case is surfaced in-band in the
         # stream itself, logged server-side either way.
         try:
-            events = chat.ask_stream(photo_bytes, content_type, body.message, history)
+            events = chat.ask_stream(photo_bytes, content_type, body.message, history, search_list)
         except chat.ChatNotConfigured as exc:
             raise HTTPException(status_code=503, detail=str(exc))
         except Exception:
@@ -233,7 +237,7 @@ def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
 
         # One JSON object per line: {"text": ...} reply pieces,
         # {"boxes": [...]} when the model located something in the photo,
-        # {"search_results": [...]} when it searched the library.
+        # {"search_results": [...]} when it changed the search list.
         def generate():
             try:
                 for event in events:
@@ -245,7 +249,7 @@ def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
         return StreamingResponse(generate(), media_type="application/x-ndjson")
 
     try:
-        result = chat.ask(photo_bytes, content_type, body.message, history)
+        result = chat.ask(photo_bytes, content_type, body.message, history, search_list)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception:

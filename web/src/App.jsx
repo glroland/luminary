@@ -124,12 +124,13 @@ export default function App() {
   const [tagPhotoIds, setTagPhotoIds] = useState(null);
   const [tagsVersion, setTagsVersion] = useState(0);
   // Search is done by asking the chat (ChatWidget.jsx): the model runs a
-  // search tool server-side and the reply carries the matching photo ids
-  // (handleSearchResults below). searchResults is what narrows the grid --
+  // search tool server-side and the reply carries its search list -- the
+  // matching photo ids, each with a match score (handleSearchResults
+  // below). searchResults is what narrows the grid --
   // null means the search filter isn't selected (same "null = no filter"
   // convention as selectedDirectory/selectedIndividual above), an array
   // (possibly empty, meaning "no matches") means it is. Kept in the API's
-  // own best-match-first order -- never re-sorted here. lastSearchResults
+  // own best-score-first order -- never re-sorted here. lastSearchResults
   // remembers the most recent search (null before the first one) so the
   // sidebar's "Search Results" row can bring it back after browsing away.
   const [searchResults, setSearchResults] = useState(null);
@@ -317,16 +318,34 @@ export default function App() {
     resetGrid();
   }
 
-  // The chat ran a search: `ids` are the matching photo ids, best first.
-  // They're looked up in the already-loaded list, like
-  // handleNavigateToPhoto above; an id not in it (indexed since the list
-  // was loaded) is skipped.
-  function handleSearchResults(ids) {
+  // The chat changed its search list: `entries` are {id, filename, score}
+  // (score 0-1), best score first. They're looked up in the already-loaded
+  // list, like handleNavigateToPhoto above; an id not in it (indexed since
+  // the list was loaded) is skipped. Each result is a copy of the photo
+  // carrying its `search_score`, which PhotoCard shows on the tile.
+  function handleSearchResults(entries) {
     const byId = new Map(photos.map((photo) => [photo.id, photo]));
-    const results = ids.map((id) => byId.get(id)).filter(Boolean);
+    const results = entries
+      .filter((entry) => byId.has(entry.id))
+      .map((entry) => ({ ...byId.get(entry.id), search_score: entry.score }));
     setLastSearchResults(results);
     showSearchResults(results);
   }
+
+  // The same list in the shape the chat API takes it back in: sent with
+  // every chat message so the model's tools can filter or truncate the
+  // last search (the list itself never goes through the model's context).
+  const chatSearchList = useMemo(
+    () =>
+      lastSearchResults === null
+        ? null
+        : lastSearchResults.map((photo) => ({
+            id: photo.id,
+            filename: photo.filename,
+            score: photo.search_score,
+          })),
+    [lastSearchResults]
+  );
 
   // Memoised so the array keeps its identity across unrelated re-renders
   // (sync-status polling, the modal opening) -- PhotoGrid's own memoised
@@ -567,7 +586,12 @@ export default function App() {
       </div>
       {/* The chat sees whatever photo is open in the modal, and is also
           how the library is searched. */}
-      <ChatWidget photo={selectedPhoto} onBoxesChange={setChatBoxes} onSearchResults={handleSearchResults} />
+      <ChatWidget
+        photo={selectedPhoto}
+        searchList={chatSearchList}
+        onBoxesChange={setChatBoxes}
+        onSearchResults={handleSearchResults}
+      />
     </div>
   );
 }
