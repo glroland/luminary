@@ -205,7 +205,14 @@ Postgres) lives in `storage.py`/`sync.py`:
   thumbnail straight off the `Image.open()` result again without
   transposing first.
 
-  Whenever GPS coordinates are (re)extracted (`content_changed`, same
+  EXIF date/GPS are read when the content changed *or* the row has no
+  thumbnail (`needs_exif`) — a missing thumbnail on an unchanged file
+  means it was never successfully decoded (e.g. a HEIC indexed before
+  `pillow-heif` was added), so its EXIF was never read either. In that
+  backfill case only values EXIF actually has are written; an existing
+  `created_at`/coordinates are never reset.
+
+  Whenever GPS coordinates are (re)extracted (`needs_exif`, same
   condition as `latitude`/`longitude` themselves), `_sync_one_file` also
   reverse-geocodes them into `location_name` via `_describe_location` —
   but only *after* the `with fs.open(...)` block has closed, deliberately:

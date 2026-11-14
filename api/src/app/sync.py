@@ -266,6 +266,11 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     needs_thumbnail = content_changed or not existing_row["has_thumbnail"]
     needs_florence = content_changed or not existing_row["face_detection_done"]
     needs_checksum = content_changed or not existing_row["checksum"]
+    # No thumbnail on an unchanged file means it has never been decoded
+    # successfully (e.g. a HEIC indexed before a decoder for it existed),
+    # so its EXIF date/GPS were never read either -- re-read them along
+    # with the thumbnail instead of leaving them at index-time/NULL forever.
+    needs_exif = needs_thumbnail
 
     # Logged for every discovered file, not just changed ones, so a repeat
     # "Refresh" is auditable file-by-file -- which of the three outcomes
@@ -354,6 +359,15 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                         fields["created_at"] = (created_at or datetime.now(timezone.utc)).isoformat()
                         fields["latitude"] = latitude
                         fields["longitude"] = longitude
+                    elif needs_exif:
+                        # Backfill only: write what EXIF actually has, and
+                        # leave the row's existing values alone otherwise.
+                        created_at, latitude, longitude = _extract_exif(raw_image)
+                        if created_at is not None:
+                            fields["created_at"] = created_at.isoformat()
+                        if latitude is not None and longitude is not None:
+                            fields["latitude"] = latitude
+                            fields["longitude"] = longitude
 
                     if needs_thumbnail or needs_florence:
                         # .convert("RGB") fully decodes the pixel data into a
@@ -381,7 +395,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     # still open. Only attempted when this sync actually (re)extracted GPS
     # coordinates above; independent of whether the thumbnail/image-decode
     # step succeeded, since it only needs the coordinates, not the image.
-    if content_changed and fields.get("latitude") is not None and fields.get("longitude") is not None:
+    if needs_exif and fields.get("latitude") is not None and fields.get("longitude") is not None:
         fields["location_name"] = _describe_location(fields["latitude"], fields["longitude"], relative_path)
 
     fields["content_type"] = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"

@@ -635,3 +635,52 @@ def test_sync_status_defaults_to_idle(client):
         "deleted": 0,
         "error": None,
     }
+
+
+def test_sync_backfills_exif_for_a_file_that_was_never_decoded(client, tmp_path, monkeypatch):
+    # A file indexed while it couldn't be decoded (e.g. HEIC before a
+    # decoder existed) has no thumbnail, an index-time created_at, and no
+    # GPS -- once it *can* be decoded, a plain re-sync of the unchanged
+    # file must fill all of those in, not just the thumbnail.
+    from app import geocode
+    from app.database import get_connection
+
+    monkeypatch.setattr(geocode, "reverse_geocode", lambda lat, lon: "Pittsburgh, Pennsylvania")
+    write_image(tmp_path / "photos" / "geo.jpg", exif=_exif_with_gps_and_datetime())
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE photos SET thumbnail = NULL, width = NULL, height = NULL, latitude = NULL, "
+            "longitude = NULL, location_name = NULL, created_at = '2026-01-01T00:00:00+00:00' WHERE id = %s",
+            (photo_id,),
+        )
+        conn.commit()
+
+    sync_and_wait(client)
+    photo = client.get(f"/api/photos/{photo_id}").json()
+
+    assert photo["created_at"].startswith("2023-05-17T14:22:10")
+    assert photo["latitude"] == pytest.approx(40.446194, abs=1e-5)
+    assert photo["longitude"] == pytest.approx(-79.948611, abs=1e-5)
+    assert photo["location_name"] == "Pittsburgh, Pennsylvania"
+    assert photo["width"] is not None
+
+
+def test_sync_thumbnail_backfill_keeps_created_at_when_the_file_has_no_exif_date(client, tmp_path):
+    from app.database import get_connection
+
+    write_image(tmp_path / "photos" / "plain.jpg")
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE photos SET thumbnail = NULL, created_at = '2020-02-02T00:00:00+00:00' WHERE id = %s",
+            (photo_id,),
+        )
+        conn.commit()
+
+    sync_and_wait(client)
+    assert client.get(f"/api/photos/{photo_id}").json()["created_at"].startswith("2020-02-02")
