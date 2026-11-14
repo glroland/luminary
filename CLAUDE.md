@@ -439,13 +439,36 @@ cached) is also per-pod, in-memory state — same caveat.
     `_MATCH_LEVELS` — default `loose`. For the two `ILIKE` searches every
     whitespace-separated word must match (in the text search, each word in
     any field), and `storage._like_patterns` escapes `%`/`_` so a filename
-    like `IMG_1234` matches literally. `ChatReply.search_results` is photo
-    *ids* only, best first — `None` means the model didn't search, `[]`
-    that it searched and found nothing; keep those distinct, the frontend
-    only switches the gallery to "Search Results" for a non-`None` value.
-    When a turn searches more than once, the last search *that found
-    something* wins (`_Turn.record_search`). The model itself is shown
-    only the first `_SEARCH_PREVIEW_COUNT` matches, as text.
+    like `IMG_1234` matches literally.
+  - **The search list.** A search's matches never go into the model's
+    context (a small-context self-hosted model can't carry hundreds of
+    file names back and forth). They go into `_Turn.search_list` —
+    `{"id", "filename", "score"}` entries, score 0–1, always kept best
+    score first (`_by_score`, a stable sort) — and the model is told only
+    the list's size, its highest/median/lowest score and the names of the
+    best `_SEARCH_PREVIEW_COUNT` (`_search_list_text`). Only the semantic
+    search grades its matches (cosine `similarity`); every other match
+    scores `_EXACT_MATCH_SCORE`. Every search tool takes a `mode`: `new`
+    (the default, replace the list), `filter` (keep only listed photos
+    that also match — the storage functions' `photo_ids` argument applies
+    the restriction in SQL, before the limit; a photo keeps the *lower* of
+    its two scores) or `add` (union, the *higher* score). Two more tools
+    work on the list alone: `search_list_stats` (the same figures, plus
+    how many entries are at or above / below an optional `score`) and
+    `truncate_search_list` (drop entries below `min_score`). Scores are
+    percentages in everything the model reads or writes;
+    `_score_argument` takes a value of 1 or less as a fraction. A search,
+    filter or truncation that would leave nothing never empties a list
+    that has photos in it — the list is left as it was and the model is
+    told so (`_apply_search`).
+    There is no server-side conversation state, so the list survives
+    between messages by round trip: `ChatReply.search_results` hands it to
+    the web UI, which sends it back as `ChatRequest.search_list` with the
+    next message. `search_results` is `None` unless a tool *set* the list
+    this turn (`_Turn.set_search_list`) and `[]` when a first search found
+    nothing; keep those distinct, the frontend only switches the gallery
+    to "Search Results" for a non-`None` value. `search_list_stats` and a
+    no-op truncation leave it `None`.
   - `search_photos_by_individual` / `search_photos_by_tag` →
     `storage.search_photos_by_individual` / `_by_tag`, which return
     `(names matched, photos)`. `storage._match_names` resolves the model's
@@ -1001,11 +1024,17 @@ cached) is also per-pod, in-memory state — same caveat.
   shown it; with none the chat is about the library (`POST /api/chat`).
   Two things come back up from it. Boxes the model located in the open
   photo (`chat.py`'s `locate_object` tool) are lifted into `App.jsx`'s
-  `chatBoxes` state and handed to `PhotoModal.jsx` to draw. Photo ids a
-  library search found go to `handleSearchResults`, which looks them up in
-  the already-loaded `photos` list (ids not in it are skipped), clears
-  every other filter, closes the open photo, switches to the gallery and
-  shows them as "Search Results".
+  `chatBoxes` state and handed to `PhotoModal.jsx` to draw. The search
+  list a library search built (`{id, filename, score}` entries, best
+  score first) goes to `handleSearchResults`, which looks the ids up in
+  the already-loaded `photos` list (ids not in it are skipped), copies
+  each photo with its `search_score`, clears every other filter, closes
+  the open photo, switches to the gallery and shows them as "Search
+  Results". `PhotoCard.jsx` shows `search_score` as a percentage badge in
+  the tile's bottom-right corner (`.photo-card-score`, always visible,
+  not hover-only). `App.jsx` hands the same list back down as
+  `searchList` (`chatSearchList`), and `PhotoChat.jsx` sends it with
+  every message so the model's tools can filter or truncate it.
   The popup is hidden (`hidden` attribute), not unmounted, when closed, so
   the conversation survives closing and reopening it.
   The launcher's icon (`LuminaryBubble`) is a speech bubble drawn as the

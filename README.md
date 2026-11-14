@@ -91,7 +91,7 @@ target/               (generated, gitignored) local venv and pytest cache --
 | POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, failed, error}` |
 | POST   | `/api/chat`                 | Chat with no photo open — same request/response as below; this is how the library is searched |
-| POST   | `/api/photos/{id}/chat`     | Chat with a photo open — `{message, history}` → `{reply, boxes, search_results}` (JSON), or a streamed `application/x-ndjson` body if `LUMINARY_OPENAI_STREAMING` is on; see "Chat and search" below |
+| POST   | `/api/photos/{id}/chat`     | Chat with a photo open — `{message, history, search_list}` → `{reply, boxes, search_results}` (JSON), or a streamed `application/x-ndjson` body if `LUMINARY_OPENAI_STREAMING` is on; see "Chat and search" below |
 
 `POST /api/sync` is the only way photos enter the index — point
 `LUMINARY_PHOTOS_URI` at a directory (recursively scanned for files with a
@@ -317,11 +317,30 @@ someone is called just "Alice". Two more tools, `list_individuals` and
 it can answer "who's in my library?" or look up the right name first;
 those only produce text, not gallery results.
 
-The response's `search_results` carries the matching photo ids, best match
-first (`[]` if a search matched nothing, `null` if the model didn't search).
+**The search list.** Matches are kept out of the model's context, so a
+model with a small context window isn't handed hundreds of file names. A
+search puts its matches in a *search list* of `{id, filename, score}`
+entries (score 0–1; a semantic match scores its similarity, any other
+match 1), and the model is told only how many photos the list holds, its
+highest, median and lowest score, and the names of the three best. Every
+search tool takes a `mode`: `new` (the default) replaces the list,
+`filter` keeps only the photos already in it that also match, `add`
+merges the new matches in. Two further tools work on the list itself:
+
+| Tool                   | Does                                                                              |
+|------------------------|-----------------------------------------------------------------------------------|
+| `search_list_stats`    | Reports the count and highest/median/lowest score; given a `score`, also how many photos are at or above it and how many below |
+| `truncate_search_list` | Removes every photo scoring below `min_score`                                     |
+
+The response's `search_results` carries the list, best score first (`[]`
+if a first search matched nothing, `null` if the list wasn't changed).
 The web UI closes any open photo and shows them in the gallery under the
-sidebar's **Search Results** row; that row brings the last search back
-after browsing elsewhere. A search returns at most 500 photos.
+sidebar's **Search Results** row, each tile with its match score as a
+percentage in the bottom-right corner; that row brings the last search
+back after browsing elsewhere. The UI sends the list back as the
+request's `search_list` with each message, which is how a follow-up
+("only the best ones", "just the ones with Alice") works on the previous
+search. A search returns at most 500 photos.
 
 **Object search.** While a photo is open the model has one more tool,
 `locate_object`, for questions like "where's the dog?" or "is there a stop
@@ -345,7 +364,7 @@ way to search.
 endpoint responds with `application/x-ndjson` instead of one JSON body: one
 JSON object per line, `{"text": ...}` for each piece of the reply,
 `{"boxes": [...]}` when an object search found something and
-`{"search_results": [...]}` when a library search ran. The web UI handles
+`{"search_results": [...]}` when the search list changed. The web UI handles
 either response shape transparently (it checks the response's content
 type, not a client-side setting).
 
