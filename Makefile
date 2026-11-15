@@ -121,6 +121,20 @@ LUMINARY_MAX_CONCURRENCY ?= 4
 #   make run-api MLFLOW_TRACKING_URI=https://rh-ai.apps.ocp.home.glroland.com/mlflow`.
 MLFLOW_TRACKING_URI ?=
 
+# Where `install-models` puts the downloaded models. `run-api` reads them
+# from here (HF_HOME/TORCH_HOME, plus HF_HUB_OFFLINE=1 so a cache miss fails
+# loudly instead of downloading) unless LUMINARY_USE_MODEL_CACHE=0, which
+# leaves the tools on their own defaults (~/.cache, network allowed). This
+# is the local equivalent of api/Containerfile's /opt/model-cache.
+MODEL_CACHE_DIR ?= $(TARGET_DIR)/model-cache
+LUMINARY_USE_MODEL_CACHE ?= 1
+ifeq ($(LUMINARY_USE_MODEL_CACHE),1)
+MODEL_CACHE_ENV = HF_HOME=$(abspath $(MODEL_CACHE_DIR))/huggingface \
+	TORCH_HOME=$(abspath $(MODEL_CACHE_DIR))/torch HF_HUB_OFFLINE=1
+else
+MODEL_CACHE_ENV =
+endif
+
 # Env vars for run-api: points at LUMINARY_DATABASE_NAME (the dev database).
 LUMINARY_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
 	LUMINARY_DATABASE_PORT=$(LUMINARY_DATABASE_PORT) \
@@ -136,7 +150,7 @@ LUMINARY_TEST_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
 	LUMINARY_DATABASE_USER=$(LUMINARY_DATABASE_USER) \
 	LUMINARY_DATABASE_PASSWORD=$(LUMINARY_DATABASE_PASSWORD)
 
-.PHONY: help install install-api install-web \
+.PHONY: help install install-api install-models install-web \
         test test-api test-web \
         lint lint-web \
         run-api run-web \
@@ -149,7 +163,8 @@ LUMINARY_TEST_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
 
 help:
 	@echo "Available targets:"
-	@echo "  install         Install dependencies for both api and web"
+	@echo "  install         Install dependencies for both api and web, and download the models (install-models)"
+	@echo "  install-models  Download the ML models into target/model-cache (run-api uses them; LUMINARY_USE_MODEL_CACHE=0 to opt out)"
 	@echo "  test            Run tests for both api and web"
 	@echo "  lint            Run lint checks for web"
 	@echo "  run-api         Run the API locally with uvicorn (reload)"
@@ -168,12 +183,21 @@ help:
 
 ## --- Dependencies -----------------------------------------------------
 
-install: install-api install-web
+install: install-api install-web install-models
 
 install-api:
 	python3 -m venv $(VENV_DIR)
 	$(VENV_DIR)/bin/pip install --upgrade pip
 	$(VENV_DIR)/bin/pip install -r api/requirements-dev.txt
+
+# Downloads Florence-2, the embedding model and the facenet weights into
+# $(MODEL_CACHE_DIR) -- the same set api/Containerfile bakes into the image
+# (api/download_models.py), so `run-api` can read them from disk the way the
+# deployed pod does. Needs network access; re-running is a no-op once cached.
+install-models:
+	HF_HOME=$(MODEL_CACHE_DIR)/huggingface TORCH_HOME=$(MODEL_CACHE_DIR)/torch \
+		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
+		$(VENV_DIR)/bin/python api/download_models.py
 
 install-web:
 	cd web && npm install
@@ -196,7 +220,7 @@ lint-web:
 ## --- Local run -----------------------------------------------------------
 
 run-api:
-	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) $(LUMINARY_DATABASE_ENV) \
+	LUMINARY_PHOTOS_URI=$(LUMINARY_PHOTOS_URI) $(LUMINARY_DATABASE_ENV) $(MODEL_CACHE_ENV) \
 		LUMINARY_OPENAI_BASE_URL=$(LUMINARY_OPENAI_BASE_URL) LUMINARY_OPENAI_MODEL=$(LUMINARY_OPENAI_MODEL) \
 		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
 		LUMINARY_MAX_CONCURRENCY=$(LUMINARY_MAX_CONCURRENCY) \

@@ -36,7 +36,8 @@ contract — no shared code, no shared types.
 ## Commands
 
 ```bash
-make install     # creates target/venv, installs web/node_modules
+make install     # creates target/venv, installs web/node_modules, downloads models to target/model-cache
+make install-models # just the model download (api/download_models.py, shared with api/Containerfile)
 make test        # pytest (api) + vitest (web)
 make test-api    # target/venv/bin/python -m pytest api/tests -v
 make test-web    # cd web && npm run test
@@ -1144,7 +1145,11 @@ cached) is also per-pod, in-memory state — same caveat.
   can point at any API service URL without rebuilding — don't hardcode the
   API address into the built JS; `VITE_API_BASE_URL` is a build-time value,
   `API_PROXY_TARGET` is the runtime nginx target.
-- `api/Containerfile` is `python:3.12-slim`-based.
+- `api/Containerfile` is `python:3.12-slim`-based. It bakes the ML model
+  weights into `/opt/model-cache` by running `api/download_models.py`, the
+  same script `make install-models` runs against `target/model-cache`;
+  `run-api` reads that cache offline unless `LUMINARY_USE_MODEL_CACHE=0`.
+  Keep the model list in that one script — don't re-inline it in either.
 
 ## Deployment
 

@@ -599,7 +599,7 @@ Requires Python 3.12+, Node 20+, `podman` (or `docker`), and a reachable
 Postgres server (see "Database" above) on your `PATH`/network.
 
 ```bash
-make install     # creates target/venv and installs web/node_modules
+make install     # creates target/venv, installs web/node_modules, downloads the models into target/model-cache
 make db          # provisions luminary-dev + luminary-unittest, role, and tables (first time only)
 make test        # runs pytest (api) and vitest (web)
 make run-api     # starts the API on http://localhost:8080 (reload)
@@ -648,6 +648,14 @@ access to Hugging Face/GitHub during the build, and the resulting image
 is correspondingly larger (all three sets of weights, not just the Python
 dependencies) -- see `api/Containerfile`'s own comments for the full
 reasoning.
+
+Locally, `make install` (its `install-models` step, which runs the same
+`api/download_models.py` the image build does) downloads those three sets
+of weights into `target/model-cache`, and `make run-api` points
+`HF_HOME`/`TORCH_HOME` there with `HF_HUB_OFFLINE=1` — the same setup as the
+deployed pod. `make run-api LUMINARY_USE_MODEL_CACHE=0` opts out (tools use
+their own defaults and may download). This only caches the *files*; the
+model is still loaded into memory once per process on first use.
 
 ## Deploying to OpenShift
 
