@@ -133,9 +133,17 @@ Postgres) lives in `storage.py`/`sync.py`:
   writing a second file wouldn't be possible anyway. The `filename` column
   holds the path *relative to the photos root* exactly as discovered (e.g.
   `vacation/2019/beach.jpg`) — `stream_original` builds the backend path
-  directly from it. `created_at` prefers the photo's EXIF
-  `DateTimeOriginal`/`DateTimeDigitized`/`DateTime` (falling back to index
-  time if absent or unparseable), and `latitude`/`longitude` come from the
+  directly from it. `created_at` is the photo's own date, in this
+  order: EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime`, then the
+  XMP packet's date (`_extract_xmp_date` — an iPhone screenshot PNG has
+  no EXIF, only XMP), then the file's modification time
+  (`storage.file_modified_at`, read from the `fs.info()` result sync
+  already has: `mtime` for local/SMB, `LastModified` for S3, nothing for
+  plain HTTP; a time in the future is treated as corrupt and ignored).
+  If none of those gives a date it is `NULL`; **the index time is never
+  used**, and the web UI treats `null` as undated. `sync.py` re-checks a
+  row whose `created_at` is `NULL` on every sync (`needs_date`), which is
+  also how dates come back after being cleared in the database. And `latitude`/`longitude` come from the
   EXIF GPS IFD when present (`_extract_exif`) — both are best-effort and
   null when EXIF is missing. `location_name` — a short, human-readable
   reverse-geocoded place description derived from that same latitude/
@@ -210,7 +218,9 @@ Postgres) lives in `storage.py`/`sync.py`:
   means it was never successfully decoded (e.g. a HEIC indexed before
   `pillow-heif` was added), so its EXIF was never read either. In that
   backfill case only values EXIF actually has are written; an existing
-  `created_at`/coordinates are never reset.
+  `created_at`/coordinates are never reset. A row with no `created_at`
+  (`needs_date`) gets its date looked up the same way, without touching
+  anything else.
 
   Whenever GPS coordinates are (re)extracted (`needs_exif`, same
   condition as `latitude`/`longitude` themselves), `_sync_one_file` also

@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS photos (
     size_bytes BIGINT NOT NULL,
     width INTEGER,
     height INTEGER,
-    created_at TEXT NOT NULL,
+    created_at TEXT,
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
     thumbnail BYTEA,
@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS photos (
 -- EXISTS makes this a no-op against a database created after the column
 -- was already part of the CREATE TABLE above.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
+-- A photo with no date of its own is undated (NULL), never stamped with
+-- the time it was indexed. No-op once the constraint is gone.
+ALTER TABLE photos ALTER COLUMN created_at DROP NOT NULL;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- SHA-256 hex digest of the file's raw bytes (storage.compute_checksum),

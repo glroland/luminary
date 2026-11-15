@@ -1,6 +1,7 @@
 import io
 import hashlib
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -119,13 +120,64 @@ def _dms_to_decimal(dms, ref) -> Optional[float]:
     return -decimal if ref in ("S", "W") else decimal
 
 
+# XMP properties that hold a capture date, most specific first. An iPhone
+# screenshot (PNG) carries no EXIF at all, only an XMP packet with
+# photoshop:DateCreated.
+_XMP_DATE_PROPERTIES = ("exif:DateTimeOriginal", "photoshop:DateCreated", "xmp:CreateDate")
+
+
+def _extract_xmp_date(image: Image.Image) -> Optional[datetime]:
+    """Best-effort read of the capture date from the image's XMP packet.
+    A plain regex over the packet, not an XML parse: the value is either
+    an element's text or an attribute, and neither needs a new dependency."""
+    packet = image.info.get("xmp") or image.info.get("XML:com.adobe.xmp")
+    if isinstance(packet, bytes):
+        packet = packet.decode("utf-8", errors="ignore")
+    if not isinstance(packet, str):
+        return None
+    for name in _XMP_DATE_PROPERTIES:
+        match = re.search(re.escape(name) + r'\s*(?:=\s*["\']|>)\s*([^"\'<]+)', packet)
+        if not match:
+            continue
+        try:
+            parsed = datetime.fromisoformat(match.group(1).strip())
+        except ValueError:
+            continue
+        # Same convention as the EXIF date below: the wall-clock time as
+        # written, labelled UTC, whatever offset the packet gives.
+        return parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def file_modified_at(info: dict) -> Optional[datetime]:
+    """The file's modification time, from the `fs.info()` result sync
+    already has (so no extra backend call), or None where the backend
+    reports none (plain HTTP). fsspec has no single key for it: local and
+    SMB give `mtime` as epoch seconds, S3 gives `LastModified` as a
+    datetime."""
+    value = info.get("mtime")
+    if value is None:
+        value = info.get("LastModified")
+    if isinstance(value, (int, float)):
+        modified = datetime.fromtimestamp(value, tz=timezone.utc)
+    elif isinstance(value, datetime):
+        modified = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    else:
+        return None
+    # A time in the future is a corrupt one -- no date beats a wrong one.
+    if modified > datetime.now(timezone.utc):
+        return None
+    return modified
+
+
 def _extract_exif(image: Image.Image) -> tuple[Optional[datetime], Optional[float], Optional[float]]:
-    """Best-effort read of capture time and GPS position from EXIF. Returns
+    """Best-effort read of capture time and GPS position from the image's
+    embedded metadata: EXIF, then (for the date only) XMP. Returns
     (created_at, latitude, longitude), any of which may be None."""
     try:
         exif = image.getexif()
     except Exception:
-        return None, None, None
+        exif = Image.Exif()
 
     exif_ifd = {}
     try:
@@ -142,6 +194,11 @@ def _extract_exif(image: Image.Image) -> tuple[Optional[datetime], Optional[floa
             created_at = datetime.strptime(raw_datetime, "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc)
         except ValueError:
             created_at = None
+    if created_at is None:
+        try:
+            created_at = _extract_xmp_date(image)
+        except Exception:
+            created_at = None
 
     try:
         gps_ifd = exif.get_ifd(IFD.GPSInfo)
@@ -157,7 +214,7 @@ def _extract_exif(image: Image.Image) -> tuple[Optional[datetime], Optional[floa
 def list_photos() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT {METADATA_COLUMNS} FROM photos ORDER BY created_at DESC"
+            f"SELECT {METADATA_COLUMNS} FROM photos ORDER BY created_at DESC NULLS LAST"
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -355,7 +412,7 @@ def search_photos_by_text(
         rows = conn.execute(
             f"SELECT {columns} FROM photos p WHERE {where} "
             "AND (%(ids)s::text[] IS NULL OR p.id = ANY(%(ids)s::text[])) "
-            "ORDER BY p.created_at DESC LIMIT %(limit)s",
+            "ORDER BY p.created_at DESC NULLS LAST LIMIT %(limit)s",
             params,
         ).fetchall()
         return [dict(row) for row in rows]
@@ -427,7 +484,7 @@ def search_photos_by_individual(
         rows = conn.execute(
             f"SELECT {METADATA_COLUMNS} FROM photos WHERE id IN "
             f"(SELECT photo_id FROM faces WHERE person_id = ANY(%s)) AND {_RESTRICT_TO_IDS} "
-            "ORDER BY created_at DESC LIMIT %s",
+            "ORDER BY created_at DESC NULLS LAST LIMIT %s",
             ([row["id"] for row in matched], photo_ids, photo_ids, limit),
         ).fetchall()
         return [row["name"] for row in matched], [dict(row) for row in rows]
@@ -446,7 +503,7 @@ def search_photos_by_tag(
         rows = conn.execute(
             f"SELECT {METADATA_COLUMNS} FROM photos WHERE id IN "
             f"(SELECT photo_id FROM photo_tags WHERE tag_id = ANY(%s)) AND {_RESTRICT_TO_IDS} "
-            "ORDER BY created_at DESC LIMIT %s",
+            "ORDER BY created_at DESC NULLS LAST LIMIT %s",
             ([row["id"] for row in matched], photo_ids, photo_ids, limit),
         ).fetchall()
         return [row["name"] for row in matched], [dict(row) for row in rows]

@@ -171,6 +171,86 @@ def test_sync_extracts_created_at_and_geotag_from_exif(client, tmp_path, monkeyp
     assert photo["location_name"] == "Pittsburgh, Pennsylvania"
 
 
+def _write_png_with_xmp_date(path, date="2017-05-10T16:11:24"):
+    # What an iPhone screenshot looks like: no EXIF, only an XMP packet.
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+
+    xmp = (
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        '<rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">'
+        f"<photoshop:DateCreated>{date}</photoshop:DateCreated>"
+        "</rdf:Description></rdf:RDF></x:xmpmeta>"
+    )
+    info = PngInfo()
+    info.add_itxt("XML:com.adobe.xmp", xmp)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (10, 10), color="red").save(path, "PNG", pnginfo=info)
+
+
+def test_sync_reads_created_at_from_xmp_when_there_is_no_exif(client, tmp_path):
+    _write_png_with_xmp_date(tmp_path / "photos" / "screenshot.png")
+
+    sync_and_wait(client)
+
+    assert client.get("/api/photos").json()["photos"][0]["created_at"].startswith("2017-05-10T16:11:24")
+
+
+def test_sync_falls_back_to_the_files_modification_time(client, tmp_path):
+    import os
+
+    path = tmp_path / "photos" / "plain.jpg"
+    write_image(path)
+    modified = 1425445567  # 2015-03-04T05:06:07Z
+    os.utime(path, (modified, modified))
+
+    sync_and_wait(client)
+
+    assert client.get("/api/photos").json()["photos"][0]["created_at"].startswith("2015-03-04T05:06:07")
+
+
+def test_sync_leaves_created_at_null_when_nothing_gives_a_date(client, tmp_path, monkeypatch):
+    from app import storage
+
+    monkeypatch.setattr(storage, "file_modified_at", lambda info: None)
+    write_image(tmp_path / "photos" / "plain.jpg")
+
+    sync_and_wait(client)
+
+    assert client.get("/api/photos").json()["photos"][0]["created_at"] is None
+
+
+def test_sync_fills_in_a_cleared_created_at_on_an_unchanged_file(client, tmp_path):
+    from app.database import get_connection
+
+    _write_png_with_xmp_date(tmp_path / "photos" / "screenshot.png")
+    write_image(tmp_path / "photos" / "geo.jpg", exif=_exif_with_gps_and_datetime())
+    sync_and_wait(client)
+
+    with get_connection() as conn:
+        conn.execute("UPDATE photos SET created_at = NULL")
+        conn.commit()
+
+    sync_and_wait(client)
+    dates = {photo["filename"]: photo["created_at"] for photo in client.get("/api/photos").json()["photos"]}
+
+    assert dates["screenshot.png"].startswith("2017-05-10T16:11:24")
+    assert dates["geo.jpg"].startswith("2023-05-17T14:22:10")
+
+
+def test_file_modified_at_reads_each_backends_key_and_ignores_a_time_in_the_future():
+    from datetime import datetime, timezone
+
+    from app import storage
+
+    when = datetime(2015, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+
+    assert storage.file_modified_at({"mtime": when.timestamp()}) == when  # local, SMB
+    assert storage.file_modified_at({"LastModified": when}) == when  # S3
+    assert storage.file_modified_at({"size": 1}) is None  # HTTP
+    assert storage.file_modified_at({"mtime": datetime(2154, 2, 5, tzinfo=timezone.utc).timestamp()}) is None
+
+
 def test_sync_leaves_location_name_null_without_gps_data(client, tmp_path, monkeypatch):
     from app import geocode
 

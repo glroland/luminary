@@ -10,7 +10,8 @@ class Photo(BaseModel):
     size_bytes: int
     width: Optional[int] = None
     height: Optional[int] = None
-    created_at: str
+    # Null when neither the image's metadata nor the backend gives a date.
+    created_at: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     # Short, human-readable reverse-geocoded description of latitude/

@@ -49,13 +49,31 @@ function dateKeyOf(createdAt) {
   return `${year}-${month}-${day}`;
 }
 
+// A photo's date as a number for sorting, or null when it has none (the
+// API sends created_at: null for an undated photo -- `new Date(null)`
+// would silently be 1970).
+function timeOf(photo) {
+  if (!photo.created_at) return null;
+  const time = new Date(photo.created_at).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+// Undated photos go last in either direction, so they stay one run (the
+// grid's "Undated" section) at the end.
+function compareDates(a, b, direction) {
+  const timeA = timeOf(a);
+  const timeB = timeOf(b);
+  if (timeA === null || timeB === null) return (timeA === null) - (timeB === null);
+  return (timeA - timeB) * direction;
+}
+
 // Comparator backing SortControl.jsx's options. Folder sort breaks ties by
 // filename (rather than leaving same-folder photos in whatever order they
 // arrived in) so the result is still deterministic within a folder.
 function comparePhotos(a, b, sortOrder) {
   switch (sortOrder) {
     case "date-asc":
-      return new Date(a.created_at) - new Date(b.created_at);
+      return compareDates(a, b, 1);
     case "filename-asc":
       return a.filename.localeCompare(b.filename);
     case "filename-desc":
@@ -72,7 +90,7 @@ function comparePhotos(a, b, sortOrder) {
       );
     case "date-desc":
     default:
-      return new Date(b.created_at) - new Date(a.created_at);
+      return compareDates(a, b, -1);
   }
 }
 

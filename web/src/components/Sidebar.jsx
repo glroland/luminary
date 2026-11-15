@@ -38,6 +38,7 @@ function buildTree(photos) {
 function buildDateTree(photos) {
   const root = { children: {} };
   for (const photo of photos) {
+    if (!photo.created_at) continue;
     const date = new Date(photo.created_at);
     if (Number.isNaN(date.getTime())) continue;
     const year = String(date.getFullYear());

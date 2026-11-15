@@ -90,6 +90,9 @@
 --    lazily backfills any row where this is still NULL on its next sync,
 --    same shape as the vlm_description/thumbnail backfills already in
 --    this app.
+-- 9. Makes photos.created_at nullable: a photo with no date in its own
+--    metadata and no modification time on the backend is undated, never
+--    stamped with the time it was indexed (see sync.py's needs_date).
 
 UPDATE faces SET tag_source = 'manual' WHERE person_id IS NOT NULL AND tag_source IS NULL;
 
@@ -153,3 +156,5 @@ UPDATE photos SET face_detection_done = TRUE
       AND EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id);
 
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS checksum TEXT;
+
+ALTER TABLE photos ALTER COLUMN created_at DROP NOT NULL;

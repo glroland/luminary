@@ -223,7 +223,8 @@ def _load_existing() -> dict:
         rows = conn.execute(
             """
             SELECT id, filename, size_bytes, face_detection_done, checksum,
-                   (thumbnail IS NOT NULL) AS has_thumbnail
+                   (thumbnail IS NOT NULL) AS has_thumbnail,
+                   (created_at IS NOT NULL) AS has_created_at
             FROM photos
             """
         ).fetchall()
@@ -274,6 +275,10 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     # so its EXIF date/GPS were never read either -- re-read them along
     # with the thumbnail instead of leaving them at index-time/NULL forever.
     needs_exif = needs_thumbnail
+    # A row with no date gets another look on every sync: its embedded
+    # metadata first, then the file's modification time. A file
+    # that has neither stays NULL -- the index time is never used.
+    needs_date = content_changed or not existing_row["has_created_at"]
 
     # Logged for every discovered file, not just changed ones, so a repeat
     # "Refresh" is auditable file-by-file -- which of the three outcomes
@@ -293,7 +298,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             existing_row["size_bytes"],
             size,
         )
-    elif needs_thumbnail or needs_florence or needs_checksum:
+    elif needs_thumbnail or needs_florence or needs_checksum or needs_date:
         missing = []
         if needs_thumbnail:
             missing.append("thumbnail")
@@ -301,11 +306,20 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             missing.append("caption/face detection")
         if needs_checksum:
             missing.append("checksum")
+        if needs_date:
+            missing.append("date")
         logger.info("%s: no content change, but backfilling missing %s", path, " and ".join(missing))
     else:
         logger.info("%s: no change detected", path)
 
-    if existing_row and not content_changed and not needs_thumbnail and not needs_florence and not needs_checksum:
+    if (
+        existing_row
+        and not content_changed
+        and not needs_thumbnail
+        and not needs_florence
+        and not needs_checksum
+        and not needs_date
+    ):
         return "unchanged"
 
     fields: dict = {}
@@ -327,7 +341,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
         fields.update(
             width=None,
             height=None,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=None,
             latitude=None,
             longitude=None,
             location_name=None,
@@ -361,7 +375,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
 
                     if content_changed:
                         created_at, latitude, longitude = _extract_exif(raw_image)
-                        fields["created_at"] = (created_at or datetime.now(timezone.utc)).isoformat()
+                        fields["created_at"] = created_at.isoformat() if created_at else None
                         fields["latitude"] = latitude
                         fields["longitude"] = longitude
                     elif needs_exif:
@@ -373,6 +387,10 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                         if latitude is not None and longitude is not None:
                             fields["latitude"] = latitude
                             fields["longitude"] = longitude
+                    elif needs_date:
+                        created_at, _, _ = _extract_exif(raw_image)
+                        if created_at is not None:
+                            fields["created_at"] = created_at.isoformat()
 
                     if needs_thumbnail or needs_florence:
                         # .convert("RGB") fully decodes the pixel data into a
@@ -397,6 +415,14 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             "Could not read/thumbnail %r; indexing metadata only", relative_path, exc_info=True
         )
         rgb_image = None  # don't run florence below against a half-decoded image
+
+    # Nothing embedded in the image gave a date (or the image couldn't be
+    # decoded at all): fall back to the file's modification time. Only
+    # when the row has no date of its own to keep.
+    if needs_date and fields.get("created_at") is None:
+        modified_at = storage.file_modified_at(info)
+        if modified_at is not None:
+            fields["created_at"] = modified_at.isoformat()
 
     # Reverse-geocoding is a network call to a third-party service (see
     # geocode.py) -- deliberately done here, after the `with fs.open(...)`

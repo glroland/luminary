@@ -77,7 +77,7 @@ def init_db() -> None:
                 size_bytes BIGINT NOT NULL,
                 width INTEGER,
                 height INTEGER,
-                created_at TEXT NOT NULL,
+                created_at TEXT,
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 thumbnail BYTEA,
@@ -90,6 +90,9 @@ def init_db() -> None:
         # Guards a database created before location_name existed -- see
         # db/create_tables.sql's matching ALTER TABLE.
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT")
+        # A photo with no date of its own is undated (NULL), never stamped
+        # with the time it was indexed. No-op once the constraint is gone.
+        conn.execute("ALTER TABLE photos ALTER COLUMN created_at DROP NOT NULL")
 
         # `description` used to hold Florence-2's raw caption directly;
         # that's now `vlm_description`, freeing `description` for
