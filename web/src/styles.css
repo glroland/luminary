@@ -1331,6 +1331,12 @@ textarea {
   cursor: pointer;
 }
 
+.photo-chat-form .photo-chat-clear {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
 .photo-chat-form input:disabled,
 .photo-chat-form button:disabled {
   opacity: 0.6;

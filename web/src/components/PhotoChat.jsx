@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { chatAboutPhoto } from "../api/client.js";
 
 // `photoId` is the photo open in PhotoModal, which the model is shown and
@@ -73,6 +73,30 @@ export default function PhotoChat({ photoId, searchList = null, onBoxesChange, o
     onBoxesChange?.([]);
   }, [photoId]);
 
+  // Keep the newest content in view while a reply streams in -- but only
+  // while the reader is already at (or near) the bottom, so scrolling up to
+  // reread something isn't fought. `stickToBottom` is updated by the scroll
+  // handler below, never by our own programmatic scrolling.
+  const messagesRef = useRef(null);
+  const stickToBottom = useRef(true);
+  function handleScroll() {
+    const el = messagesRef.current;
+    if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [messages, isSending, error]);
+
+  function handleClear() {
+    if (isSending) return;
+    setMessages([]);
+    setDraft("");
+    setError(null);
+    stickToBottom.current = true;
+    onBoxesChange?.([]);
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     const text = draft.trim();
@@ -84,6 +108,7 @@ export default function PhotoChat({ photoId, searchList = null, onBoxesChange, o
     setDraft("");
     setError(null);
     setIsSending(true);
+    stickToBottom.current = true;
     // Clear any box(es) drawn for the previous turn immediately -- they're
     // specific to that reply, not the conversation as a whole. New ones
     // arrive with the reply if the model searched the photo for an object
@@ -150,7 +175,7 @@ export default function PhotoChat({ photoId, searchList = null, onBoxesChange, o
 
   return (
     <div className="photo-chat">
-      <div className="photo-chat-messages">
+      <div className="photo-chat-messages" ref={messagesRef} onScroll={handleScroll}>
         {messages.length === 0 ? (
           <p className="photo-chat-empty">
             {photoId
@@ -197,6 +222,14 @@ export default function PhotoChat({ photoId, searchList = null, onBoxesChange, o
         />
         <button type="submit" disabled={isSending}>
           Send
+        </button>
+        <button
+          type="button"
+          className="photo-chat-clear"
+          onClick={handleClear}
+          disabled={isSending || (messages.length === 0 && !error)}
+        >
+          Clear
         </button>
       </form>
 
