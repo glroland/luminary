@@ -209,6 +209,11 @@ test: test-api test-web
 test-api:
 	$(LUMINARY_TEST_DATABASE_ENV) $(VENV_DIR)/bin/python -m pytest api/tests -v
 
+# Compares semantic search with/without the rerank stage on judged queries
+# (api/eval_search.py). Usage: make eval-search QUERIES=queries.json
+eval-search:
+	$(LUMINARY_DATABASE_ENV) $(MODEL_CACHE_ENV) PYTHONPATH=api/src $(VENV_DIR)/bin/python api/eval_search.py $(QUERIES)
+
 test-web:
 	cd web && npm run test
 

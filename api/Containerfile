@@ -30,6 +30,10 @@ ARG LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-base
 # will try to fetch the mismatched one instead of using this cache.
 ARG LUMINARY_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 
+# Same, for rerank.py's cross-encoder (config.get_reranker_model()); an empty
+# value disables reranking and skips the download.
+ARG LUMINARY_RERANKER_MODEL=BAAI/bge-reranker-base
+
 # download_models.py (also what `make install-models` runs locally) mirrors
 # chat.py's _load_florence()/embeddings.py's _load_embedder()/
 # recognition.py's _load_embedder() -- this needs network access
@@ -50,7 +54,8 @@ RUN mkdir -p "$HF_HOME" "$TORCH_HOME" && python download_models.py
 # flag needed -- the pre-download step above is what makes that true.
 ENV HF_HUB_OFFLINE=1 \
     LUMINARY_FLORENCE_MODEL=${LUMINARY_FLORENCE_MODEL} \
-    LUMINARY_EMBEDDING_MODEL=${LUMINARY_EMBEDDING_MODEL}
+    LUMINARY_EMBEDDING_MODEL=${LUMINARY_EMBEDDING_MODEL} \
+    LUMINARY_RERANKER_MODEL=${LUMINARY_RERANKER_MODEL}
 
 ENV PYTHONPATH=/app/src \
     LUMINARY_DATA_DIR=/data/photos \

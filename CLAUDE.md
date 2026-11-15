@@ -456,6 +456,15 @@ cached) is also per-pod, in-memory state — same caveat.
     whitespace-separated word must match (in the text search, each word in
     any field), and `storage._like_patterns` escapes `%`/`_` so a filename
     like `IMG_1234` matches literally.
+  - **Reranking** (`rerank.py`): `storage.search_photos` is two-stage — the
+    sentence-embedding search retrieves the top `LUMINARY_RERANK_CANDIDATES`
+    above `RERANK_RETRIEVAL_FLOOR` (not the caller's threshold), then a
+    cross-encoder (`LUMINARY_RERANKER_MODEL`) re-scores each against its whole
+    `description`; `similarity` becomes that sigmoid score and the threshold is
+    applied to it. Fail-soft: off (`""`), missing, unloadable (remembered in
+    `_load_failed`) or erroring → embedding order and cosine threshold, as
+    before. `conftest.py` disables it; tests opt in by faking `rerank._reranker`.
+    `_MATCH_LEVELS` were picked for cosine — tune with `make eval-search`.
   - **The search list.** A search's matches never go into the model's
     context (a small-context self-hosted model can't carry hundreds of
     file names back and forth). They go into `_Turn.search_list` —

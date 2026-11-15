@@ -89,6 +89,8 @@ def client(tmp_path, monkeypatch):
         # by entering the `with` block above) has already created the
         # tables if they didn't exist; truncate them here for isolation
         # between tests.
+        # No reranker in tests unless one opts in (it would download a model).
+        monkeypatch.setenv("LUMINARY_RERANKER_MODEL", "")
         with get_connection() as conn:
             conn.execute("TRUNCATE TABLE photos, faces, individuals, tags, photo_tags, photo_embeddings")
             conn.commit()

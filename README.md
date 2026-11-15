@@ -586,6 +586,18 @@ Best-effort, same semantics as every other derived field in this app: a
 failure (missing torch/sentence-transformers, a Hugging Face cache miss)
 just leaves it as whatever it already was.
 
+**Reranking.** Semantic search is two-stage: the embedding search above
+takes the best `LUMINARY_RERANK_CANDIDATES` photos (default 100) above a
+loose floor, then `rerank.py` re-scores each against its whole description
+with a local cross-encoder (`LUMINARY_RERANKER_MODEL`, default
+`BAAI/bge-reranker-base`; `LUMINARY_RERANKER_DEVICE`). The match level then
+applies to that score (0–1, a sigmoid of the model's logit). Set
+`LUMINARY_RERANKER_MODEL=""` to turn it off; if the model isn't installed
+or cached, search silently keeps the embedding order. The match levels were
+chosen for cosine similarity, so tune them with `make eval-search
+QUERIES=queries.json` (`api/eval_search.py`: precision/recall/MRR with and
+without reranking, and a threshold sweep, over queries you've judged).
+
 **Requires the `pgvector` Postgres extension** — see `db/
 create_extensions.sql` and the "Database" section above. Without it,
 `database.py`'s `init_db()` logs a warning once at startup and skips

@@ -225,6 +225,28 @@ def get_embedding_device() -> str:
     return os.environ.get("LUMINARY_EMBEDDING_DEVICE", "cpu")
 
 
+# --- Semantic search reranking (rerank.py) -----------------------------
+
+
+def get_reranker_model() -> str:
+    """Hugging Face id of the cross-encoder rerank.py uses to re-score the
+    semantic search's top candidates. Set to an empty string to disable the
+    rerank stage. Like the embedding model, its weights must be in the
+    container's Hugging Face cache (api/Containerfile) -- a mismatch fails
+    soft (search keeps the embedding order)."""
+    return os.environ.get("LUMINARY_RERANKER_MODEL", "BAAI/bge-reranker-base")
+
+
+def get_reranker_device() -> str:
+    return os.environ.get("LUMINARY_RERANKER_DEVICE", "cpu")
+
+
+def get_rerank_candidates() -> int:
+    """How many of the embedding search's best photos are re-scored. More
+    candidates raises recall and latency (one cross-encoder pass each)."""
+    return int(os.environ.get("LUMINARY_RERANK_CANDIDATES", "100"))
+
+
 # --- Automatic face detection (sync.py's indexing pipeline, face_detection.py) ---
 
 

@@ -14,20 +14,23 @@ import os
 def main() -> None:
     import torch
     from facenet_pytorch import InceptionResnetV1
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import CrossEncoder, SentenceTransformer
     from transformers import AutoModelForCausalLM, AutoProcessor
 
     florence = os.environ.get("LUMINARY_FLORENCE_MODEL", "microsoft/Florence-2-base")
     embedding = os.environ.get("LUMINARY_EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+    reranker = os.environ.get("LUMINARY_RERANKER_MODEL", "BAAI/bge-reranker-base")
 
     AutoModelForCausalLM.from_pretrained(florence, torch_dtype=torch.float32, trust_remote_code=True)
     AutoProcessor.from_pretrained(florence, trust_remote_code=True)
     InceptionResnetV1(pretrained="vggface2").eval()
     SentenceTransformer(embedding, device="cpu")
+    if reranker:
+        CrossEncoder(reranker, device="cpu")
 
     print(
         f"Cached Florence-2 ({florence}), facenet-pytorch vggface2 weights and "
-        f"the embedding model ({embedding}) under HF_HOME={os.environ.get('HF_HOME', '(default)')}, "
+        f"the embedding model ({embedding}), the reranker ({reranker or 'disabled'}) under HF_HOME={os.environ.get('HF_HOME', '(default)')}, "
         f"TORCH_HOME={os.environ.get('TORCH_HOME', '(default)')}."
     )
 

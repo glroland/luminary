@@ -12,7 +12,8 @@ import psycopg
 from PIL import Image, ImageOps
 from PIL.ExifTags import IFD
 
-from . import embeddings
+from . import config, embeddings
+from . import rerank as rerank_module
 from .config import get_photos_password, get_photos_uri, get_photos_username
 from .database import get_connection
 
@@ -285,35 +286,12 @@ def find_similar_photos(photo_id: str, limit: int = SIMILAR_PHOTOS_LIMIT) -> lis
 SEARCH_RESULTS_LIMIT = 500
 
 
-def search_photos(
+def _search_by_embedding(
     query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
 ) -> list[dict]:
-    """Free-text search over `description` via per-sentence embedding
-    similarity (`photo_embeddings`; a photo scores as its best-matching
-    sentence) (chat.py's search_photos_semantic tool, GET /api/photos/search) --
-    embeds `query` with the same local model as photos' own descriptions
-    (embeddings.embed_text, is_query=True for this call since `query` is a
-    search query, not a passage -- see embeddings.py's module docstring on
-    why that matters for BGE specifically) and returns every photo whose
-    cosine similarity to it is at least `threshold` (0-1, higher = more
-    similar), ordered most-similar first. Each result dict carries all of
-    METADATA_COLUMNS plus a `similarity` key.
-
-    `photo_ids`, here and on the other search_photos_* functions below,
-    restricts the search to those photos (None = the whole library). It's
-    how chat.py filters its existing search list by a second search: the
-    restriction is applied in SQL, before `limit`, so a match already in
-    the list can't be cut off by the cap.
-
-    Unlike find_similar_photos, a missing/misconfigured embeddings backend
-    is **not** swallowed here -- embeddings.embed_text raises
-    EmbeddingNotConfigured (or whatever sentence-transformers/torch itself
-    raises) and this lets it propagate, since a user-initiated search
-    should surface a real error (the router maps it to a 503/502) rather
-    than silently returning no results. A missing `embedding`
-    column (the pgvector extension was never installed) still degrades to
-    [] the same way find_similar_photos does, though -- that's a
-    server-side gap, not something a 503 would help the user act on."""
+    """Stage 1 of search_photos: sentence-embedding similarity (a photo
+    scores as its best-matching sentence). Propagates
+    EmbeddingNotConfigured; a missing `embedding` column degrades to []."""
     embedding = embeddings.embed_text(query, is_query=True)
     try:
         with get_connection() as conn:
@@ -341,6 +319,63 @@ def search_photos(
             'See db/create_extensions.sql and the README\'s "Database" section.'
         )
         return []
+
+
+# Stage 1 never applies a threshold stricter than this when the rerank stage
+# will re-score the candidates -- a photo the cross-encoder would rank well
+# can have a mediocre best-sentence cosine similarity, so cutting at the
+# user's level first would hide it from the reranker.
+RERANK_RETRIEVAL_FLOOR = 0.3
+
+
+def search_photos(
+    query: str,
+    threshold: float,
+    limit: int = SEARCH_RESULTS_LIMIT,
+    photo_ids: Optional[list[str]] = None,
+    rerank: Optional[bool] = None,
+) -> list[dict]:
+    """Free-text search over `description` (chat.py's search_photos_semantic
+    tool, GET /api/photos/search), in two stages:
+
+    1. Embedding similarity over `photo_embeddings` (embeddings.embed_text
+       with is_query=True -- see embeddings.py): a photo scores as its
+       best-matching sentence. When reranking is on, this takes the best
+       `LUMINARY_RERANK_CANDIDATES` photos above a loose floor
+       (RERANK_RETRIEVAL_FLOOR) instead of applying `threshold`.
+    2. rerank.py: a cross-encoder re-scores those candidates against their
+       whole `description`. The final `similarity` (0-1) is that score,
+       `threshold` is applied to it, and results are ordered by it.
+
+    If reranking is off or unavailable the stage-1 result is returned as
+    before: `threshold` applies to the cosine similarity. `rerank` forces
+    it on/off (None = whatever LUMINARY_RERANKER_MODEL says); the eval
+    script uses that to compare. Each result carries METADATA_COLUMNS plus
+    `similarity` (and `embedding_similarity`, the stage-1 score, when
+    reranked).
+
+    `photo_ids` restricts the search to those photos (None = the whole
+    library); it's how chat.py filters its search list by a second search,
+    applied in SQL before the limit. EmbeddingNotConfigured propagates (a
+    user-initiated search should surface a real error); a missing pgvector
+    column degrades to []."""
+    want_rerank = bool(config.get_reranker_model()) if rerank is None else rerank
+    if not want_rerank:
+        return _search_by_embedding(query, threshold, limit, photo_ids)
+
+    candidates = _search_by_embedding(
+        query, min(threshold, RERANK_RETRIEVAL_FLOOR), config.get_rerank_candidates(), photo_ids
+    )
+    scores = rerank_module.rerank_scores(query, [c.get("description") or "" for c in candidates])
+    if scores is None:
+        return [c for c in candidates if c["similarity"] >= threshold][:limit]
+
+    for candidate, score in zip(candidates, scores):
+        candidate["embedding_similarity"] = candidate["similarity"]
+        candidate["similarity"] = score
+    kept = [c for c in candidates if c["similarity"] >= threshold]
+    kept.sort(key=lambda c: c["similarity"], reverse=True)
+    return kept[:limit]
 
 
 # Appended to a search's WHERE clause; takes the `photo_ids` argument twice
