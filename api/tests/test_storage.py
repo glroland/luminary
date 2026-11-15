@@ -216,9 +216,14 @@ def _insert_photo_with_embedding(photo_id: str, description: str, *leading_value
 
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description, "
-            "description_embedding) VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s, %s)",
-            (photo_id, f"{photo_id}.jpg", description, _embedding_vector(*leading_values)),
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description) "
+            "VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s)",
+            (photo_id, f"{photo_id}.jpg", description),
+        )
+        conn.execute(
+            "INSERT INTO photo_embeddings (id, photo_id, source_type, sentence_index, sentence_text, embedding) "
+            "VALUES (%s, %s, 'D', 0, %s, %s)",
+            (f"{photo_id}-s0", photo_id, description, _embedding_vector(*leading_values)),
         )
         conn.commit()
 

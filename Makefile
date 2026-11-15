@@ -94,7 +94,7 @@ LUMINARY_OPENAI_MODEL ?= gemma-4
 # `make build-api LUMINARY_FLORENCE_MODEL=microsoft/Florence-2-large`.
 LUMINARY_FLORENCE_MODEL ?= microsoft/Florence-2-base
 
-# Embedding model for photos.description_embedding (embeddings.py) -- a
+# Embedding model for photo_embeddings.embedding (embeddings.py) -- a
 # local Hugging Face sentence-embedding model, loaded once per process and
 # cached (embeddings.py's _embedder), not an OpenAI-compatible embeddings
 # endpoint call -- see embeddings.py's module docstring for why. Same
@@ -268,7 +268,7 @@ push-web:
 #
 # Both `db` and `db-create` also run db/create_extensions.sql (as the
 # admin user, against each target database) to install the pgvector
-# extension -- required for photos.description_embedding/similarity
+# extension -- required for photo_embeddings.embedding/similarity
 # search (embeddings.py). That only runs the SQL side; the Postgres
 # server itself needs pgvector's files already installed at the OS level
 # first (see that file's own header comment) -- an admin task outside

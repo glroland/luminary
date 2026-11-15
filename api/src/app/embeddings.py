@@ -1,6 +1,8 @@
-"""Generates and stores `photos.description_embedding` -- a vector
-embedding of `photos.description` (enrich.py's LLM-composed rewrite, never
-the raw Florence-2 `vlm_description`) used for similarity search: "find
+"""Generates and stores per-sentence embeddings of `photos.description`
+(enrich.py's LLM-composed rewrite, never the raw Florence-2
+`vlm_description`) in the `photo_embeddings` child table -- one row per
+sentence: text, embedding, `source_type` ('D' = description) and
+`sentence_index`. Used for similarity search: "find
 photos whose description reads most like this one", via pgvector's
 nearest-neighbor operators (storage.find_similar_photos,
 GET /api/photos/{id}/similar), and for the chat's semantic search tool
@@ -32,7 +34,7 @@ BAAI/bge-large-en-v1.5 is a strong, widely-benchmarked open embedding
 model (a consistent top scorer on the MTEB retrieval leaderboard among
 similarly-sized models) at 1,024 dimensions. That comfortably fits under
 pgvector's plain `vector` type's HNSW/IVFFlat index cap of 2,000
-dimensions (see pgvector's own README), so `photos.description_embedding`
+dimensions (see pgvector's own README), so `photo_embeddings.embedding`
 is declared `vector(1024)` in db/create_tables.sql, not `halfvec` -- at
 this dimension count there's no need to trade precision (halfvec's 16-bit
 floats) for indexability the way the previous OpenAI
@@ -81,7 +83,7 @@ function's own call sites (a sync's first description, tag/untag,
 full list). The embedding always describes the *current* description
 text, so it's regenerated in lockstep with it rather than on any separate
 schedule -- there's no case where `description` changes without
-`description_embedding` being refreshed alongside it, and no case where
+`photo_embeddings.embedding` being refreshed alongside it, and no case where
 this runs without `description` having just changed. This is also how an
 already-populated library picks up a *new* embedding model after one is
 swapped in (changing LUMINARY_EMBEDDING_MODEL, or this module's default):
@@ -92,12 +94,14 @@ needed.
 Best-effort, same shape as every other derived field in this app: a
 failure (missing torch/sentence-transformers, a cache miss under
 HF_HUB_OFFLINE=1, pgvector not installed -- see database.py's init_db())
-is logged and leaves description_embedding as whatever it already was,
+is logged and leaves photo_embeddings.embedding as whatever it already was,
 never raised to enrich_description.
 """
 
 import logging
+import re
 import threading
+import uuid
 
 from .database import get_connection
 
@@ -179,21 +183,40 @@ def embed_text(text: str, is_query: bool = False):
     return Vector(embedding.tolist())
 
 
+# photo_embeddings.source_type value for rows derived from photos.description.
+SOURCE_DESCRIPTION = "D"
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def split_sentences(text: str) -> list[str]:
+    """Splits `text` into sentences on ./!/? followed by whitespace, and on
+    newlines. Deliberately simple (no NLP dependency) -- descriptions are
+    short LLM-written prose. Blank pieces are dropped."""
+    return [piece.strip() for piece in _SENTENCE_BOUNDARY.split(text) if piece.strip()]
+
+
 def embed_description(photo_id: str) -> bool:
-    """Best-effort: (re)generate and store photos.description_embedding
-    from the photo's current `description`. Never raises. Returns whether
-    an embedding was actually (re)generated -- mirrors
-    enrich.enrich_description()'s own return value, though
-    enrich_description doesn't currently use it (an embedding failure
-    shouldn't flip "was the description itself updated" to false -- the
-    two are independent outcomes)."""
+    """Best-effort: replace the photo's `photo_embeddings` rows with
+    source_type 'D' by one row per sentence of its current `description`
+    (text, embedding, sentence_index). Never raises. Returns whether the
+    rows were (re)written.
+
+    Every sentence is embedded *before* anything is deleted, so a failure
+    leaves the previous rows in place. A photo whose description is empty
+    keeps whatever rows it had (matching enrich_description, which leaves a
+    stale description alone rather than clearing it)."""
     with get_connection() as conn:
         photo = conn.execute("SELECT description FROM photos WHERE id = %s", (photo_id,)).fetchone()
     if not photo or not photo["description"]:
         return False
 
+    sentences = split_sentences(photo["description"])
+    if not sentences:
+        return False
+
     try:
-        embedding = embed_text(photo["description"])
+        vectors = [embed_text(sentence) for sentence in sentences]
     except EmbeddingNotConfigured as exc:
         logger.debug("Skipping description embedding for photo %s: %s", photo_id, exc)
         return False
@@ -201,18 +224,26 @@ def embed_description(photo_id: str) -> bool:
         logger.warning("Could not embed description for photo %s", photo_id, exc_info=True)
         return False
 
-    # The write-back needs its own try/except, same as embed_text() above
-    # -- a database-side failure here (most commonly description_embedding
-    # not existing as a real pgvector column at all, e.g. the extension
-    # was never installed on this Postgres server) must degrade the same
-    # best-effort way a failure to *compute* the embedding already does,
-    # not propagate out of this "never raises" function and, in turn, out
-    # of enrich.enrich_description's own best-effort call to it.
+    # The write-back has its own try/except: a database-side failure (most
+    # commonly photo_embeddings.embedding not existing because pgvector was
+    # never installed) must degrade the same best-effort way.
     try:
         with get_connection() as conn:
-            conn.execute("UPDATE photos SET description_embedding = %s WHERE id = %s", (embedding, photo_id))
+            conn.execute(
+                "DELETE FROM photo_embeddings WHERE photo_id = %s AND source_type = %s",
+                (photo_id, SOURCE_DESCRIPTION),
+            )
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO photo_embeddings (id, photo_id, source_type, sentence_index, sentence_text, embedding) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    [
+                        (str(uuid.uuid4()), photo_id, SOURCE_DESCRIPTION, index, sentence, vector)
+                        for index, (sentence, vector) in enumerate(zip(sentences, vectors))
+                    ],
+                )
             conn.commit()
     except Exception:
-        logger.warning("Could not store description embedding for photo %s", photo_id, exc_info=True)
+        logger.warning("Could not store description embeddings for photo %s", photo_id, exc_info=True)
         return False
     return True

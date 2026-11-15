@@ -91,7 +91,7 @@ env:
   # for the RoleBinding OpenShift AI requires). Empty = no auth.
   mlflowTrackingAuth: ""
   # --- Description embeddings for similarity search (embeddings.py) -----
-  # Hugging Face model id for photos.description_embedding -- a local
+  # Hugging Face model id for photo_embeddings.embedding -- a local
   # model run in-process (sentence-transformers), unrelated to the openai
   # settings above (see embeddings.py's module docstring for why: a
   # self-hosted OpenAI-compatible endpoint may have no embeddings endpoint

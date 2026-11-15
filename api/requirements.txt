@@ -18,7 +18,7 @@ aiohttp==3.14.5
 # library to install in the Containerfile.
 psycopg[binary]==3.3.6
 
-# photos.description_embedding (embeddings.py) -- registers the pgvector
+# photo_embeddings.embedding (embeddings.py) -- registers the pgvector
 # extension's vector type with psycopg3 (database.py's get_connection())
 # so a Python list of floats can be read/written to a vector column
 # directly. The *server-side* pgvector extension itself is a separate,
@@ -68,7 +68,7 @@ facenet-pytorch==2.5.3
 # only has 0.29.2 for it -- older 0.x releases are yanked upstream).
 torchvision==0.29.2
 
-# photos.description_embedding (embeddings.py) -- a local Hugging Face
+# photo_embeddings.embedding (embeddings.py) -- a local Hugging Face
 # sentence-embedding model (BAAI/bge-large-en-v1.5 by default,
 # LUMINARY_EMBEDDING_MODEL), run in-process rather than calling an
 # OpenAI-*compatible* embeddings endpoint (see embeddings.py's module

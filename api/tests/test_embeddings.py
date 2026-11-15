@@ -150,43 +150,51 @@ def test_embed_description_is_a_noop_when_not_configured(client, monkeypatch):
     assert embeddings.embed_description("photo-1") is False
 
 
-def test_embed_description_stores_the_embedding(client, monkeypatch):
+def test_split_sentences():
+    assert embeddings.split_sentences("A cat. A dog!  Is it?\nYes") == ["A cat.", "A dog!", "Is it?", "Yes"]
+    assert embeddings.split_sentences("  ") == []
+
+
+def test_embed_description_stores_one_row_per_sentence(client, monkeypatch):
     from pgvector import Vector
 
-    # photos.description_embedding is declared vector(1024) (see
-    # db/create_tables.sql) and pgvector enforces that exact dimension on
-    # insert -- a fake vector here must match it, unlike the other fakes
-    # in this file (e.g. _FakeEmbedder) that never actually reach the DB.
-    fake_embedding = [0.1] * embeddings.EMBEDDING_DIMENSIONS
+    _insert_photo("photo-1", description="A cat on a sofa. It is asleep.")
+    monkeypatch.setattr(embeddings, "embed_text", lambda text: Vector([0.1] * embeddings.EMBEDDING_DIMENSIONS))
 
-    _insert_photo("photo-1", description="a cat on a sofa")
-    monkeypatch.setattr(embeddings, "embed_text", lambda text: Vector(fake_embedding))
-
+    assert embeddings.embed_description("photo-1") is True
+    # Re-running replaces rather than duplicates.
     assert embeddings.embed_description("photo-1") is True
 
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT description_embedding FROM photos WHERE id = %s", ("photo-1",)
-        ).fetchone()
-    assert row["description_embedding"].to_list() == pytest.approx(fake_embedding, abs=1e-3)
+        rows = conn.execute(
+            "SELECT sentence_text, sentence_index, source_type, embedding FROM photo_embeddings "
+            "WHERE photo_id = %s ORDER BY sentence_index",
+            ("photo-1",),
+        ).fetchall()
+    assert [(r["sentence_text"], r["sentence_index"], r["source_type"]) for r in rows] == [
+        ("A cat on a sofa.", 0, "D"),
+        ("It is asleep.", 1, "D"),
+    ]
+    assert rows[0]["embedding"].to_list() == pytest.approx([0.1] * embeddings.EMBEDDING_DIMENSIONS, abs=1e-3)
 
 
-def test_embed_description_leaves_embedding_untouched_on_failure(client, monkeypatch, caplog):
+def test_embed_description_leaves_existing_rows_untouched_on_failure(client, monkeypatch, caplog):
     import logging
 
-    _insert_photo("photo-1", description="a cat on a sofa")
+    from pgvector import Vector
+
+    _insert_photo("photo-1", description="A cat on a sofa.")
+    monkeypatch.setattr(embeddings, "embed_text", lambda text: Vector([0.1] * embeddings.EMBEDDING_DIMENSIONS))
+    assert embeddings.embed_description("photo-1") is True
 
     def boom(text):
         raise RuntimeError("upstream exploded")
 
     monkeypatch.setattr(embeddings, "embed_text", boom)
-
     with caplog.at_level(logging.WARNING, logger="app.embeddings"):
         assert embeddings.embed_description("photo-1") is False
 
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT description_embedding FROM photos WHERE id = %s", ("photo-1",)
-        ).fetchone()
-    assert row["description_embedding"] is None
+        count = conn.execute("SELECT COUNT(*) AS n FROM photo_embeddings WHERE photo_id = %s", ("photo-1",)).fetchone()["n"]
+    assert count == 1
     assert any(record.levelno == logging.WARNING for record in caplog.records)

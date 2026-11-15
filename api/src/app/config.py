@@ -205,7 +205,7 @@ def get_geocode_zoom() -> int:
 
 
 def get_embedding_model() -> str:
-    """Hugging Face model id for photos.description_embedding -- a local
+    """Hugging Face model id for photo_embeddings.embedding -- a local
     sentence-embedding model run in-process via sentence-transformers
     (embeddings.py), deliberately *not* a call to an OpenAI-*compatible*
     embeddings endpoint -- LUMINARY_OPENAI_BASE_URL may point at a

@@ -194,14 +194,24 @@ def test_search_photos_returns_results_ordered_by_similarity(client, monkeypatch
 
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description, "
-            "description_embedding) VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s, %s)",
-            ("photo-identical", "a.jpg", "a cat on a sofa", Vector(dims(1.0, 0.0))),
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description) "
+            "VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s)",
+            ("photo-identical", "a.jpg", "a cat on a sofa"),
         )
         conn.execute(
-            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description, "
-            "description_embedding) VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s, %s)",
-            ("photo-orthogonal", "b.jpg", "a mountain at dusk", Vector(dims(0.0, 1.0))),
+            "INSERT INTO photo_embeddings (id, photo_id, source_type, sentence_index, sentence_text, embedding) "
+            "VALUES (%s, %s, 'D', 0, %s, %s)",
+            ("photo-identical-s0", "photo-identical", "a cat on a sofa", Vector(dims(1.0, 0.0))),
+        )
+        conn.execute(
+            "INSERT INTO photos (id, filename, content_type, size_bytes, created_at, description) "
+            "VALUES (%s, %s, 'image/jpeg', 1, '2024-01-01T00:00:00', %s)",
+            ("photo-orthogonal", "b.jpg", "a mountain at dusk"),
+        )
+        conn.execute(
+            "INSERT INTO photo_embeddings (id, photo_id, source_type, sentence_index, sentence_text, embedding) "
+            "VALUES (%s, %s, 'D', 0, %s, %s)",
+            ("photo-orthogonal-s0", "photo-orthogonal", "a mountain at dusk", Vector(dims(0.0, 1.0))),
         )
         conn.commit()
     monkeypatch.setattr(storage.embeddings, "embed_text", lambda text, is_query=False: Vector(dims(1.0, 0.0)))

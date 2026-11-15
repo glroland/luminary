@@ -47,9 +47,9 @@ only way to see exactly what the model was asked and what it actually said
 back, which matters because "the description is too short/vague/wrong"
 is otherwise unverifiable without it.
 
-Every successful generation also regenerates `photos.description_embedding`
-(embeddings.py, embeddings.embed_description) -- a vector embedding of the
-description text itself, for similarity search (storage.
+Every successful generation also regenerates the description's `photo_embeddings` rows
+(embeddings.py, embeddings.embed_description) -- one vector embedding per
+sentence of the description text, for similarity search (storage.
 find_similar_photos). That's a separate module since it has its own model/
 dimension concerns independent of this one's chat-completion model; see
 its docstring for why.

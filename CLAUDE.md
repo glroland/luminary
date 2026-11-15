@@ -450,7 +450,7 @@ cached) is also per-pod, in-memory state — same caveat.
     `storage.search_photos_by_text` (`ILIKE` across `filename`,
     `description`, `vlm_description`, `location_name`, tagged individuals'
     names and tag names), `search_photos_semantic` →
-    `storage.search_photos` (embedding similarity, the old sidebar
+    `storage.search_photos` (embedding similarity over the per-sentence `photo_embeddings` table — a photo scores as its best-matching description sentence; the old sidebar
     search), with an optional `match_level` mapped to a threshold by
     `_MATCH_LEVELS` — default `loose`. For the two `ILIKE` searches every
     whitespace-separated word must match (in the text search, each word in

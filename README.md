@@ -204,7 +204,7 @@ db-create` below):
 | File                          | Run as                     | Purpose                                 |
 |--------------------------------|-----------------------------|------------------------------------------|
 | `db/create_db_and_user.sql`   | a Postgres superuser, against the `postgres` maintenance DB | Creates one database + the shared role, if it doesn't exist yet (idempotent) — run once per database |
-| `db/create_extensions.sql`   | a Postgres superuser, against the *target* database | Installs the `pgvector` extension (idempotent) — needed for `photos.description_embedding`/similarity search (see "Similarity search" below); run once per database, after `create_db_and_user.sql` and before `create_tables.sql` |
+| `db/create_extensions.sql`   | a Postgres superuser, against the *target* database | Installs the `pgvector` extension (idempotent) — needed for `photo_embeddings.embedding`/similarity search (see "Similarity search" below); run once per database, after `create_db_and_user.sql` and before `create_tables.sql` |
 | `db/create_tables.sql`        | the app role, against one app database | Creates `photos`/`faces` in that database (idempotent; also run automatically on every API startup by `database.init_db()`) |
 | `db/drop_database.sql`       | a Postgres superuser, against the `postgres` maintenance DB | Drops one database (destructive) — run once per database, **before** `drop_role.sql` |
 | `db/drop_role.sql`           | a Postgres superuser, against the `postgres` maintenance DB | Drops the shared role (destructive) — Postgres refuses this while the role still owns any database |
@@ -550,13 +550,13 @@ it was available. Same background-job shape as "Refresh Faces"
 ### Similarity search (description embeddings)
 
 `GET /api/photos/{id}/similar` finds other photos whose `description`
-*reads* most like this one's, via `photos.description_embedding` and
-pgvector's cosine-distance operator — unrelated to "Refresh Faces" above,
+*reads* most like this one's, via per-sentence embeddings in the
+`photo_embeddings` table and pgvector's cosine-distance operator — unrelated to "Refresh Faces" above,
 which matches *faces* by image embedding, not photos by description text.
 
 The chat's `search_photos_semantic` tool (see "Chat and search" above) is
 the free-text equivalent: it embeds the query text with the same model as
-`description_embedding` itself, so the two are comparable, and returns the
+the stored sentence embeddings, so the two are comparable, and returns the
 photos at least as similar as its match level, most-similar first
 (`storage.search_photos`). `GET /api/photos/search?q=...&threshold=...`
 exposes the same search over plain HTTP; the web UI no longer calls it.
@@ -576,7 +576,7 @@ tradeoff at this size, unlike the previous OpenAI `text-embedding-3-large`
 choice). See `embeddings.py`'s module docstring for the full reasoning,
 including what to do if you swap in a different embedding model.
 
-`description_embedding` is regenerated automatically alongside
+A photo's `photo_embeddings` rows (one per description sentence) are regenerated automatically alongside
 `description` itself — same trigger list as "Description enrichment"
 above (including the "Refresh Descriptions" button), no separate step.
 Running "Refresh Descriptions" is also how an already-populated library
@@ -589,7 +589,7 @@ just leaves it as whatever it already was.
 **Requires the `pgvector` Postgres extension** — see `db/
 create_extensions.sql` and the "Database" section above. Without it,
 `database.py`'s `init_db()` logs a warning once at startup and skips
-`description_embedding`/its index; every other table/column still works
+`photo_embeddings.embedding`/its index; every other table/column still works
 normally, and `GET /api/photos/{id}/similar` returns an empty list
 instead of erroring.
 

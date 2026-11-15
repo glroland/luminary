@@ -1,5 +1,5 @@
 -- Installs the pgvector extension in one application database --
--- `photos.description_embedding` (see db/create_tables.sql, embeddings.py)
+-- `photo_embeddings.embedding` (see db/create_tables.sql, embeddings.py)
 -- needs this before that column/its index can exist.
 --
 -- Run with psql as a Postgres superuser, against the *target* database

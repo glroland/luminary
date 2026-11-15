@@ -20,7 +20,7 @@
 -- *hasn't* run yet and this file's own app-role connection lacks the
 -- privilege to create the extension itself, psql prints an error for
 -- this one statement and keeps going (no `-v ON_ERROR_STOP=1` here,
--- unlike db/update.sql) -- `photos.description_embedding`/its index further
+-- unlike db/update.sql) -- `photo_embeddings.embedding`/its index further
 -- down then also fail the same way, but every other table/column in this
 -- file still gets created normally. Run db/create_extensions.sql as a
 -- superuser first to avoid relying on that degradation.
@@ -96,60 +96,33 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL
 -- UPDATE here, since computing it requires reading the file itself.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS checksum TEXT;
 
--- Embedding of `description` (not `vlm_description`), for similarity
--- search (GET /api/photos/{id}/similar, storage.find_similar_photos) --
--- see embeddings.py's module docstring for the full reasoning.
--- Deliberately NOT inline on the CREATE TABLE above, unlike location_name
--- -- vector is a type the vector extension provides, so if that
--- extension isn't actually installed (CREATE EXTENSION above failed/was
--- skipped), referencing `vector` inside the CREATE TABLE itself would
--- fail the *entire* statement, taking every other column in `photos`
--- down with it. Isolating it in its own ALTER TABLE means a missing
--- extension only costs this one column/its index below, never the rest
--- of the table. vector(1024): embeddings.py's local BAAI/bge-large-en-v1.5
--- model's native output size, comfortably under pgvector's plain `vector`
--- type's HNSW/IVFFlat index cap of 2,000 dimensions (no need for
--- halfvec's 16-bit-float precision tradeoff the way the previous OpenAI
--- text-embedding-3-large choice, at 3,072 dimensions, required -- see
--- embeddings.py's module docstring). NULL until
--- enrich.enrich_description() successfully generates a `description` for
--- this photo and embeddings.embed_description() then embeds it;
--- regenerated in lockstep with `description` every time that changes
--- (same trigger list as `description` itself above), never on its own
--- separate schedule.
---
--- The DO block is a migration, not just a column add: a database that
--- already has the old halfvec(3072) OpenAI-embedding column (from before
--- embeddings.py switched to a local vector(1024) model) needs that
--- dropped before the new one can be added -- those old embeddings are
--- meaningless under the new model regardless, so there's nothing worth
--- converting in place. This file is run idempotently (see its header
--- comment, and database.py's init_db(), which runs the same migration on
--- every app startup) -- a fresh or already-migrated database (udt_name
--- already 'vector') skips the drop, and the ADD COLUMN/CREATE INDEX below
--- are no-ops.
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'photos' AND column_name = 'description_embedding'
-          AND udt_name <> 'vector'
-    ) THEN
-        ALTER TABLE photos DROP COLUMN description_embedding;
-    END IF;
-END $$;
-ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding vector(1024);
+-- Per-sentence embeddings (embeddings.py) for similarity/semantic search
+-- (storage.search_photos, storage.find_similar_photos): one row per
+-- sentence of `photos.description` (source_type 'D'), many per photo.
+-- sentence_index is the sentence's 0-based position. No FK (rows are
+-- deleted explicitly, like faces/photo_tags). The `embedding` column is a
+-- separate ALTER, not inline, so a missing pgvector extension only costs
+-- that column/its index, never the table. vector(1024): the local
+-- BAAI/bge-large-en-v1.5 model's native size (see embeddings.py).
+-- Regenerated in lockstep with `description`.
+CREATE TABLE IF NOT EXISTS photo_embeddings (
+    id TEXT PRIMARY KEY,
+    photo_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    sentence_index INTEGER NOT NULL,
+    sentence_text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_photo_embeddings_photo_id ON photo_embeddings (photo_id);
 
--- HNSW over cosine distance -- the operator find_similar_photos' `<=>`
--- queries use. Built after the column exists rather than inline on the
--- CREATE TABLE, same as idx_faces_* further down -- an index needs its
--- target column to already exist. A database where the vector extension
--- (and thus the vector type/column above) never got created has nothing
--- here for this to index; this statement then errors the same way the
--- CREATE EXTENSION/ALTER TABLE above do, for the same reason (see this
--- file's header comment).
-CREATE INDEX IF NOT EXISTS idx_photos_description_embedding
-    ON photos USING hnsw (description_embedding vector_cosine_ops);
+-- Migration: the old single-vector photos.description_embedding column is
+-- superseded by the table above (its values aren't converted; "Refresh
+-- Descriptions" re-embeds every photo).
+DROP INDEX IF EXISTS idx_photos_description_embedding;
+ALTER TABLE photos DROP COLUMN IF EXISTS description_embedding;
+
+ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS embedding vector(1024);
+CREATE INDEX IF NOT EXISTS idx_photo_embeddings_embedding
+    ON photo_embeddings USING hnsw (embedding vector_cosine_ops);
 
 -- `description` used to hold Florence-2's raw caption directly; that's now
 -- `vlm_description`, freeing `description` for enrich.py's LLM-composed

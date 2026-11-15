@@ -39,7 +39,7 @@ def get_connection():
         raise
 
     # Registers pgvector's vector type adapter (embeddings.py's Vector <->
-    # photos.description_embedding) on *this* connection --
+    # photo_embeddings.embedding) on *this* connection --
     # get_connection() opens a fresh one per operation (no pooling), so
     # this has to happen every time, not once at startup. Guarded on
     # whether the `vector` type actually exists in this database: without
@@ -230,12 +230,31 @@ def init_db() -> None:
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
+        # One photo -> many embedded text snippets (embeddings.py): today one
+        # row per sentence of photos.description (source_type 'D'). No FK,
+        # same as faces/photo_tags -- rows are deleted explicitly
+        # (storage.delete_photo, sync._delete_missing). The `embedding`
+        # column itself is added in the pgvector block below, not here, so
+        # a server without pgvector still gets a table the delete paths
+        # can safely reference.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS photo_embeddings (
+                id TEXT PRIMARY KEY,
+                photo_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                sentence_index INTEGER NOT NULL,
+                sentence_text TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_photo_embeddings_photo_id ON photo_embeddings (photo_id)")
         # Row-level data backfills (tag_source, face_detection_done) are
         # deliberately *not* here -- see backfill_data() below for why they
         # must stay off the startup path.
         conn.commit()
 
-        # photos.description_embedding (embeddings.py) -- for similarity
+        # photo_embeddings.embedding (embeddings.py) -- for similarity
         # search. Best-effort and isolated in its own commit/rollback,
         # unlike everything above: it needs the pgvector extension
         # installed in this database first, which this app role may not
@@ -244,50 +263,27 @@ def init_db() -> None:
         # Postgres server that never got pgvector installed at the OS
         # level at all is a real, expected case this must degrade
         # gracefully from -- every other table/column above must keep
-        # working on every startup regardless. A failure here is logged
-        # once per startup, not raised; it never takes down init_db()/the
-        # app. See db/create_tables.sql's matching statements (kept in
-        # sync with these) for the full reasoning on vector(1024)/HNSW.
+        # working on every startup regardless. See db/create_tables.sql's
+        # matching statements (kept in sync with these).
         #
-        # The DO block below is a migration, not just a column add: an
-        # earlier version of this app stored a halfvec(3072) OpenAI
-        # embedding here (see embeddings.py's module docstring for why
-        # that switched to a local vector(1024) model) -- this runs on
-        # every startup (init_db() always has, there's no migrations
-        # framework), so a database that already has the old column type
-        # needs it dropped before the new one can be added; the old
-        # embeddings are meaningless under the new model regardless, there
-        # is nothing worth preserving by converting in place instead of
-        # dropping. A fresh/already-migrated database (udt_name already
-        # 'vector') skips the drop and the ADD COLUMN/CREATE INDEX below
-        # are no-ops, same self-healing shape as the vlm_description
-        # rename above.
+        # The old single-vector photos.description_embedding column (and
+        # its index) is dropped here: it is superseded by one
+        # photo_embeddings row per description sentence. Its values are not
+        # converted -- "Refresh Descriptions" re-embeds every photo.
         try:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.execute("DROP INDEX IF EXISTS idx_photos_description_embedding")
+            conn.execute("ALTER TABLE photos DROP COLUMN IF EXISTS description_embedding")
+            conn.execute("ALTER TABLE photo_embeddings ADD COLUMN IF NOT EXISTS embedding vector(1024)")
             conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'photos' AND column_name = 'description_embedding'
-                          AND udt_name <> 'vector'
-                    ) THEN
-                        ALTER TABLE photos DROP COLUMN description_embedding;
-                    END IF;
-                END $$
-                """
-            )
-            conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS description_embedding vector(1024)")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_photos_description_embedding "
-                "ON photos USING hnsw (description_embedding vector_cosine_ops)"
+                "CREATE INDEX IF NOT EXISTS idx_photo_embeddings_embedding "
+                "ON photo_embeddings USING hnsw (embedding vector_cosine_ops)"
             )
             conn.commit()
         except psycopg.Error as exc:
             conn.rollback()
             logger.warning(
-                "Could not set up pgvector (extension/column/index) for photos.description_embedding -- "
+                "Could not set up pgvector (extension/column/index) for photo_embeddings.embedding -- "
                 "similarity search will be unavailable until the pgvector extension is installed on this "
                 "Postgres server (see db/create_extensions.sql and the README's \"Database\" section). "
                 "Everything else started normally. Cause: %s",

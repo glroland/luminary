@@ -239,39 +239,40 @@ SIMILAR_PHOTOS_LIMIT = 12
 
 
 def find_similar_photos(photo_id: str, limit: int = SIMILAR_PHOTOS_LIMIT) -> list[dict]:
-    """Nearest neighbors of `photo_id`'s own `description_embedding`, by
-    cosine distance (pgvector's `<=>` operator -- see embeddings.py's
-    module docstring for the model/embedding behind this column).
-    Excludes `photo_id` itself and any photo with no embedding yet (a NULL
-    embedding has no defined distance to compare, so it's excluded from
-    both sides of the comparison, not just the candidate side). Returns []
-    if `photo_id` doesn't exist or has no embedding of its own yet.
+    """Photos whose description sentences read most like `photo_id`'s, by
+    cosine distance over `photo_embeddings` (pgvector's `<=>` operator --
+    see embeddings.py). A candidate's score is the mean, over each of this
+    photo's sentences, of that sentence's best match among the candidate's
+    sentences. Excludes `photo_id` itself and photos with no embedded
+    sentences. Returns [] if `photo_id` has none of its own yet.
 
-    Also returns [] (rather than raising) if `description_embedding`
-    doesn't exist as a column at all -- the pgvector extension was never
-    installed on this Postgres server, so database.py's init_db() never
-    got to create it either (logged there once at startup; logged again
-    here, since this is the point where that gap actually becomes
-    user-visible)."""
+    Also returns [] (rather than raising) if `photo_embeddings.embedding`
+    doesn't exist -- the pgvector extension was never installed on this
+    server, so database.py's init_db() never created it."""
     try:
         with get_connection() as conn:
-            row = conn.execute("SELECT description_embedding FROM photos WHERE id = %s", (photo_id,)).fetchone()
-            if not row or row["description_embedding"] is None:
-                return []
             rows = conn.execute(
-                f"SELECT {METADATA_COLUMNS} FROM photos "
-                "WHERE id != %s AND description_embedding IS NOT NULL "
-                "ORDER BY description_embedding <=> %s LIMIT %s",
-                (photo_id, row["description_embedding"], limit),
+                f"""
+                SELECT {METADATA_COLUMNS} FROM photos
+                JOIN (
+                    SELECT photo_id, AVG(best) AS score FROM (
+                        SELECT o.photo_id, MAX(1 - (s.embedding <=> o.embedding)) AS best
+                        FROM photo_embeddings s
+                        JOIN photo_embeddings o ON o.photo_id != s.photo_id AND o.embedding IS NOT NULL
+                        WHERE s.photo_id = %s AND s.embedding IS NOT NULL
+                        GROUP BY o.photo_id, s.id
+                    ) per_sentence
+                    GROUP BY photo_id
+                ) ranked ON ranked.photo_id = photos.id
+                ORDER BY ranked.score DESC
+                LIMIT %s
+                """,
+                (photo_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
     except psycopg.errors.UndefinedColumn:
-        # get_connection() has already logged the full traceback for this
-        # (every psycopg.Error is, regardless of caller) -- just add the
-        # pointer to what's actually missing and degrade to an empty
-        # result instead of a 500.
         logger.warning(
-            "photos.description_embedding doesn't exist -- is the pgvector extension installed? "
+            "photo_embeddings.embedding doesn't exist -- is the pgvector extension installed? "
             'See db/create_extensions.sql and the README\'s "Database" section.'
         )
         return []
@@ -287,8 +288,9 @@ SEARCH_RESULTS_LIMIT = 500
 def search_photos(
     query: str, threshold: float, limit: int = SEARCH_RESULTS_LIMIT, photo_ids: Optional[list[str]] = None
 ) -> list[dict]:
-    """Free-text search over `description` via `description_embedding`
-    similarity (chat.py's search_photos_semantic tool, GET /api/photos/search) --
+    """Free-text search over `description` via per-sentence embedding
+    similarity (`photo_embeddings`; a photo scores as its best-matching
+    sentence) (chat.py's search_photos_semantic tool, GET /api/photos/search) --
     embeds `query` with the same local model as photos' own descriptions
     (embeddings.embed_text, is_query=True for this call since `query` is a
     search query, not a passage -- see embeddings.py's module docstring on
@@ -308,7 +310,7 @@ def search_photos(
     EmbeddingNotConfigured (or whatever sentence-transformers/torch itself
     raises) and this lets it propagate, since a user-initiated search
     should surface a real error (the router maps it to a 503/502) rather
-    than silently returning no results. A missing `description_embedding`
+    than silently returning no results. A missing `embedding`
     column (the pgvector extension was never installed) still degrades to
     [] the same way find_similar_photos does, though -- that's a
     server-side gap, not something a 503 would help the user act on."""
@@ -317,14 +319,17 @@ def search_photos(
         with get_connection() as conn:
             rows = conn.execute(
                 f"""
-                SELECT * FROM (
-                    SELECT {METADATA_COLUMNS}, 1 - (description_embedding <=> %s) AS similarity
-                    FROM photos
-                    WHERE description_embedding IS NOT NULL
-                      AND (%s::text[] IS NULL OR id = ANY(%s::text[]))
-                ) scored
-                WHERE similarity >= %s
-                ORDER BY similarity DESC
+                SELECT {METADATA_COLUMNS}, scored.similarity
+                FROM photos
+                JOIN (
+                    SELECT photo_id, MAX(1 - (embedding <=> %s)) AS similarity
+                    FROM photo_embeddings
+                    WHERE embedding IS NOT NULL
+                      AND (%s::text[] IS NULL OR photo_id = ANY(%s::text[]))
+                    GROUP BY photo_id
+                ) scored ON scored.photo_id = photos.id
+                WHERE scored.similarity >= %s
+                ORDER BY scored.similarity DESC
                 LIMIT %s
                 """,
                 (embedding, photo_ids, photo_ids, threshold, limit),
@@ -332,7 +337,7 @@ def search_photos(
             return [dict(r) for r in rows]
     except psycopg.errors.UndefinedColumn:
         logger.warning(
-            "photos.description_embedding doesn't exist -- is the pgvector extension installed? "
+            "photo_embeddings.embedding doesn't exist -- is the pgvector extension installed? "
             'See db/create_extensions.sql and the README\'s "Database" section.'
         )
         return []
@@ -558,6 +563,7 @@ def delete_photo(photo_id: str) -> bool:
         # tags explicitly so they don't outlive their photo row.
         conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
         conn.execute("DELETE FROM photo_tags WHERE photo_id = %s", (photo_id,))
+        conn.execute("DELETE FROM photo_embeddings WHERE photo_id = %s", (photo_id,))
         cursor = conn.execute("DELETE FROM photos WHERE id = %s", (photo_id,))
         conn.commit()
         return cursor.rowcount > 0
@@ -574,6 +580,7 @@ def purge_all() -> None:
         conn.execute("DELETE FROM individuals")
         conn.execute("DELETE FROM photo_tags")
         conn.execute("DELETE FROM tags")
+        conn.execute("DELETE FROM photo_embeddings")
         conn.execute("DELETE FROM photos")
         conn.commit()
 
