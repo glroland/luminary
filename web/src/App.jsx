@@ -497,6 +497,14 @@ export default function App() {
           resetGrid();
         }}
         onManage={() => setView("manage")}
+        onClearSearch={() => {
+          // Forget the search entirely; if its results are showing, go
+          // back to the full gallery.
+          const wasShowing = searchResults !== null;
+          setLastSearchResults(null);
+          setSearchResults(null);
+          if (wasShowing) resetGrid();
+        }}
         searchResultCount={lastSearchResults === null ? null : lastSearchResults.length}
         searchActive={searchResults !== null}
         onSearchResults={() => showSearchResults(lastSearchResults ?? [])}

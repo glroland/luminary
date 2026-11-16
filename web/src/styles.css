@@ -1533,6 +1533,37 @@ textarea {
   color: var(--text-muted);
 }
 
+.sidebar-search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.sidebar-search-row .sidebar-all-images {
+  margin-bottom: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-search-clear {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-search-clear:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .sidebar-all-images {
   display: flex;
   align-items: center;

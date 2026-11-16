@@ -152,6 +152,7 @@ export default function Sidebar({
   searchResultCount = null,
   searchActive = false,
   onSearchResults = () => {},
+  onClearSearch = () => {},
 }) {
   const tree = useMemo(() => buildTree(photos), [photos]);
   const dateTree = useMemo(() => buildDateTree(photos), [photos]);
@@ -179,15 +180,28 @@ export default function Sidebar({
           All Images
         </button>
 
-        <button
-          type="button"
-          className={`sidebar-all-images${searchActive ? " sidebar-all-images-active" : ""}`}
-          onClick={onSearchResults}
-          data-count={searchResultCount !== null ? searchResultCount.toLocaleString() : undefined}
-        >
-          <Icon name="search" />
-          Search Results
-        </button>
+        <div className="sidebar-search-row">
+          <button
+            type="button"
+            className={`sidebar-all-images${searchActive ? " sidebar-all-images-active" : ""}`}
+            onClick={onSearchResults}
+            data-count={searchResultCount !== null ? searchResultCount.toLocaleString() : undefined}
+          >
+            <Icon name="search" />
+            Search Results
+          </button>
+          {searchResultCount !== null && (
+            <button
+              type="button"
+              className="sidebar-search-clear"
+              onClick={onClearSearch}
+              aria-label="Clear search results"
+              title="Clear search results"
+            >
+              <span aria-hidden="true">{"\u00d7"}</span>
+            </button>
+          )}
+        </div>
 
         <Section title="By Folder" icon="folder" expanded={foldersExpanded} onToggle={() => setFoldersExpanded((prev) => !prev)}>
           {/* A photo placed directly under the photos root (no "/" in its

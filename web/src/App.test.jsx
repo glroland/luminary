@@ -330,6 +330,28 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
   });
 
+  it("clears the search from the sidebar's X button", async () => {
+    mockTwoPhotos();
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({
+      reply: "Found one.",
+      boxes: [],
+      searchResults: [{ id: "2", filename: "party.jpg", score: 0.9 }],
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
+    expect(screen.queryByRole("button", { name: /clear search results/i })).not.toBeInTheDocument();
+
+    await searchViaChat("find party");
+    await waitFor(() => expect(screen.getByText("90%")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /clear search results/i }));
+
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /clear search results/i })).not.toBeInTheDocument();
+  });
+
   it("shows search results in the order given: best score first", async () => {
     mockTwoPhotos();
     vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({
