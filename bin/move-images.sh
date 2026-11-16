@@ -7,11 +7,11 @@
 #   e.g. bin/move-images.sh files.csv smb://host/images smb://host/backup
 #
 # Column 1 of each row is the image path relative to the repo root; any other
-# columns are ignored. The first line of the file is assumed to be a header
+# columns are ignored. Values may be wrapped in double quotes (the CSVs the
+# app downloads quote every value); inside quotes a comma is literal and ""
+# is an escaped quote. The first line of the file is assumed to be a header
 # and is skipped; pass --no-header if the file has none. Blank lines and lines
-# starting with '#' are skipped. Column 1 may be wrapped in double quotes, but
-# a path containing a comma is not supported.
-#
+# starting with '#' are skipped. #
 # By default the first failed move stops the run (exit 1). With
 # --continue-on-error it carries on with the remaining rows, prints a summary
 # of the failures, and exits 1 at the end if any row failed.
@@ -31,6 +31,26 @@ usage() {
 }
 
 dbg() { if [ "$DEBUG" -eq 1 ]; then echo "[debug] $*"; fi; }
+
+# Print column 1 of one CSV line, with surrounding double quotes removed.
+# Handles quoted fields containing commas and "" escapes; unquoted also fine.
+first_column() {
+    local line="$1" out="" rest ch
+    if [ "${line:0:1}" != '"' ]; then
+        printf '%s' "${line%%,*}"
+        return
+    fi
+    rest="${line:1}"
+    while [ -n "$rest" ]; do
+        ch="${rest:0:1}"; rest="${rest:1}"
+        if [ "$ch" = '"' ]; then
+            if [ "${rest:0:1}" = '"' ]; then out+='"'; rest="${rest:1}"; else break; fi
+        else
+            out+="$ch"
+        fi
+    done
+    printf '%s' "$out"
+}
 
 CONTINUE=0
 HEADER=1
@@ -82,9 +102,7 @@ while IFS= read -r line || [ -n "$line" ]; do
         '#'*) dbg "line $lineno: skipping comment"; continue ;;
     esac
 
-    path="${line%%,*}"
-    path="${path#\"}"
-    path="${path%\"}"
+    path="$(first_column "$line")"
     [ -n "$path" ] || { dbg "line $lineno: empty first column, skipping"; continue; }
 
     dbg "line $lineno: moving '$path'"

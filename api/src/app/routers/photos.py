@@ -52,7 +52,7 @@ def get_duplicate_photos_csv() -> Response:
     literal path registered after a dynamic "{photo_id}" segment would
     never be reached."""
     buffer = io.StringIO()
-    writer = csv.writer(buffer)
+    writer = csv.writer(buffer, quoting=csv.QUOTE_ALL)
     writer.writerow(["Original Image", "Duplicate Image"])
     for row in storage.find_duplicate_photos():
         writer.writerow([row["original"], row["duplicate"]])

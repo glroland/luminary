@@ -163,14 +163,14 @@ def test_tagged_photos_csv_lists_paths_of_tagged_photos_only(client, tmp_path):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
     assert "attachment" in response.headers["content-disposition"]
-    assert response.text.splitlines() == ["Path", "a.jpg", "trips/b.jpg"]
+    assert response.text.splitlines() == ['"Path"', '"a.jpg"', '"trips/b.jpg"']
 
 
 def test_tagged_photos_csv_for_tag_with_no_photos_is_header_only(client):
     tag_id = client.post("/api/tags", json={"name": "Empty"}).json()["id"]
     response = client.get(f"/api/tags/{tag_id}/photos/csv")
     assert response.status_code == 200
-    assert response.text.splitlines() == ["Path"]
+    assert response.text.splitlines() == ['"Path"']
 
 
 def test_tagged_photo_ids_lists_only_tagged_photos(client, tmp_path):

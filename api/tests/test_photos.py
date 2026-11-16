@@ -53,8 +53,8 @@ def test_duplicate_photos_csv_lists_each_duplicate_against_the_earliest_original
     assert response.headers["content-disposition"] == 'attachment; filename="duplicate_photos.csv"'
 
     rows = response.text.strip().splitlines()
-    assert rows[0] == "Original Image,Duplicate Image"
-    assert rows[1:] == ["first.jpg,second.jpg"]  # unique.jpg has no duplicate, so no row for it
+    assert rows[0] == '"Original Image","Duplicate Image"'
+    assert rows[1:] == ['"first.jpg","second.jpg"']  # unique.jpg has no duplicate, so no row for it
 
 
 def test_duplicate_photos_csv_has_only_a_header_when_there_are_no_duplicates(client, tmp_path):
@@ -64,7 +64,7 @@ def test_duplicate_photos_csv_has_only_a_header_when_there_are_no_duplicates(cli
     response = client.get("/api/photos/duplicates/csv")
 
     assert response.status_code == 200
-    assert response.text.strip().splitlines() == ["Original Image,Duplicate Image"]
+    assert response.text.strip().splitlines() == ['"Original Image","Duplicate Image"']
 
 
 def test_delete_removes_index_entry_but_not_the_source_file(client, tmp_path):

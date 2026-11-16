@@ -60,7 +60,7 @@ def get_tagged_photos_csv(tag_id: str) -> Response:
     if filenames is None:
         raise HTTPException(status_code=404, detail="Tag not found")
     buffer = io.StringIO()
-    writer = csv.writer(buffer)
+    writer = csv.writer(buffer, quoting=csv.QUOTE_ALL)
     writer.writerow(["Path"])
     for filename in filenames:
         writer.writerow([filename])
