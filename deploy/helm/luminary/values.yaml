@@ -38,7 +38,7 @@ api:
       memory: 6Gi
     limits:
       cpu: 12000m
-      memory: 36Gi
+      memory: 48Gi
   persistence:
     enabled: true
     size: 5Gi
