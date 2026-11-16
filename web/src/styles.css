@@ -180,6 +180,21 @@ textarea {
   white-space: nowrap;
 }
 
+.reset-search-button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.reset-search-button:hover {
+  border-color: var(--accent);
+}
+
 .refresh-button {
   background: var(--accent);
   color: var(--on-accent);

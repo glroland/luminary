@@ -283,6 +283,53 @@ describe("App", () => {
     expect(chatMock).toHaveBeenLastCalledWith(null, "only the best ones", expect.any(Array), expect.any(Function), [party], expect.any(Function));
   });
 
+  it("reloads the photo list when a search returns photos it doesn't have yet", async () => {
+    const createdAt = new Date().toISOString();
+    const stale = [{ id: "1", filename: "beach.jpg", width: 100, height: 100, created_at: createdAt }];
+    const fresh = [
+      { id: "9", filename: "graduation.jpg", width: 100, height: 100, created_at: createdAt },
+      ...stale,
+    ];
+    const fetchMock = vi.spyOn(client, "fetchPhotos").mockResolvedValueOnce(stale).mockResolvedValue(fresh);
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({
+      reply: "Found it.",
+      boxes: [],
+      searchResults: [{ id: "9", filename: "graduation.jpg", score: 0.9 }],
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+
+    await searchViaChat("find graduation photos");
+
+    await waitFor(() => expect(screen.getByAltText("graduation.jpg")).toBeInTheDocument());
+    expect(screen.queryByText(/no photos match/i)).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a Reset button only in search results, and it returns to all photos", async () => {
+    mockTwoPhotos();
+    vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({
+      reply: "Found one.",
+      boxes: [],
+      searchResults: [{ id: "2", filename: "party.jpg", score: 0.9 }],
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
+
+    await searchViaChat("find party");
+    await waitFor(() => expect(screen.getByText("90%")).toBeInTheDocument());
+    expect(screen.queryByAltText("beach.jpg")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());
+    expect(screen.getByAltText("party.jpg")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
+  });
+
   it("shows search results in the order given: best score first", async () => {
     mockTwoPhotos();
     vi.spyOn(client, "chatAboutPhoto").mockResolvedValue({

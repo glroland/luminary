@@ -341,11 +341,29 @@ export default function App() {
   // list, like handleNavigateToPhoto above; an id not in it (indexed since
   // the list was loaded) is skipped. Each result is a copy of the photo
   // carrying its `search_score`, which PhotoCard shows on the tile.
-  function handleSearchResults(entries) {
-    const byId = new Map(photos.map((photo) => [photo.id, photo]));
+  //
+  // If any id is missing the loaded list is stale (photos re-indexed with new
+  // ids, a sync from another tab, ...): reload it once and look again, rather
+  // than silently showing fewer photos than the chat just announced.
+  async function handleSearchResults(entries) {
+    let loaded = photos;
+    if (entries.some((entry) => !loaded.some((photo) => photo.id === entry.id))) {
+      try {
+        loaded = await fetchPhotos();
+        setPhotos(loaded);
+      } catch {
+        // Keep what we have; the lookup below skips what it can't find.
+      }
+    }
+    const byId = new Map(loaded.map((photo) => [photo.id, photo]));
     const results = entries
       .filter((entry) => byId.has(entry.id))
       .map((entry) => ({ ...byId.get(entry.id), search_score: entry.score }));
+    if (results.length < entries.length) {
+      console.warn(
+        `Search returned ${entries.length} photos but only ${results.length} are in the photo list`,
+      );
+    }
     setLastSearchResults(results);
     showSearchResults(results);
   }
@@ -506,6 +524,18 @@ export default function App() {
           <div className="app-header-controls">
             {view === "gallery" && !isLoading && (
               <>
+                {searchResults !== null && (
+                  <button
+                    type="button"
+                    className="reset-search-button"
+                    onClick={() => {
+                      setSearchResults(null);
+                      resetGrid();
+                    }}
+                  >
+                    Reset
+                  </button>
+                )}
                 {visiblePhotos.length > 0 && (
                   <span className="photo-count">
                     {visiblePhotos.length.toLocaleString()} {visiblePhotos.length === 1 ? "photo" : "photos"}
