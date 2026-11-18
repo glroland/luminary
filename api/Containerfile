@@ -64,7 +64,15 @@ ENV PYTHONPATH=/app/src \
 
 RUN useradd --create-home --uid 1001 appuser \
     && mkdir -p /data/photos \
-    && chown -R appuser:appuser /data /app /opt/model-cache
+    && chown -R appuser:0 /data /app /opt/model-cache \
+    && chmod -R a+rX,g+w /app /opt/model-cache \
+    && chmod -R g=u /data
+
+# OpenShift runs the container under an arbitrary UID (group 0), not appuser.
+# facenet-pytorch downloads its weights via a tempfile, which leaves the
+# .pt file mode 0600 -- unreadable to any other UID (PermissionError in
+# recognition._load_embedder). The chmod above makes the baked-in caches
+# world-readable regardless of how each library created its files.
 
 USER appuser
 
