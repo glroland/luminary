@@ -1087,6 +1087,9 @@ def _load_florence():
         return _florence_model, _florence_processor
 
 
+_FLORENCE_MIN_SIDE = 32
+
+
 def _run_florence_task(image, task: str, phrase: str = "") -> dict:
     """Shared Florence-2 inference step: load the model, run `task` (with
     `phrase` appended for the one task that takes free text -- see module
@@ -1103,7 +1106,17 @@ def _run_florence_task(image, task: str, phrase: str = "") -> dict:
     # with no separator -- the model was trained on exactly that format.
     prompt = task + phrase if phrase else task
 
-    inputs = processor(text=prompt, images=image, return_tensors="pt").to(device, dtype)
+    # The HF image processor guesses channel layout from the array shape; a
+    # side of 1-3 px (a 1x1 tracking pixel, say) looks like channels-first
+    # and fails with "mean must have 1 elements". Upscale such tiny images
+    # for the model only -- boxes are still reported in the original size.
+    model_image = image
+    if min(image.size) < _FLORENCE_MIN_SIDE:
+        scale = _FLORENCE_MIN_SIDE / min(image.size)
+        model_image = image.resize(
+            (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        )
+    inputs = processor(text=prompt, images=model_image, return_tensors="pt").to(device, dtype)
     generated_ids = model.generate(
         input_ids=inputs["input_ids"],
         pixel_values=inputs["pixel_values"],

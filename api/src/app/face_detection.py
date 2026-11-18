@@ -135,7 +135,16 @@ def detect_faces(image) -> list[dict]:
     a failure. Raises FaceDetectionNotConfigured if torch/facenet-pytorch
     aren't installed, same as recognition.py's _embed()."""
     detector = _load_detector()
-    boxes, probs = detector.detect(image)
+    try:
+        boxes, probs = detector.detect(image)
+    except ValueError as exc:
+        # facenet-pytorch's detect_face() calls torch.cat() on the P-Net
+        # scale pyramid, which is empty when the image is too small for
+        # min_face_size to produce even one scale (a tiny thumbnail/icon).
+        # That's "no face can fit here", a valid empty result, not a failure.
+        if "non-empty list of Tensors" not in str(exc):
+            raise
+        return []
     if boxes is None:
         return []
     width, height = image.size
