@@ -157,16 +157,9 @@ describe("ManagementPage", () => {
     expect(document.querySelectorAll(".management-face-auto-badge")).toHaveLength(1);
   });
 
-  it("picks up and polls the face matching a sync auto-triggers, without a click", async () => {
-    // The backend auto-triggers face matching as soon as a sync finishes
-    // (sync.py's _trigger_face_refresh) -- this simulates App.jsx handing
-    // down a "completed" syncStatus and expects ManagementPage to notice
-    // and start polling on its own, exactly as if the standalone button
-    // had been clicked.
+  it("shows the face matching a sync triggers next to the Refresh button, through to completion", async () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-
     const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
-    // Sync's own trigger always asks for the incremental scope (full=false).
     statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, full: false, error: null }); // mount check
     statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, full: false, error: null });
     statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 2, full: false, error: null });
@@ -175,10 +168,9 @@ describe("ManagementPage", () => {
       <ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} syncStatus={null} onRefresh={() => {}} />
     );
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Refresh Faces" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/matching faces/i)).not.toBeInTheDocument();
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
-
     await act(async () => {
       rerender(
         <ManagementPage
@@ -190,12 +182,50 @@ describe("ManagementPage", () => {
       );
       await Promise.resolve();
     });
-
-    await waitFor(() => expect(screen.getByText(/face matching is running/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument());
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
-    // Initial mount's fetch, plus one more once the auto-triggered job completed.
+    expect(screen.getByText(/faces done -- 2 matched/i)).toBeInTheDocument();
     expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(screen.queryByText(/faces done/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a face matching error next to the Refresh button and keeps it up", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
+    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, full: false, error: null }); // mount check
+    statusMock.mockResolvedValue({
+      status: "error",
+      processed: 0,
+      total: 0,
+      matched: 0,
+      full: false,
+      error: "face recognition requires torch/facenet-pytorch to be installed",
+    });
+
+    const { rerender } = render(
+      <ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} syncStatus={null} onRefresh={() => {}} />
+    );
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await act(async () => {
+      rerender(
+        <ManagementPage
+          onBack={() => {}}
+          onNavigateToPhoto={() => {}}
+          syncStatus={{ status: "completed", processed: 1, total: 1, inserted: 1, updated: 0, deleted: 0 }}
+          onRefresh={() => {}}
+        />
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByText(/face matching failed: face recognition requires/i)).toBeInTheDocument());
+
+    await act(() => vi.advanceTimersByTimeAsync(10000));
+    expect(screen.getByText(/face matching failed/i)).toBeInTheDocument();
   });
 
   it("renders the library Refresh control (moved here from the sidebar) and calls onRefresh", async () => {

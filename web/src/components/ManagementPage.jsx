@@ -143,6 +143,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         setRefreshStatus(status);
         if (status.status === "running") pollRefreshStatus();
         else if (status.status === "completed") reloadAfterRefresh();
+        if (status.status !== "running") clearRefreshStatusSoon(status);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,6 +185,14 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     });
   }
 
+  // A finished job's status lingers briefly, then goes away -- except an
+  // error, which stays up until the next run replaces it so it can't be
+  // missed.
+  function clearRefreshStatusSoon(status) {
+    if (status.status === "error") return;
+    setTimeout(() => setRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
+  }
+
   function pollRefreshStatus() {
     clearInterval(refreshPollRef.current);
     refreshPollRef.current = setInterval(async () => {
@@ -196,7 +205,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         clearInterval(refreshPollRef.current);
         setRefreshStatus(status);
         if (status.status === "completed") reloadAfterRefresh();
-        setTimeout(() => setRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
+        clearRefreshStatusSoon(status);
       } catch {
         clearInterval(refreshPollRef.current);
         setRefreshStatus(null);
@@ -450,6 +459,37 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
         <div className="management-refresh-row">
           <div className="management-refresh-control">
             <SyncStatus status={syncStatus} onRefresh={onRefresh} />
+            {refreshStatus && !refreshStatus.full && refreshStatus.status === "error" ? (
+              <div className="sync-status sync-status-error" role="status">
+                Face matching failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
+              </div>
+            ) : refreshStatus && !refreshStatus.full && refreshStatus.status !== "idle" ? (
+              <div className="sync-status" role="status" aria-live="polite">
+                <span className="sync-status-label">
+                  {refreshStatus.status === "completed"
+                    ? `Faces done -- ${refreshStatus.matched} matched`
+                    : `Matching faces… ${
+                        refreshStatus.total > 0
+                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
+                          : 0
+                      }%`}
+                </span>
+                <div className="sync-progress-track">
+                  <div
+                    className="sync-progress-fill"
+                    style={{
+                      width: `${
+                        refreshStatus.status === "completed"
+                          ? 100
+                          : refreshStatus.total > 0
+                            ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
+                            : 0
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
           <p className="management-refresh-description">
             Scans the photos backend for new, changed, or removed files and updates the index to
