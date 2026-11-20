@@ -3,7 +3,7 @@
 # Move every image listed in a CSV from one repo to another, by calling
 # bin/move-image.sh once per row.
 #
-# Usage: bin/move-images.sh <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--debug]
+# Usage: bin/move-images.sh <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--force] [--debug]
 #   e.g. bin/move-images.sh files.csv smb://host/images smb://host/backup
 #
 # Column 1 of each row is the image path relative to the repo root; any other
@@ -16,6 +16,10 @@
 # --continue-on-error it carries on with the remaining rows, prints a summary
 # of the failures, and exits 1 at the end if any row failed.
 #
+# --force is passed through to move-image.sh: a target that already exists is
+# replaced (after the new copy is verified) instead of failing the row. Use it
+# to finish moves whose earlier run copied a file but could not delete the source.
+#
 # --debug prints each step and its result to stdout (this script's row
 # handling, plus move-image.sh's per-file steps, which it is passed through to).
 #
@@ -26,7 +30,7 @@
 set -uo pipefail
 
 usage() {
-    echo "usage: $0 <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--debug]" >&2
+    echo "usage: $0 <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--force] [--debug]" >&2
     exit 2
 }
 
@@ -55,12 +59,14 @@ first_column() {
 CONTINUE=0
 HEADER=1
 DEBUG=0
+FORCE=0
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --debug) DEBUG=1 ;;
         --continue-on-error) CONTINUE=1 ;;
         --no-header) HEADER=0 ;;
+        --force) FORCE=1 ;;
         -h|--help) usage ;;
         *) ARGS+=("$arg") ;;
     esac
@@ -79,6 +85,7 @@ fi
 
 MOVE_ARGS=()
 [ "$DEBUG" -eq 1 ] && MOVE_ARGS+=(--debug)
+[ "$FORCE" -eq 1 ] && MOVE_ARGS+=(--force)
 
 dbg "csv=$CSV source=$SOURCE target=$TARGET header=$HEADER continue-on-error=$CONTINUE"
 dbg "per-file script: $MOVE"
