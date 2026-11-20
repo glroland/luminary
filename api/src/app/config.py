@@ -308,3 +308,13 @@ def get_face_match_threshold() -> float:
     score (or set LUMINARY_LOG_LEVEL=DEBUG for every candidate's score)
     and tune this against those real numbers rather than guessing again."""
     return float(os.environ.get("LUMINARY_FACE_MATCH_THRESHOLD", "0.4"))
+
+
+def get_face_reject_threshold() -> float:
+    """Cosine similarity between a candidate face and a face a user
+    previously rejected for an individual (face_rejections) at or above
+    which recognition.py refuses to auto-tag the candidate as that
+    individual. Like LUMINARY_FACE_MATCH_THRESHOLD there's no verified-
+    correct value; 0.7 is a starting point -- recognition.py logs each veto
+    and records the score on the rejection row (last_vetoed_score)."""
+    return float(os.environ.get("LUMINARY_FACE_REJECT_THRESHOLD", "0.7"))

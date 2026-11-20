@@ -7,8 +7,8 @@ Original photo files themselves are never stored here; they stay on the
 configured photos backend (`LUMINARY_PHOTOS_URI`) and are only read, never
 written (see CLAUDE.md's hard invariant).
 
-There are five tables, `photos`, `faces`, `individuals`, `tags`, and
-`photo_tags`, all created by
+There are six tables, `photos`, `faces`, `individuals`, `tags`,
+`photo_tags`, and `face_rejections`, all created by
 [`db/create_tables.sql`](../db/create_tables.sql) and mirrored by
 `database.py`'s `init_db()` (run on every API startup). **There is no
 migrations framework** — a schema change means updating both of those
@@ -166,6 +166,40 @@ position/overlap. Accepted as a consequence of the existing
 wipe-and-redetect design, not something tagging tries to preserve across
 — a later "Refresh Faces" run will simply re-match it if it's still a
 confident match.
+
+## `face_rejections`
+
+A face a user untagged *after* `recognition.py` auto-matched it ("this is
+NOT that person"), written by `people.untag_face` only when
+`faces.tag_source = 'auto'`. A manual untag records nothing. It exists
+because the `faces` row can't carry the memory: untagging clears it, and a
+re-detect gives every face a new `id`. So the row keeps the crop, and
+`recognition.py` embeds it as a negative example (`_rejection_embeddings`).
+
+| Column | Type | Nullable | Notes |
+|---|---|---|---|
+| `id` | `TEXT` | no | Primary key, `uuid4`. |
+| `person_id` | `TEXT` | no | The individual this face is *not*. |
+| `photo_id`, `x1`, `y1`, `x2`, `y2` | | no | Where the face was; used for the same-box veto (IoU ≥ 0.5). |
+| `thumbnail` | `BYTEA` | no | The face crop, copied from `faces.thumbnail`. |
+| `match_confidence` | `DOUBLE PRECISION` | yes | The wrong match's cosine score. |
+| `rejected_at_threshold` | `DOUBLE PRECISION` | yes | `LUMINARY_FACE_MATCH_THRESHOLD` when it was rejected — scores aren't comparable across threshold changes. |
+| `created_at` | `TIMESTAMPTZ` | no | |
+| `last_vetoed_score`, `last_vetoed_at` | | yes | The most recent time this row blocked a candidate; `NULL` = never has. Rows that never fire are candidates for pruning. |
+
+**How it's used**: for each candidate, in score order among individuals at
+or above `LUMINARY_FACE_MATCH_THRESHOLD`, an individual is skipped
+(and the runner-up considered) if the candidate (1) has the same box as one
+of that person's rejections in the same photo, (2) has cosine similarity
+≥ `LUMINARY_FACE_REJECT_THRESHOLD` (default `0.7`, untuned — see each veto
+logged at `INFO` and `last_vetoed_score`) to one, or (3) is at least as
+similar to one as to the person's references. Rejections survive
+re-detection and "Refresh Faces" (full); they are deleted by
+`people.delete_individual`, `storage.delete_photo`/`purge_all`,
+`sync._delete_missing`, and `people.tag_face` (manually tagging a face to
+the person overrides an overlapping rejection). Indexes:
+`idx_face_rejections_person_id`, `idx_face_rejections_photo_id`. No FK, as
+elsewhere. Rejections made before this table existed weren't kept.
 
 ## `individuals`
 

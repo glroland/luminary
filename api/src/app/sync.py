@@ -591,6 +591,9 @@ def _delete_missing(existing: dict, seen: set) -> int:
         with conn.cursor() as cursor:
             cursor.executemany("DELETE FROM faces WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids])
             cursor.executemany(
+                "DELETE FROM face_rejections WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
+            )
+            cursor.executemany(
                 "DELETE FROM photo_tags WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
             )
             cursor.executemany(

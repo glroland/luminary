@@ -597,6 +597,7 @@ def delete_photo(photo_id: str) -> bool:
         # No FK cascade (see database.py) -- clean up the photo's faces and
         # tags explicitly so they don't outlive their photo row.
         conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
+        conn.execute("DELETE FROM face_rejections WHERE photo_id = %s", (photo_id,))
         conn.execute("DELETE FROM photo_tags WHERE photo_id = %s", (photo_id,))
         conn.execute("DELETE FROM photo_embeddings WHERE photo_id = %s", (photo_id,))
         cursor = conn.execute("DELETE FROM photos WHERE id = %s", (photo_id,))
@@ -612,6 +613,7 @@ def purge_all() -> None:
     someone syncs."""
     with get_connection() as conn:
         conn.execute("DELETE FROM faces")
+        conn.execute("DELETE FROM face_rejections")
         conn.execute("DELETE FROM individuals")
         conn.execute("DELETE FROM photo_tags")
         conn.execute("DELETE FROM tags")

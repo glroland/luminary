@@ -230,6 +230,29 @@ def init_db() -> None:
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
+        # Faces a user untagged after an auto-match (see db/create_tables.sql
+        # for the full column rationale). No FK; deleted explicitly.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS face_rejections (
+                id TEXT PRIMARY KEY,
+                person_id TEXT NOT NULL,
+                photo_id TEXT NOT NULL,
+                x1 DOUBLE PRECISION NOT NULL,
+                y1 DOUBLE PRECISION NOT NULL,
+                x2 DOUBLE PRECISION NOT NULL,
+                y2 DOUBLE PRECISION NOT NULL,
+                thumbnail BYTEA NOT NULL,
+                match_confidence DOUBLE PRECISION,
+                rejected_at_threshold DOUBLE PRECISION,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_vetoed_score DOUBLE PRECISION,
+                last_vetoed_at TIMESTAMPTZ
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_face_rejections_person_id ON face_rejections (person_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_face_rejections_photo_id ON face_rejections (photo_id)")
         # One photo -> many embedded text snippets (embeddings.py): today one
         # row per sentence of photos.description (source_type 'D'). No FK,
         # same as faces/photo_tags -- rows are deleted explicitly

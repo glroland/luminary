@@ -512,3 +512,100 @@ def test_cosine_similarity():
     assert recognition._cosine_similarity([1.0, 0.0], [1.0, 0.0]) == 1.0
     assert recognition._cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
     assert recognition._cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
+
+
+def _rejections():
+    with get_connection() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM face_rejections").fetchall()]
+
+
+def _auto_tag_face_b(client, tmp_path, monkeypatch):
+    photos, face_a, face_b = _sync_two_photos(client, tmp_path, monkeypatch, "red", "red")
+    alice = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+    client.post(f"/api/faces/{face_a['id']}/tag", json={"person_id": alice})
+    assert _incremental_refresh_and_wait()["matched"] == 1
+    return photos, face_a, face_b, alice
+
+
+def test_untagging_an_auto_match_records_a_rejection_that_blocks_the_next_refresh(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+
+    assert client.delete(f"/api/faces/{face_b['id']}/tag").status_code in (200, 204)
+
+    (rejection,) = _rejections()
+    assert rejection["person_id"] == alice
+    assert rejection["photo_id"] == photos["b.jpg"]
+    assert rejection["match_confidence"] is not None
+    assert rejection["rejected_at_threshold"] == pytest.approx(0.4)
+    assert rejection["last_vetoed_at"] is None
+
+    status = _incremental_refresh_and_wait()
+    assert status["matched"] == 0
+    face = client.get(f"/api/photos/{photos['b.jpg']}/faces").json()["faces"][0]
+    assert face["person_id"] is None
+
+    (rejection,) = _rejections()
+    assert rejection["last_vetoed_at"] is not None
+    assert rejection["last_vetoed_score"] is not None
+
+
+def test_untagging_a_manual_tag_records_no_rejection(client, tmp_path, monkeypatch):
+    photos, face_a, face_b = _sync_two_photos(client, tmp_path, monkeypatch, "red", "red")
+    alice = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+    client.post(f"/api/faces/{face_a['id']}/tag", json={"person_id": alice})
+    client.delete(f"/api/faces/{face_a['id']}/tag")
+    assert _rejections() == []
+
+
+def test_rejection_blocks_a_near_duplicate_face_with_a_different_box(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+    client.delete(f"/api/faces/{face_b['id']}/tag")
+    # Simulate a re-detect: the same face now has a new id and a different box.
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE faces SET id = %s, x1 = 2, y1 = 2, x2 = 8, y2 = 8 WHERE id = %s",
+            (str(uuid.uuid4()), face_b["id"]),
+        )
+        conn.execute("UPDATE face_rejections SET x1 = 100, y1 = 100, x2 = 110, y2 = 110")
+        conn.commit()
+
+    assert _incremental_refresh_and_wait()["matched"] == 0  # blocked by embedding similarity alone
+
+
+def test_manually_tagging_a_rejected_face_removes_the_rejection(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+    client.delete(f"/api/faces/{face_b['id']}/tag")
+    assert len(_rejections()) == 1
+
+    client.post(f"/api/faces/{face_b['id']}/tag", json={"person_id": alice})
+    assert _rejections() == []
+
+
+def test_deleting_an_individual_removes_their_rejections(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+    client.delete(f"/api/faces/{face_b['id']}/tag")
+    client.delete(f"/api/individuals/{alice}")
+    assert _rejections() == []
+
+
+def test_deleting_a_photo_removes_its_rejections(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+    client.delete(f"/api/faces/{face_b['id']}/tag")
+    client.delete(f"/api/photos/{photos['b.jpg']}")
+    assert _rejections() == []
+
+
+def test_veto_falls_through_to_the_next_best_individual(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+    client.delete(f"/api/faces/{face_b['id']}/tag")
+    # Bob's reference is also red-ish, so he's an acceptable runner-up.
+    bob = client.post("/api/individuals", json={"name": "Bob"}).json()["id"]
+    write_image(tmp_path / "photos" / "c.jpg", size=(20, 20), color="red")
+    sync_and_wait(client)
+    c_id = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}["c.jpg"]
+    face_c = client.get(f"/api/photos/{c_id}/faces").json()["faces"][0]
+    client.post(f"/api/faces/{face_c['id']}/tag", json={"person_id": bob})
+
+    _incremental_refresh_and_wait()
+    face = client.get(f"/api/photos/{photos['b.jpg']}/faces").json()["faces"][0]
+    assert face["person_id"] == bob

@@ -434,6 +434,7 @@ tunables:
 |------------------------------------|---------|---------------------------------------|
 | `LUMINARY_FACE_DETECTION_THRESHOLD`| `0.8`   | Confidence MTCNN must clear to report a detected face — lower catches more faces (partial/angled/small, or in a crowded photo) at the cost of more false positives; no single right value across different libraries, tune against your own |
 | `LUMINARY_FACE_MIN_SIZE`           | `150`   | Smallest face, in pixels of MTCNN's internally-resized copy of the image (not the original photo's resolution), it will report — lower catches smaller/more distant faces at the cost of more false positives and slower detection; facenet-pytorch's own MTCNN default (`20`) was confirmed too permissive in practice (spurious small-box detections) |
+| `LUMINARY_FACE_REJECT_THRESHOLD`   | `0.7`   | Cosine similarity to a face you previously untagged (an auto-match you removed) at or above which "Refresh Faces" won't tag a candidate as that same person again; no verified-correct value, tune against the veto lines in the log |
 
 For local testing, just set them in your shell before running `make
 run-api` or `make test-api` (`config.py` reads both lazily, same as every

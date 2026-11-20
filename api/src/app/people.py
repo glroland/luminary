@@ -30,6 +30,15 @@ request this module is already handling (an LLM call, same as
 POST /api/photos/{id}/chat already makes synchronously) -- and best-effort,
 so a failure there never turns a successful tag/untag/delete into an error
 response.
+
+Untagging a face that recognition.py *auto*-tagged also records a
+`face_rejections` row (the crop, the wrong match's score and the threshold
+then in force), which recognition.py uses as a negative example so the
+mistake doesn't come back. Manual untags aren't recorded: they're usually
+a misclick or a correction to a reference, and removing a manual tag
+already removes it from the references. Manually tagging a face removes an
+overlapping rejection for that person; deleting an individual removes
+theirs.
 """
 
 import io
@@ -41,9 +50,13 @@ from typing import Optional
 from PIL import Image, ImageOps
 
 from . import enrich, storage
+from .config import get_face_match_threshold
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
+
+# Two boxes in the same photo count as the same face at or above this IoU.
+REJECTION_MATCH_IOU = 0.5
 
 # Smaller than storage.THUMBNAIL_SIZE -- this is a cropped face, not a
 # whole-photo preview.
@@ -123,6 +136,7 @@ def delete_individual(person_id: str) -> bool:
             "WHERE person_id = %s",
             (person_id,),
         )
+        conn.execute("DELETE FROM face_rejections WHERE person_id = %s", (person_id,))
         cursor = conn.execute("DELETE FROM individuals WHERE id = %s", (person_id,))
         conn.commit()
 
@@ -170,6 +184,19 @@ def untag_face(face_id: str) -> bool:
     docstring) for the face's photo -- `RETURNING photo_id` so that's
     available without a second query."""
     with get_connection() as conn:
+        # An *auto* tag being removed means recognition.py got it wrong:
+        # keep the crop and score as a face_rejections row (recognition.py
+        # uses it as a negative example) before the UPDATE below discards
+        # them. A manual untag isn't recorded -- see this module's
+        # docstring on why only auto tags count as a "that's not them".
+        conn.execute(
+            "INSERT INTO face_rejections (id, person_id, photo_id, x1, y1, x2, y2, thumbnail, "
+            "match_confidence, rejected_at_threshold) "
+            "SELECT %s, person_id, photo_id, x1, y1, x2, y2, thumbnail, match_confidence, %s "
+            "FROM faces WHERE id = %s AND tag_source = 'auto' AND person_id IS NOT NULL "
+            "AND thumbnail IS NOT NULL",
+            (str(uuid.uuid4()), get_face_match_threshold(), face_id),
+        )
         cursor = conn.execute(
             "UPDATE faces SET person_id = NULL, thumbnail = NULL, tag_source = NULL, match_confidence = NULL "
             "WHERE id = %s RETURNING photo_id",
@@ -182,6 +209,17 @@ def untag_face(face_id: str) -> bool:
         return False
     enrich.enrich_description(row["photo_id"])
     return True
+
+
+def box_iou(a: dict, b: dict) -> float:
+    """Intersection-over-union of two x1/y1/x2/y2 boxes."""
+    width = min(a["x2"], b["x2"]) - max(a["x1"], b["x1"])
+    height = min(a["y2"], b["y2"]) - max(a["y1"], b["y1"])
+    if width <= 0 or height <= 0:
+        return 0.0
+    inter = width * height
+    union = (a["x2"] - a["x1"]) * (a["y2"] - a["y1"]) + (b["x2"] - b["x1"]) * (b["y2"] - b["y1"]) - inter
+    return inter / union if union > 0 else 0.0
 
 
 def crop_face_thumbnail(original_bytes: bytes, box: dict) -> Optional[bytes]:
@@ -255,6 +293,15 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
             thumbnail = crop_face_thumbnail(original_bytes, dict(face))
 
     with get_connection() as conn:
+        # Manually tagging a face to someone overrides an earlier "not
+        # them" rejection of the same face (same photo, overlapping box --
+        # its id may differ if the photo was re-detected since).
+        for rejection in conn.execute(
+            "SELECT id, x1, y1, x2, y2 FROM face_rejections WHERE person_id = %s AND photo_id = %s",
+            (person_id, face["photo_id"]),
+        ).fetchall():
+            if box_iou(dict(face), dict(rejection)) >= REJECTION_MATCH_IOU:
+                conn.execute("DELETE FROM face_rejections WHERE id = %s", (rejection["id"],))
         conn.execute(
             "UPDATE faces SET person_id = %s, thumbnail = %s, tag_source = 'manual', match_confidence = NULL "
             "WHERE id = %s",

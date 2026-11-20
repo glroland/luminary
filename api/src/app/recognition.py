@@ -139,7 +139,7 @@ from typing import Optional
 from PIL import Image, ImageOps
 
 from . import enrich, face_detection, people, storage
-from .config import get_face_match_threshold, get_max_concurrency
+from .config import get_face_match_threshold, get_face_reject_threshold, get_max_concurrency
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -298,6 +298,59 @@ def _reference_embeddings() -> dict[str, list[float]]:
     return {person_id: _mean_embedding(embeddings) for person_id, embeddings in by_person.items()}
 
 
+def _rejection_embeddings() -> dict[str, list[dict]]:
+    """person_id -> that person's rejected faces (people.untag_face's
+    face_rejections), each {"id", "photo_id", box, "embedding"}. Unlike
+    references these stay separate embeddings, not a mean: averaging would
+    blur distinct lookalikes together. Embedded from the stored crop at
+    refresh time, same as _reference_embeddings."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, person_id, photo_id, x1, y1, x2, y2, thumbnail FROM face_rejections"
+        ).fetchall()
+
+    by_person: dict[str, list[dict]] = {}
+    for row in rows:
+        try:
+            image = Image.open(io.BytesIO(row["thumbnail"]))
+        except Exception:
+            logger.warning("Could not decode a rejected face's thumbnail; skipping it", exc_info=True)
+            continue
+        entry = {key: row[key] for key in ("id", "photo_id", "x1", "y1", "x2", "y2")}
+        entry["embedding"] = _embed(image)
+        by_person.setdefault(row["person_id"], []).append(entry)
+    return by_person
+
+
+def _veto_reason(
+    face: dict,
+    embedding: list[float],
+    positive_score: float,
+    rejections: list[dict],
+    reject_threshold: float,
+) -> Optional[tuple[str, str, float]]:
+    """Whether a person's rejected faces rule them out for this candidate:
+    (reason, rejection id, score against it) or None. Checks: the same box
+    in the same photo; a near-duplicate of a rejected face (cosine >=
+    reject_threshold); looking at least as much like a rejected face as
+    like the person's references (cosine >= positive_score)."""
+    best: Optional[tuple[float, dict]] = None
+    for rejection in rejections:
+        score = _cosine_similarity(embedding, rejection["embedding"])
+        if best is None or score > best[0]:
+            best = (score, rejection)
+        if rejection["photo_id"] == face["photo_id"] and people.box_iou(face, rejection) >= people.REJECTION_MATCH_IOU:
+            return "same box as a rejected face", rejection["id"], score
+    if best is None:
+        return None
+    score, rejection = best
+    if score >= reject_threshold:
+        return "near-duplicate of a rejected face", rejection["id"], score
+    if score >= positive_score:
+        return "closer to a rejected face than to the reference", rejection["id"], score
+    return None
+
+
 def _photos_with_tagged_faces() -> list[str]:
     """Distinct ids of every photo with at least one tagged face (manual
     or auto) -- read *before* _redetect_all_faces's storage.replace_faces
@@ -396,6 +449,8 @@ def _process_photo_faces(
     references: dict[str, list[float]],
     threshold: float,
     individual_names: dict[str, str],
+    rejections: Optional[dict[str, list[dict]]] = None,
+    reject_threshold: float = 0.7,
 ) -> tuple[int, Optional[tuple[float, str, str, str]]]:
     """Runs on the executor thread: reads `photo_id`'s original once (even
     if it has several candidate faces), then embeds+matches each face in
@@ -440,26 +495,63 @@ def _process_photo_faces(
             continue
         embedding = _embed(image)
 
+        ranked = sorted(
+            ((person_id, _cosine_similarity(embedding, reference)) for person_id, reference in references.items()),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+
+        # Best person at or above the threshold not ruled out by one of
+        # their rejected faces (face_rejections). A veto falls through to
+        # the runner-up: "not Alice" doesn't say "not Bob".
         best_person_id: Optional[str] = None
         best_score = 0.0
-        for person_id, reference in references.items():
-            score = _cosine_similarity(embedding, reference)
-            if score > best_score:
+        vetoed = False
+        for person_id, score in ranked:
+            if score < threshold:
+                break
+            veto = _veto_reason(face, embedding, score, (rejections or {}).get(person_id, []), reject_threshold)
+            if veto is None:
                 best_person_id, best_score = person_id, score
+                break
+            vetoed = True
+            reason, rejection_id, veto_score = veto
+            logger.info(
+                "Candidate face %s in %s not tagged as %s (scored %.4f): %s (%.4f)",
+                face["id"],
+                photo_filename,
+                individual_names.get(person_id, person_id),
+                score,
+                reason,
+                veto_score,
+            )
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE face_rejections SET last_vetoed_score = %s, last_vetoed_at = now() WHERE id = %s",
+                    (veto_score, rejection_id),
+                )
+                conn.commit()
 
-        best_name = individual_names.get(best_person_id, best_person_id) if best_person_id else None
+        matched_here = best_person_id is not None
+        if not matched_here and ranked:
+            top_person_id, top_score = ranked[0]
+        else:
+            top_person_id, top_score = best_person_id, best_score
+
         logger.debug(
             "Candidate face %s in %s: best match %s scored %.4f (threshold %.4f)",
             face["id"],
             photo_filename,
-            best_name,
-            best_score,
+            individual_names.get(top_person_id, top_person_id) if top_person_id else None,
+            top_score,
             threshold,
         )
 
-        if best_person_id is None or best_score < threshold:
-            if best_person_id is not None and (best_unmatched is None or best_score > best_unmatched[0]):
-                best_unmatched = (best_score, best_person_id, face["id"], photo_filename)
+        if not matched_here:
+            # A vetoed candidate was above threshold, so it isn't a "lower
+            # the threshold" near-miss; only genuinely-under ones are.
+            if top_person_id is not None and not vetoed and (best_unmatched is None or top_score > best_unmatched[0]):
+                best_unmatched = (top_score, top_person_id, face["id"], photo_filename)
             continue
 
         # The `AND person_id IS NULL` guard (and checking rowcount rather
@@ -660,6 +752,7 @@ async def _run_refresh(full: bool = False) -> None:
         references = await loop.run_in_executor(_executor, _reference_embeddings)
         candidates = await loop.run_in_executor(_executor, _candidate_faces)
         individual_names = await loop.run_in_executor(_executor, _individual_names)
+        rejections = await loop.run_in_executor(_executor, _rejection_embeddings)
         progress.set_total(len(candidates))
     except FaceRecognitionNotConfigured as exc:
         progress.fail(str(exc))
@@ -684,6 +777,7 @@ async def _run_refresh(full: bool = False) -> None:
             by_photo.setdefault(face["photo_id"], []).append(face)
 
         threshold = get_face_match_threshold()
+        reject_threshold = get_face_reject_threshold()
         total_matched = 0
         global_best_unmatched: Optional[tuple[float, str, str, str]] = None
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -692,7 +786,14 @@ async def _run_refresh(full: bool = False) -> None:
             nonlocal total_matched, global_best_unmatched
             async with semaphore:
                 matched, best_unmatched = await loop.run_in_executor(
-                    _executor, _process_photo_faces, photo_id, faces, references, threshold, individual_names
+                    _executor, _process_photo_faces,
+                    photo_id,
+                    faces,
+                    references,
+                    threshold,
+                    individual_names,
+                    rejections,
+                    reject_threshold,
                 )
             total_matched += matched
             is_new_best = global_best_unmatched is None or (

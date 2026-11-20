@@ -801,6 +801,18 @@ cached) is also per-pod, in-memory state — same caveat.
   its original read) together as one executor unit, not one face at a
   time, so progress advances in per-photo batches.
 
+  **Rejections.** `people.untag_face` on an `'auto'` face (never a manual
+  one) also inserts a `face_rejections` row (crop, `match_confidence`,
+  threshold in force) before clearing the tag. `_rejection_embeddings()`
+  embeds those crops each run and `_process_photo_faces` walks individuals
+  best-score-first, skipping one (and logging it, and stamping the row's
+  `last_vetoed_*`) when `_veto_reason` finds the same box, a near-duplicate
+  (`LUMINARY_FACE_REJECT_THRESHOLD`), or a rejection at least as similar as
+  the reference; the runner-up can still win. Rejections survive re-detection
+  (unlike tags) and are removed by manual re-tag, `delete_individual`,
+  `delete_photo`/`purge_all` and `sync._delete_missing`. See
+  `docs/database-schema.md`.
+
   `LUMINARY_FACE_MATCH_THRESHOLD` (`config.get_face_match_threshold()`,
   default `0.4`) has no verified-correct value — confirmed empirically
   that `InceptionResnetV1`'s output is L2-normalized (`.norm()` ≈ 1.0, so
