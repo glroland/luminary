@@ -163,6 +163,19 @@ export async function fetchIndividualFaces(personId) {
   return data.faces;
 }
 
+export async function fetchIndividualRejections(personId) {
+  const data = await request(`/individuals/${personId}/rejections`);
+  return data.faces;
+}
+
+export function rejectionThumbnailUrl(rejectionId) {
+  return `${API_BASE}/rejections/${rejectionId}/thumbnail`;
+}
+
+export async function deleteRejection(rejectionId) {
+  await request(`/rejections/${rejectionId}`, { method: "DELETE" });
+}
+
 export function individualThumbnailUrl(personId) {
   return `${API_BASE}/individuals/${personId}/thumbnail`;
 }

@@ -4,7 +4,7 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import people
-from ..models import CreateIndividualRequest, Individual, IndividualList, TaggedFaceList
+from ..models import CreateIndividualRequest, Individual, IndividualList, RejectedFaceList, TaggedFaceList
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +60,10 @@ def get_individual_faces(person_id: str) -> dict:
     if not people.get_individual(person_id):
         raise HTTPException(status_code=404, detail="Individual not found")
     return {"faces": people.list_faces_for_individual(person_id)}
+
+
+@router.get("/individuals/{person_id}/rejections", response_model=RejectedFaceList)
+def get_individual_rejections(person_id: str) -> dict:
+    if not people.get_individual(person_id):
+        raise HTTPException(status_code=404, detail="Individual not found")
+    return {"faces": people.list_rejections_for_individual(person_id)}

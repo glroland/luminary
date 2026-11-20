@@ -10,7 +10,7 @@ from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
-from .routers import descriptions, faces, health, individuals, jobs as jobs_router, locations, photos, sync, tags
+from .routers import descriptions, faces, health, individuals, jobs as jobs_router, locations, photos, rejections, sync, tags
 
 configure_logging()
 
@@ -65,6 +65,7 @@ app.include_router(sync.router, prefix="/api")
 app.include_router(jobs_router.router, prefix="/api")
 app.include_router(individuals.router, prefix="/api")
 app.include_router(faces.router, prefix="/api")
+app.include_router(rejections.router, prefix="/api")
 app.include_router(descriptions.router, prefix="/api")
 app.include_router(locations.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")

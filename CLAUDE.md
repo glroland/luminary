@@ -837,8 +837,11 @@ cached) is also per-pod, in-memory state — same caveat.
   (`LUMINARY_FACE_REJECT_THRESHOLD`), or a rejection at least as similar as
   the reference; the runner-up can still win. Rejections survive re-detection
   (unlike tags) and are removed by manual re-tag, `delete_individual`,
-  `delete_photo`/`purge_all` and `sync._delete_missing`. See
-  `docs/database-schema.md`.
+  `delete_photo`/`purge_all` and `sync._delete_missing`. The Manage page
+  shows them per individual in a collapsed "Unmatched auto-tags" `<details>`
+  under the faces grid (`routers/individuals.py`'s `/rejections`,
+  `routers/rejections.py`); its "Allow matching again" button just deletes
+  the row. See `docs/database-schema.md`.
 
   `LUMINARY_FACE_MATCH_THRESHOLD` (`config.get_face_match_threshold()`,
   default `0.4`) has no verified-correct value — confirmed empirically

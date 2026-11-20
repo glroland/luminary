@@ -2180,3 +2180,27 @@ textarea {
     transform: none;
   }
 }
+
+.management-rejections {
+  flex-basis: 100%;
+  margin-top: 0.4rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+
+.management-rejections summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.management-rejections-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.management-rejections-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+}

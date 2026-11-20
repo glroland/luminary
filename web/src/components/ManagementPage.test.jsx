@@ -12,6 +12,8 @@ describe("ManagementPage", () => {
     // defaulted to empty here so tests that don't care about tags aren't
     // affected by it; tests that do override this themselves.
     vi.spyOn(client, "fetchTags").mockResolvedValue([]);
+    // Expanding an individual also fetches its unmatched auto-tags.
+    vi.spyOn(client, "fetchIndividualRejections").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -140,6 +142,30 @@ describe("ManagementPage", () => {
 
     expect(untagMock).toHaveBeenCalledWith("f1");
     await waitFor(() => expect(document.querySelector(".management-face")).not.toBeInTheDocument());
+  });
+
+  it("lists unmatched auto-tags in a collapsed section and lets matching be allowed again", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "fetchIndividualFaces").mockResolvedValue([]);
+    vi.spyOn(client, "fetchIndividualRejections").mockResolvedValue([{ id: "r1", photo_id: "photo-9" }]);
+    const deleteMock = vi.spyOn(client, "deleteRejection").mockResolvedValue();
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+    const section = await waitFor(() => {
+      const el = document.querySelector("details.management-rejections");
+      expect(el).toBeInTheDocument();
+      return el;
+    });
+    expect(section).not.toHaveAttribute("open");
+    expect(screen.getByText("Unmatched auto-tags (1)")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /allow matching again/i }));
+
+    expect(deleteMock).toHaveBeenCalledWith("r1");
+    await waitFor(() => expect(document.querySelector("details.management-rejections")).not.toBeInTheDocument());
   });
 
   it("shows an 'auto' badge on auto-matched faces but not manually tagged ones", async () => {

@@ -169,6 +169,33 @@ def list_faces_for_individual(person_id: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def list_rejections_for_individual(person_id: str) -> list[dict]:
+    """Every face untagged after being auto-matched to `person_id` (see
+    this module's docstring) -- id and photo only, never the crop bytes;
+    those are served per rejection by get_rejection_thumbnail."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, photo_id FROM face_rejections WHERE person_id = %s ORDER BY created_at, id",
+            (person_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_rejection_thumbnail(rejection_id: str) -> Optional[bytes]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT thumbnail FROM face_rejections WHERE id = %s", (rejection_id,)).fetchone()
+        return row["thumbnail"] if row else None
+
+
+def delete_rejection(rejection_id: str) -> bool:
+    """Forget one rejection, so recognition.py may match that face to the
+    individual again on a later run. Returns whether it existed."""
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM face_rejections WHERE id = %s", (rejection_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def get_face_thumbnail(face_id: str) -> Optional[bytes]:
     with get_connection() as conn:
         row = conn.execute("SELECT thumbnail FROM faces WHERE id = %s", (face_id,)).fetchone()

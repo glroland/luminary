@@ -4,11 +4,13 @@ import {
   createIndividual,
   createTag,
   deleteIndividual,
+  deleteRejection,
   deleteTag,
   downloadDuplicatesCsv,
   downloadTagCsv,
   faceThumbnailUrl,
   fetchIndividualFaces,
+  fetchIndividualRejections,
   fetchIndividuals,
   fetchTags,
   individualThumbnailUrl,
@@ -16,6 +18,7 @@ import {
   refreshDescriptions,
   refreshFaces,
   refreshLocations,
+  rejectionThumbnailUrl,
   untagFace,
   updateIndividual,
   updateTag,
@@ -35,6 +38,10 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   // faces") -- fetched lazily, the first time that individual's accordion
   // is expanded, same pattern as PhotoModal.jsx's faceBoxes/individuals.
   const [facesByIndividual, setFacesByIndividual] = useState({});
+  // Same convention, for faces the user untagged after they were
+  // auto-matched (face_rejections) -- shown in a collapsed section under
+  // each individual's faces.
+  const [rejectionsByIndividual, setRejectionsByIndividual] = useState({});
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
   // `jobs` is the server's one shared snapshot of every background job
@@ -96,6 +103,12 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     return [...list].sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  function loadRejections(personId) {
+    fetchIndividualRejections(personId)
+      .then((rejections) => setRejectionsByIndividual((prev) => ({ ...prev, [personId]: rejections })))
+      .catch((err) => setPageError(err.message));
+  }
+
   function toggleExpanded(personId) {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -107,6 +120,9 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
           fetchIndividualFaces(personId)
             .then((faces) => setFacesByIndividual((prevFaces) => ({ ...prevFaces, [personId]: faces })))
             .catch((err) => setPageError(err.message));
+        }
+        if (!(personId in rejectionsByIndividual)) {
+          loadRejections(personId);
         }
       }
       return next;
@@ -126,6 +142,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
         .then((faces) => setFacesByIndividual((prev) => ({ ...prev, [personId]: faces })))
         .catch((err) => setPageError(err.message));
     });
+    Object.keys(rejectionsByIndividual).forEach(loadRejections);
   }
 
   async function handleCancel() {
@@ -240,6 +257,20 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
         setFacesByIndividual((prev) => ({
           ...prev,
           [personId]: (prev[personId] ?? []).filter((face) => face.id !== faceId),
+        }));
+        setPageError(null);
+        // Untagging an auto-matched face records a rejection.
+        loadRejections(personId);
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
+  function handleAllowRematch(personId, rejectionId) {
+    deleteRejection(rejectionId)
+      .then(() => {
+        setRejectionsByIndividual((prev) => ({
+          ...prev,
+          [personId]: (prev[personId] ?? []).filter((rejection) => rejection.id !== rejectionId),
         }));
         setPageError(null);
       })
@@ -548,6 +579,38 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
                           </button>
                         </div>
                       ))
+                    )}
+                    {(rejectionsByIndividual[individual.id] ?? []).length > 0 && (
+                      <details className="management-rejections">
+                        <summary>Unmatched auto-tags ({rejectionsByIndividual[individual.id].length})</summary>
+                        <p className="management-rejections-hint">
+                          Faces you removed after they were auto-matched to {individual.name}. They won&apos;t be
+                          matched again unless you allow it.
+                        </p>
+                        <div className="management-rejections-faces">
+                          {rejectionsByIndividual[individual.id].map((rejection) => (
+                            <div key={rejection.id} className="management-face">
+                              <button
+                                type="button"
+                                className="management-face-image"
+                                onClick={() => onNavigateToPhoto(rejection.photo_id)}
+                                title="Go to the photo this face is in"
+                              >
+                                <img src={rejectionThumbnailUrl(rejection.id)} alt="" />
+                              </button>
+                              <button
+                                type="button"
+                                className="management-face-remove"
+                                onClick={() => handleAllowRematch(individual.id, rejection.id)}
+                                aria-label="Allow matching again"
+                                title="Allow matching again"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
                   </div>
                 )}

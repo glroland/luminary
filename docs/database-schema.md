@@ -201,6 +201,8 @@ the person overrides an overlapping rejection). Indexes:
 `idx_face_rejections_person_id`, `idx_face_rejections_photo_id`. No FK, as
 elsewhere. Rejections made before this table existed weren't kept.
 
+The management page lists them per individual (`GET /api/individuals/{id}/rejections`, crop at `GET /api/rejections/{id}/thumbnail`) in a collapsed "Unmatched auto-tags" section; `DELETE /api/rejections/{id}` ("Allow matching again") removes the row, so a later match run may tag that face to the person again.
+
 ## `individuals`
 
 The catalog of named people faces can be manually tagged as — see

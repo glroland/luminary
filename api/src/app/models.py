@@ -162,6 +162,18 @@ class TaggedFaceList(BaseModel):
     faces: list[TaggedFace]
 
 
+class RejectedFace(BaseModel):
+    # A face the user untagged after it was auto-matched to an individual
+    # (a face_rejections row) -- enough to render its crop
+    # (GET /api/rejections/{id}/thumbnail) and navigate to its photo.
+    id: str
+    photo_id: str
+
+
+class RejectedFaceList(BaseModel):
+    faces: list[RejectedFace]
+
+
 class FaceRefreshStatus(BaseModel):
     # Mirrors SyncStatus's shape -- see recognition.py's _RefreshProgress.
     status: str  # "idle" | "running" | "completed" | "error" | "cancelled"

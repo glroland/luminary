@@ -549,6 +549,34 @@ def test_untagging_an_auto_match_records_a_rejection_that_blocks_the_next_refres
     assert rejection["last_vetoed_score"] is not None
 
 
+def test_rejections_can_be_listed_viewed_and_deleted(client, tmp_path, monkeypatch):
+    photos, face_a, face_b, alice = _auto_tag_face_b(client, tmp_path, monkeypatch)
+    client.delete(f"/api/faces/{face_b['id']}/tag")
+
+    listed = client.get(f"/api/individuals/{alice}/rejections").json()["faces"]
+    assert len(listed) == 1
+    assert listed[0]["photo_id"] == photos["b.jpg"]
+    rejection_id = listed[0]["id"]
+
+    thumbnail = client.get(f"/api/rejections/{rejection_id}/thumbnail")
+    assert thumbnail.status_code == 200
+    assert thumbnail.headers["content-type"] == "image/jpeg"
+
+    assert client.delete(f"/api/rejections/{rejection_id}").status_code == 204
+    assert client.get(f"/api/individuals/{alice}/rejections").json() == {"faces": []}
+    assert _rejections() == []
+
+    # With the rejection gone, the next refresh may match the face again.
+    status = _incremental_refresh_and_wait()
+    assert status["matched"] == 1
+
+
+def test_rejection_endpoints_404_for_unknown_ids(client):
+    assert client.get("/api/individuals/nope/rejections").status_code == 404
+    assert client.get("/api/rejections/nope/thumbnail").status_code == 404
+    assert client.delete("/api/rejections/nope").status_code == 404
+
+
 def test_untagging_a_manual_tag_records_no_rejection(client, tmp_path, monkeypatch):
     photos, face_a, face_b = _sync_two_photos(client, tmp_path, monkeypatch, "red", "red")
     alice = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
