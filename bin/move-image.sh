@@ -3,6 +3,7 @@
 # Move one image from one repo to another, copy-then-delete.
 #
 # Usage: bin/move-image.sh <source-repo-url> <target-repo-url> <relative-path>
+#                          [--force] [--debug]
 #   e.g. bin/move-image.sh smb://host/images smb://host/backup vacation/2019/beach.jpg
 #
 # Transactional in the sense that the source is only deleted after the copy
@@ -14,7 +15,11 @@
 #   5. only then delete the source
 # Any failure before step 5 leaves the source untouched and removes the temp
 # file. If the target already has the file, nothing is overwritten and the
-# source is left alone.
+# source is left alone -- unless --force is given, in which case the copy is
+# still made and verified under the temp name first, and only then is the
+# existing target replaced (so a failed copy never destroys the old target).
+# --force is also how to finish a move whose earlier run copied the file but
+# failed to delete the source.
 #
 # Repos may be anything fsspec understands (local path, smb://, s3://, ...),
 # same as LUMINARY_PHOTOS_URI. For smb:// credentials come from
@@ -29,18 +34,20 @@
 set -euo pipefail
 
 DEBUG=0
+FORCE=0
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --debug) DEBUG=1 ;;
+        --force) FORCE=1 ;;
         *) ARGS+=("$arg") ;;
     esac
 done
 if [ "${#ARGS[@]}" -ne 3 ]; then
-    echo "usage: $0 <source-repo-url> <target-repo-url> <relative-path> [--debug]" >&2
+    echo "usage: $0 <source-repo-url> <target-repo-url> <relative-path> [--force] [--debug]" >&2
     exit 2
 fi
-export MOVE_IMAGE_DEBUG="$DEBUG"
+export MOVE_IMAGE_DEBUG="$DEBUG" MOVE_IMAGE_FORCE="$FORCE"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${LUMINARY_PYTHON:-$ROOT/target/venv/bin/python}"
@@ -60,6 +67,7 @@ import fsspec
 CHUNK = 1024 * 1024
 USERNAME_PASSWORD_PROTOCOLS = {"smb"}
 DEBUG = os.environ.get("MOVE_IMAGE_DEBUG") == "1"
+FORCE = os.environ.get("MOVE_IMAGE_FORCE") == "1"
 
 
 def dbg(msg):
@@ -112,9 +120,13 @@ def main(source_url, target_url, rel):
 
     dbg("checking target does not already exist")
     if dst_fs.exists(dst):
-        dbg("  result: target exists")
-        fail(f"target already exists, refusing to overwrite: {target_url}/{rel}")
-    dbg("  result: target is free")
+        if not FORCE:
+            dbg("  result: target exists")
+            fail(f"target already exists, refusing to overwrite "
+                 f"(use --force): {target_url}/{rel}")
+        dbg("  result: target exists, --force given; will replace after verified copy")
+    else:
+        dbg("  result: target is free")
 
     # 1. copy to a temp name on the target
     try:
@@ -140,6 +152,9 @@ def main(source_url, target_url, rel):
         dbg("  result: sizes match")
 
         # 3. move into place, 4. verify the final file
+        if dst_fs.exists(dst):  # only reachable with --force
+            dbg(f"step 3: replacing existing target {dst}")
+            dst_fs.rm(dst)
         dbg(f"step 3: renaming {tmp} -> {dst}")
         dst_fs.mv(tmp, dst)
         final_size = dst_fs.info(dst)["size"]
