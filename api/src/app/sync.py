@@ -61,10 +61,7 @@ Faces" job (_trigger_face_refresh, called at the end of _run_sync) --
 "Refresh" on the Manage page shouldn't need a second click to also
 auto-match any newly detected faces against already-tagged individuals.
 recognition.start_refresh()'s own try_start() guard makes this a no-op if
-a refresh is already running (e.g. someone just clicked the standalone
-"Refresh Faces" button, which still exists for on-demand re-matching --
-right after manually tagging someone, without waiting for/triggering a
-full resync).
+a refresh is already running (e.g. a "Full Face Refresh" is in flight).
 """
 
 import asyncio

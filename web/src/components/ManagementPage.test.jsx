@@ -157,52 +157,8 @@ describe("ManagementPage", () => {
     expect(document.querySelectorAll(".management-face-auto-badge")).toHaveLength(1);
   });
 
-  it("runs the non-destructive 'Refresh Faces' and reflects progress through to completion, then reloads the catalog", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    const refreshMock = vi
-      .spyOn(client, "refreshFaces")
-      .mockResolvedValue({ status: "running", processed: 0, total: 10, matched: 0, full: false, error: null });
-
-    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
-    // First call is the mount-time "is a refresh already running?" check
-    // (see ManagementPage.jsx's mount effect) -- idle, so it doesn't
-    // preempt the click below. The next two are the poll loop started by
-    // that click.
-    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, full: false, error: null });
-    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, full: false, error: null });
-    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 3, full: false, error: null });
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    // No confirmation -- unlike "Full Face Refresh", this is non-destructive.
-    // Optimistic progress UI appears immediately, before the first poll.
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh Faces" }));
-      await Promise.resolve();
-    });
-    expect(refreshMock).toHaveBeenCalledWith(false);
-    expect(screen.getByText(/matching faces…/i)).toBeInTheDocument();
-    // The danger-zone button's own slot reflects that the (non-destructive)
-    // job is someone else's, rather than pretending it's idle.
-    expect(screen.getByText(/"refresh faces" is running/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/done -- 3 matched/i)).toBeInTheDocument();
-    // Initial mount's fetch, plus one more once the job completed.
-    expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
-
-    await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(screen.getByRole("button", { name: "Refresh Faces" })).toBeInTheDocument();
-  });
-
-  it("picks up and polls 'Refresh Faces' progress automatically once a sync completes, without a click", async () => {
-    // The backend auto-triggers "Refresh Faces" as soon as a sync finishes
+  it("picks up and polls the face matching a sync auto-triggers, without a click", async () => {
+    // The backend auto-triggers face matching as soon as a sync finishes
     // (sync.py's _trigger_face_refresh) -- this simulates App.jsx handing
     // down a "completed" syncStatus and expects ManagementPage to notice
     // and start polling on its own, exactly as if the standalone button
@@ -219,7 +175,7 @@ describe("ManagementPage", () => {
       <ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} syncStatus={null} onRefresh={() => {}} />
     );
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Refresh Faces" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh Faces" })).not.toBeInTheDocument();
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
@@ -235,10 +191,9 @@ describe("ManagementPage", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/face matching is running/i)).toBeInTheDocument());
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/done -- 2 matched/i)).toBeInTheDocument();
     // Initial mount's fetch, plus one more once the auto-triggered job completed.
     expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
   });
@@ -284,38 +239,6 @@ describe("ManagementPage", () => {
     expect(window.confirm).toHaveBeenCalled();
     expect(purgeMock).not.toHaveBeenCalled();
     expect(screen.getByText("Alice")).toBeInTheDocument();
-  });
-
-  it("shows a failure message if the non-destructive 'Refresh Faces' errors", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    vi.spyOn(client, "refreshFaces").mockResolvedValue({
-      status: "running",
-      processed: 0,
-      total: 0,
-      matched: 0,
-      full: false,
-      error: null,
-    });
-    vi.spyOn(client, "fetchFaceRefreshStatus").mockResolvedValue({
-      status: "error",
-      processed: 0,
-      total: 0,
-      matched: 0,
-      full: false,
-      error: "face recognition requires torch/facenet-pytorch to be installed",
-    });
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh Faces" }));
-      await Promise.resolve();
-    });
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
   });
 
   it("asks for confirmation before running 'Full Face Refresh', since it deletes all existing face tags", async () => {
@@ -364,7 +287,7 @@ describe("ManagementPage", () => {
     expect(screen.getByRole("button", { name: "Full Face Refresh" })).toBeInTheDocument();
   });
 
-  it("runs 'Full Face Refresh' and reflects progress through to completion without disturbing the non-destructive button", async () => {
+  it("runs 'Full Face Refresh' and reflects progress through to completion", async () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
     const refreshMock = vi
       .spyOn(client, "refreshFaces")
@@ -386,10 +309,6 @@ describe("ManagementPage", () => {
       await Promise.resolve();
     });
     expect(refreshMock).toHaveBeenCalledWith(true);
-    // The non-destructive button's own slot reflects that a full refresh
-    // (not its own job) is in flight, rather than pretending to be idle.
-    expect(screen.queryByRole("button", { name: "Refresh Faces" })).not.toBeInTheDocument();
-    expect(screen.getByText(/a full face refresh is running/i)).toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText(/redetecting & matching faces… 40%/i)).toBeInTheDocument();
@@ -397,9 +316,6 @@ describe("ManagementPage", () => {
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText(/done -- 3 matched/i)).toBeInTheDocument();
     expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
-    // Once the full job finishes, the non-destructive button's slot goes
-    // back to its own idle button.
-    expect(screen.getByRole("button", { name: "Refresh Faces" })).toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(screen.getByRole("button", { name: "Full Face Refresh" })).toBeInTheDocument();

@@ -12,8 +12,8 @@ router = APIRouter()
 
 @router.post("/faces/refresh", response_model=FaceRefreshStatus)
 def refresh_faces(full: bool = False) -> dict:
-    # full=False (default): the management page's non-destructive
-    # "Refresh Faces" button -- only matches still-untagged faces against
+    # full=False (default): the non-destructive scope (sync's
+    # post-sync trigger; the Manage page's button for it was removed) -- only matches still-untagged faces against
     # people already manually tagged, same scope as sync.py's own
     # post-sync trigger, existing boxes/tags left completely alone.
     #

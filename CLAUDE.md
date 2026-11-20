@@ -729,8 +729,9 @@ cached) is also per-pod, in-memory state — same caveat.
   idempotent after the first pass, run after every sync with no extra
   cost for a library that hasn't changed).
 
-  `routers/faces.py`'s standalone "Refresh Faces" **button** passes
-  `full=True`, a deliberately destructive operation: the premise (per
+  `routers/faces.py`'s "Full Face Refresh" **button** (Manage page's danger
+  zone; the former non-destructive "Refresh Faces" button was removed as
+  redundant with the sync-triggered match) passes `full=True`, a deliberately destructive operation: the premise (per
   whoever clicks it) is that `LUMINARY_FACE_DETECTION_THRESHOLD`/
   `LUMINARY_FACE_MIN_SIZE` (`face_detection.py`, above) just changed, so
   every existing face *box* — not just its tag — was detected under
@@ -982,7 +983,7 @@ cached) is also per-pod, in-memory state — same caveat.
   mid-sync resumes polling instead of losing the progress UI.
 - `ManagementPage.jsx` (reached via the sidebar's "Manage" link,
   `view === "manage"` in `App.jsx`) is the individuals catalog's full
-  CRUD surface, plus "Refresh Faces" (`recognition.py`'s backend — see its
+  CRUD surface, plus "Full Face Refresh" (`recognition.py`'s backend — see its
   CLAUDE.md entry above), "Refresh Descriptions" (`enrich.py`'s backend),
   and "Refresh Locations" (`geocode.py`'s backend, `POST
   /api/locations/refresh` — re-geocodes every photo that already has GPS
@@ -1005,7 +1006,7 @@ cached) is also per-pod, in-memory state — same caveat.
   `TaggedFace.tag_source` drives a small "auto" badge — as a clickable
   thumbnail (`onNavigateToPhoto(face.photo_id)`, bubbling up to `App.jsx`)
   plus a small "×" remove button that untags (`DELETE /api/faces/{id}/tag`)
-  without deleting the underlying detection. "Refresh Faces" polls
+  without deleting the underlying detection. "Full Face Refresh" (and the sync-triggered match) polls
   `GET /api/faces/refresh/status` every second exactly like `SyncStatus.jsx`
   polls sync status (same shape, reusing its `.sync-status`/
   `.sync-progress-track`/`.sync-progress-fill` CSS classes rather than the

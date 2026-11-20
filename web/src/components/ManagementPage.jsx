@@ -44,15 +44,14 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   // job ever started this page visit. Polling mirrors App.jsx's
   // pollSyncStatus/SyncStatus pattern, scoped locally to this page instead
   // of global app state, since it's specific to the individuals catalog.
-  // Both the non-destructive "Refresh Faces" button and the destructive
-  // "Full Face Refresh" button (down in the danger zone -- see
-  // routers/faces.py's `full` query param) share this single poll
-  // loop/state, since the backend only ever runs one such job at a time
-  // regardless of which button started it (recognition.py's
-  // `_RefreshProgress.try_start()`). `refreshStatus.full` -- set by the
-  // backend, not tracked separately here -- is what each button's render
-  // branch below checks to tell "my job" apart from "the other button's
-  // job" when deciding what to show.
+  // The destructive "Full Face Refresh" button (down in the danger zone --
+  // see routers/faces.py's `full` query param) and the non-destructive
+  // matching a sync auto-triggers (sync.py's _trigger_face_refresh; there
+  // is no standalone button for it) share this single poll loop/state,
+  // since the backend only ever runs one such job at a time
+  // (recognition.py's `_RefreshProgress.try_start()`).
+  // `refreshStatus.full` -- set by the backend -- is what the danger-zone
+  // slot checks to tell its own job apart from the auto-triggered one.
   const [refreshStatus, setRefreshStatus] = useState(null);
   const refreshPollRef = useRef(null);
   // "Refresh Descriptions" (enrich.py's bulk enrich_description job) --
@@ -92,7 +91,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     fetchTags()
       .then(setTags)
       .catch((err) => setTagsError(err.message));
-    // A sync may already have auto-triggered "Refresh Faces" (see sync.py's
+    // A sync may already have auto-triggered face matching (see sync.py's
     // _trigger_face_refresh) before this page was ever opened -- same
     // "resume polling if it's already running" check App.jsx does for sync
     // itself on mount.
@@ -134,10 +133,9 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A successful sync auto-triggers "Refresh Faces" server-side (see
-  // sync.py's _trigger_face_refresh) -- pick up and display its progress
-  // here too, not just when the standalone button below is clicked
-  // directly, so "Refresh" alone shows the whole picture end to end.
+  // A successful sync auto-triggers face matching server-side (see
+  // sync.py's _trigger_face_refresh) -- pick it up here too, so the
+  // catalog reloads with whatever it matched.
   useEffect(() => {
     if (syncStatus?.status !== "completed") return;
     fetchFaceRefreshStatus()
@@ -171,7 +169,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     });
   }
 
-  // Re-fetches anything "Refresh Faces" may have changed: the catalog
+  // Re-fetches anything face matching may have changed: the catalog
   // (new representative thumbnails) and every accordion that's ever been
   // expanded (new auto-matched faces for it). Collapsed-and-never-opened
   // accordions need nothing -- they'll fetch fresh on first expand anyway.
@@ -263,20 +261,6 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       .then((status) => {
         setLocationRefreshStatus(status);
         pollLocationRefreshStatus();
-      })
-      .catch((err) => setPageError(err.message));
-  }
-
-  // Non-destructive: matches still-untagged faces against people already
-  // tagged at least once, leaving every existing box/tag completely
-  // alone. Same scope sync.py's own post-sync trigger always uses
-  // (routers/faces.py's `full` query param defaults to false) -- safe to
-  // run any time, no confirmation needed.
-  function handleRefreshFaceMatches() {
-    refreshFaces(false)
-      .then((status) => {
-        setRefreshStatus(status);
-        pollRefreshStatus();
       })
       .catch((err) => setPageError(err.message));
   }
@@ -470,52 +454,6 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
           <p className="management-refresh-description">
             Scans the photos backend for new, changed, or removed files and updates the index to
             match. Run this after adding or removing photos outside Luminary.
-          </p>
-        </div>
-
-        <div className="management-refresh-row">
-          <div className="management-refresh-control">
-            {refreshStatus && refreshStatus.full && refreshStatus.status === "running" ? (
-              <div className="sync-status" role="status" aria-live="polite">
-                A full face refresh is running…
-              </div>
-            ) : !refreshStatus || refreshStatus.status === "idle" || refreshStatus.full ? (
-              <button type="button" className="refresh-button" onClick={handleRefreshFaceMatches}>
-                Refresh Faces
-              </button>
-            ) : refreshStatus.status === "error" ? (
-              <div className="sync-status sync-status-error" role="status">
-                Refresh failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
-              </div>
-            ) : (
-              <div className="sync-status" role="status" aria-live="polite">
-                <span className="sync-status-label">
-                  {refreshStatus.status === "completed"
-                    ? `Done -- ${refreshStatus.matched} matched`
-                    : `Matching faces… ${
-                        refreshStatus.total > 0
-                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
-                          : 0
-                      }%`}
-                </span>
-                <div className="sync-progress-track">
-                  <div
-                    className="sync-progress-fill"
-                    style={{
-                      width: `${
-                        refreshStatus.total > 0
-                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-          <p className="management-refresh-description">
-            Matches still-untagged faces against people you've already tagged at least once, and
-            auto-assigns the confident matches. Leaves existing face detections and tags untouched.
           </p>
         </div>
 
@@ -850,7 +788,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
           <div className="management-refresh-control">
             {refreshStatus && !refreshStatus.full && refreshStatus.status === "running" ? (
               <div className="sync-status" role="status" aria-live="polite">
-                "Refresh Faces" is running…
+                Face matching is running…
               </div>
             ) : !refreshStatus || refreshStatus.status === "idle" || !refreshStatus.full ? (
               <button type="button" className="management-purge" onClick={handleFullFaceRefresh}>

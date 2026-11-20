@@ -25,8 +25,8 @@ page resuming after a reload -- can tell which button's progress it's
 looking at without having to be the one that started it.
 
 The two scopes are chosen via start_refresh(full=...). The management
-page's "Refresh Faces" button and sync.py's post-sync trigger both use
-the default, `full=False`: incremental, only ever matching still-untagged
+page no longer has a button for it; sync.py's post-sync trigger uses
+the default, `full=False` (the "Full Face Refresh" button passes True): incremental, only ever matching still-untagged
 faces (candidate_faces()'s `person_id IS NULL`), cheap/idempotent to run
 any time, including after every single sync.
 
