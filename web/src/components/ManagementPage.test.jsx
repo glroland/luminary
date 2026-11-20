@@ -157,75 +157,162 @@ describe("ManagementPage", () => {
     expect(document.querySelectorAll(".management-face-auto-badge")).toHaveLength(1);
   });
 
-  it("shows the face matching a sync triggers next to the Refresh button, through to completion", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
-    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, full: false, error: null }); // mount check
-    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, full: false, error: null });
-    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 2, full: false, error: null });
+  describe("background jobs (one at a time, shared by every browser)", () => {
+    const idle = (extra = {}) => ({ status: "idle", processed: 0, total: 0, error: null, ...extra });
+    const snapshot = (overrides = {}) => ({
+      active: null,
+      cancelling: false,
+      sync: idle({ inserted: 0, updated: 0, deleted: 0, failed: 0 }),
+      faces: idle({ matched: 0, full: false }),
+      descriptions: idle({ updated: 0 }),
+      locations: idle({ updated: 0 }),
+      ...overrides,
+    });
+    const running = (extra = {}) => ({ status: "running", processed: 4, total: 10, error: null, ...extra });
+    const renderPage = (jobs, props = {}) =>
+      render(<ManagementPage jobs={jobs} onBack={() => {}} onNavigateToPhoto={() => {}} {...props} />);
 
-    const { rerender } = render(
-      <ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} syncStatus={null} onRefresh={() => {}} />
-    );
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-    expect(screen.queryByText(/matching faces/i)).not.toBeInTheDocument();
+    beforeEach(() => {
+      vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    });
 
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    await act(async () => {
+    it("shows every start button enabled when nothing is running", async () => {
+      renderPage(snapshot());
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+      for (const name of ["Refresh", "Refresh Descriptions", "Refresh Locations", "Full Face Refresh"]) {
+        expect(screen.getByRole("button", { name })).toBeEnabled();
+      }
+      expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    });
+
+    it("shows a job another browser started: progress, a Cancel button, and every other start disabled", async () => {
+      renderPage(snapshot({ active: "descriptions", descriptions: running({ updated: 3 }) }));
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      expect(screen.getByText(/refreshing descriptions… 40%/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Refresh Descriptions" })).not.toBeInTheDocument();
+      for (const name of ["Refresh", "Refresh Locations", "Full Face Refresh"]) {
+        expect(screen.getByRole("button", { name })).toBeDisabled();
+      }
+    });
+
+    it("cancels the running job, and tells the parent to re-read the jobs", async () => {
+      const after = snapshot({ active: "descriptions", cancelling: true, descriptions: running() });
+      const cancelMock = vi.spyOn(client, "cancelJob").mockResolvedValue(after);
+      const onJobsChange = vi.fn();
+
+      renderPage(snapshot({ active: "descriptions", descriptions: running() }), { onJobsChange });
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+      expect(cancelMock).toHaveBeenCalled();
+      expect(onJobsChange).toHaveBeenCalledWith(after);
+    });
+
+    it("shows 'Cancelling' (disabled) until the system is ready, then flips back to the start button", async () => {
+      const { rerender } = renderPage(
+        snapshot({ active: "locations", cancelling: true, locations: running() })
+      );
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      expect(screen.getByRole("button", { name: "Cancelling" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Refresh Locations" })).not.toBeInTheDocument();
+
       rerender(
         <ManagementPage
+          jobs={snapshot({ locations: { ...running(), status: "cancelled" } })}
           onBack={() => {}}
           onNavigateToPhoto={() => {}}
-          syncStatus={{ status: "completed", processed: 10, total: 10, inserted: 10, updated: 0, deleted: 0 }}
-          onRefresh={() => {}}
         />
       );
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument());
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/faces done -- 2 matched/i)).toBeInTheDocument();
-    expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
-
-    await act(() => vi.advanceTimersByTimeAsync(3000));
-    expect(screen.queryByText(/faces done/i)).not.toBeInTheDocument();
-  });
-
-  it("shows a face matching error next to the Refresh button and keeps it up", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
-    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, full: false, error: null }); // mount check
-    statusMock.mockResolvedValue({
-      status: "error",
-      processed: 0,
-      total: 0,
-      matched: 0,
-      full: false,
-      error: "face recognition requires torch/facenet-pytorch to be installed",
+      expect(screen.getByRole("button", { name: "Refresh Locations" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: /cancelling/i })).not.toBeInTheDocument();
     });
 
-    const { rerender } = render(
-      <ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} syncStatus={null} onRefresh={() => {}} />
-    );
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    it("shows the outcome of a job that just ended for a moment, then clears it", async () => {
+      const { rerender } = renderPage(snapshot({ active: "descriptions", descriptions: running() }));
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
 
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    await act(async () => {
-      rerender(
-        <ManagementPage
-          onBack={() => {}}
-          onNavigateToPhoto={() => {}}
-          syncStatus={{ status: "completed", processed: 1, total: 1, inserted: 1, updated: 0, deleted: 0 }}
-          onRefresh={() => {}}
-        />
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      await act(async () => {
+        rerender(
+          <ManagementPage
+            jobs={snapshot({
+              descriptions: { status: "completed", processed: 10, total: 10, updated: 8, error: null },
+            })}
+            onBack={() => {}}
+            onNavigateToPhoto={() => {}}
+          />
+        );
+      });
+      expect(screen.getByText(/done -- 8 updated/i)).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(2500));
+      expect(screen.queryByText(/done -- 8 updated/i)).not.toBeInTheDocument();
+    });
+
+    it("keeps a job's error up", async () => {
+      renderPage(snapshot({ locations: { status: "error", processed: 0, total: 0, updated: 0, error: "Nominatim unreachable" } }));
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+      expect(screen.getByText(/refresh failed: nominatim unreachable/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Refresh Locations" })).toBeEnabled();
+    });
+
+    it("shows the face matching a sync triggers next to Refresh, cancellable, and reloads the catalog when it ends", async () => {
+      const { rerender } = renderPage(
+        snapshot({ active: "faces", faces: running({ matched: 1, full: false }) })
       );
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByText(/face matching failed: face recognition requires/i)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
 
-    await act(() => vi.advanceTimersByTimeAsync(10000));
-    expect(screen.getByText(/face matching failed/i)).toBeInTheDocument();
+      expect(screen.getByText(/matching faces… 40%/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Full Face Refresh" })).toBeDisabled();
+
+      await act(async () => {
+        rerender(
+          <ManagementPage
+            jobs={snapshot({
+              faces: { status: "completed", processed: 10, total: 10, matched: 2, full: false, error: null },
+            })}
+            onBack={() => {}}
+            onNavigateToPhoto={() => {}}
+          />
+        );
+      });
+      expect(screen.getByText(/faces done -- 2 matched/i)).toBeInTheDocument();
+      expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
+    });
+
+    it("shows a running Full Face Refresh in the danger zone with its own Cancel", async () => {
+      renderPage(snapshot({ active: "faces", faces: running({ matched: 1, full: true }) }));
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      expect(screen.getByText(/redetecting & matching faces… 40%/i)).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+    });
+
+    it("starts a job and asks the parent to re-read the jobs; a refusal (another job running) is shown", async () => {
+      const startMock = vi.spyOn(client, "refreshLocations").mockResolvedValueOnce({});
+      const onJobsChange = vi.fn();
+      renderPage(snapshot(), { onJobsChange });
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Refresh Locations" }));
+      });
+      expect(startMock).toHaveBeenCalled();
+      expect(onJobsChange).toHaveBeenCalled();
+
+      startMock.mockRejectedValueOnce(new Error("Another job is already running (sync)."));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Refresh Locations" }));
+      });
+      expect(await screen.findByRole("alert")).toHaveTextContent(/another job is already running/i);
+    });
   });
 
   it("renders the library Refresh control (moved here from the sidebar) and calls onRefresh", async () => {
@@ -315,170 +402,6 @@ describe("ManagementPage", () => {
     expect(window.confirm).toHaveBeenCalled();
     expect(refreshMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Full Face Refresh" })).toBeInTheDocument();
-  });
-
-  it("runs 'Full Face Refresh' and reflects progress through to completion", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    const refreshMock = vi
-      .spyOn(client, "refreshFaces")
-      .mockResolvedValue({ status: "running", processed: 0, total: 10, matched: 0, full: true, error: null });
-
-    const statusMock = vi.spyOn(client, "fetchFaceRefreshStatus");
-    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, matched: 0, full: false, error: null }); // mount check
-    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, matched: 1, full: true, error: null });
-    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, matched: 3, full: true, error: null });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Full Face Refresh" }));
-      await Promise.resolve();
-    });
-    expect(refreshMock).toHaveBeenCalledWith(true);
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/redetecting & matching faces… 40%/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/done -- 3 matched/i)).toBeInTheDocument();
-    expect(client.fetchIndividuals).toHaveBeenCalledTimes(2);
-
-    await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(screen.getByRole("button", { name: "Full Face Refresh" })).toBeInTheDocument();
-  });
-
-  it("runs 'Refresh Descriptions' and reflects progress through to completion", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    const refreshMock = vi
-      .spyOn(client, "refreshDescriptions")
-      .mockResolvedValue({ status: "running", processed: 0, total: 10, updated: 0, error: null });
-
-    const statusMock = vi.spyOn(client, "fetchDescriptionRefreshStatus");
-    // First call is the mount-time "is a refresh already running?" check --
-    // idle, so it doesn't preempt the click below. The next two are the
-    // poll loop started by that click.
-    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, updated: 0, error: null });
-    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, updated: 3, error: null });
-    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, updated: 8, error: null });
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /refresh descriptions/i }));
-      await Promise.resolve();
-    });
-    expect(refreshMock).toHaveBeenCalled();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/refreshing descriptions… 40%/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/done -- 8 updated/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(screen.getByRole("button", { name: /refresh descriptions/i })).toBeInTheDocument();
-  });
-
-  it("shows a failure message if 'Refresh Descriptions' errors", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    vi.spyOn(client, "refreshDescriptions").mockResolvedValue({
-      status: "running",
-      processed: 0,
-      total: 0,
-      updated: 0,
-      error: null,
-    });
-    vi.spyOn(client, "fetchDescriptionRefreshStatus").mockResolvedValue({
-      status: "error",
-      processed: 0,
-      total: 0,
-      updated: 0,
-      error: "description enrichment isn't configured",
-    });
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /refresh descriptions/i }));
-      await Promise.resolve();
-    });
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
-  });
-
-  it("runs 'Refresh Locations' and reflects progress through to completion", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    const refreshMock = vi
-      .spyOn(client, "refreshLocations")
-      .mockResolvedValue({ status: "running", processed: 0, total: 10, updated: 0, error: null });
-
-    const statusMock = vi.spyOn(client, "fetchLocationRefreshStatus");
-    // First call is the mount-time "is a refresh already running?" check --
-    // idle, so it doesn't preempt the click below. The next two are the
-    // poll loop started by that click.
-    statusMock.mockResolvedValueOnce({ status: "idle", processed: 0, total: 0, updated: 0, error: null });
-    statusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10, updated: 3, error: null });
-    statusMock.mockResolvedValue({ status: "completed", processed: 10, total: 10, updated: 8, error: null });
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /refresh locations/i }));
-      await Promise.resolve();
-    });
-    expect(refreshMock).toHaveBeenCalled();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/refreshing locations… 40%/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/done -- 8 updated/i)).toBeInTheDocument();
-
-    await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(screen.getByRole("button", { name: /refresh locations/i })).toBeInTheDocument();
-  });
-
-  it("shows a failure message if 'Refresh Locations' errors", async () => {
-    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
-    vi.spyOn(client, "refreshLocations").mockResolvedValue({
-      status: "running",
-      processed: 0,
-      total: 0,
-      updated: 0,
-      error: null,
-    });
-    vi.spyOn(client, "fetchLocationRefreshStatus").mockResolvedValue({
-      status: "error",
-      processed: 0,
-      total: 0,
-      updated: 0,
-      error: "Nominatim unreachable",
-    });
-
-    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
-    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /refresh locations/i }));
-      await Promise.resolve();
-    });
-
-    await act(() => vi.advanceTimersByTimeAsync(1000));
-    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
   });
 
   it("downloads a duplicates CSV when 'Identify Duplicates' is clicked", async () => {

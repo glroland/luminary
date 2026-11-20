@@ -3,10 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
 import * as client from "./api/client.js";
 
+const idleState = { status: "idle", processed: 0, total: 0, error: null };
+const IDLE_JOBS = {
+  active: null,
+  cancelling: false,
+  sync: { ...idleState, inserted: 0, updated: 0, deleted: 0, failed: 0 },
+  faces: { ...idleState, matched: 0, full: false },
+  descriptions: { ...idleState, updated: 0 },
+  locations: { ...idleState, updated: 0 },
+};
+
 describe("App", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(client, "fetchSyncStatus").mockResolvedValue({ status: "idle" });
+    vi.spyOn(client, "fetchJobs").mockResolvedValue(IDLE_JOBS);
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
     vi.spyOn(client, "fetchTags").mockResolvedValue([]);
   });
@@ -53,21 +63,16 @@ describe("App", () => {
     });
   });
 
-  it("starts a sync from the Refresh button and reflects progress through to completion", async () => {
+  it("starts a sync from the Refresh button and reflects the shared job status through to completion", async () => {
     vi.spyOn(client, "fetchPhotos").mockResolvedValue([]);
-    vi.spyOn(client, "startSync").mockResolvedValue({ status: "idle" });
+    vi.spyOn(client, "startSync").mockResolvedValue({ status: "running" });
 
-    const fetchStatusMock = vi.spyOn(client, "fetchSyncStatus");
-    fetchStatusMock.mockResolvedValueOnce({ status: "idle" }); // initial mount check
-    fetchStatusMock.mockResolvedValueOnce({ status: "running", processed: 4, total: 10 });
-    fetchStatusMock.mockResolvedValue({
-      status: "completed",
-      processed: 10,
-      total: 10,
-      inserted: 10,
-      updated: 0,
-      deleted: 0,
-    });
+    const syncDone = { status: "completed", processed: 10, total: 10, inserted: 10, updated: 0, deleted: 0, failed: 0, error: null };
+    const jobsMock = vi.spyOn(client, "fetchJobs");
+    jobsMock.mockResolvedValueOnce(IDLE_JOBS); // initial mount check
+    jobsMock.mockResolvedValueOnce(IDLE_JOBS); // Manage page opened
+    jobsMock.mockResolvedValueOnce({ ...IDLE_JOBS, active: "sync", sync: { ...syncDone, status: "running", processed: 4 } });
+    jobsMock.mockResolvedValue({ ...IDLE_JOBS, sync: syncDone });
 
     render(<App />);
     await waitFor(() => {
@@ -76,28 +81,27 @@ describe("App", () => {
 
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
-    // Refresh now lives on the Manage page (see ManagementPage.jsx) --
-    // navigate there first, same as a real user would.
+    // Refresh lives on the Manage page -- navigate there like a user would.
     fireEvent.click(screen.getByRole("button", { name: /toggle sidebar/i }));
     fireEvent.click(screen.getByText("Manage"));
 
-    // Optimistic progress UI appears immediately, before the first poll.
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^refresh$/i }));
       await Promise.resolve();
     });
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(client.startSync).toHaveBeenCalled();
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.getByText(/syncing 40%/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(1000));
     // Anchored: the Manage page's own copy also contains "done" ("cannot be undone").
     expect(screen.getByText(/^done$/i)).toBeInTheDocument();
     expect(client.fetchPhotos).toHaveBeenCalledTimes(2);
 
-    await act(() => vi.advanceTimersByTimeAsync(2000));
-    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(2500));
+    expect(screen.getByRole("button", { name: /^refresh$/i })).toBeEnabled();
   });
 
   it("narrows the grid to an individual's tagged photos when selected in the sidebar", async () => {

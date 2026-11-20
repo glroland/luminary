@@ -10,7 +10,7 @@ import {
   fetchIndividualFaces,
   fetchIndividuals,
   fetchPhotos,
-  fetchSyncStatus,
+  fetchJobs,
   fetchTagPhotoIds,
   fetchTags,
   startSync,
@@ -18,7 +18,6 @@ import {
 import { applyTheme, getStoredTheme } from "./theme.js";
 
 const POLL_INTERVAL_MS = 1000;
-const DONE_DISPLAY_MS = 2000;
 // Placeholder tiles shown while the photo list is first loading.
 const SKELETON_TILE_COUNT = 24;
 
@@ -103,7 +102,10 @@ export default function App() {
   const [chatBoxes, setChatBoxes] = useState([]);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [syncStatus, setSyncStatus] = useState(null);
+  // The server's one shared snapshot of every background job (see
+  // GET /api/jobs) -- null until first fetched.
+  const [jobs, setJobs] = useState(null);
+  const previousJobsActiveRef = useRef(null);
   const [view, setView] = useState("gallery"); // "gallery" | "manage"
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // null means no filter (all photos); otherwise a directory path as it
@@ -168,7 +170,6 @@ export default function App() {
   // Gallery sort order (date/filename/folder, see SortControl.jsx). Not
   // applied while a search is active -- see visiblePhotos below.
   const [sortOrder, setSortOrder] = useState(SORT_OPTIONS[0].value);
-  const pollRef = useRef(null);
 
   useEffect(() => {
     applyTheme(theme);
@@ -218,44 +219,45 @@ export default function App() {
       .catch((err) => setError(err.message));
   }, []);
 
-  const pollSyncStatus = useCallback(() => {
-    clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const status = await fetchSyncStatus();
-        if (status.status === "running") {
-          setSyncStatus(status);
-          return;
-        }
-        clearInterval(pollRef.current);
-        if (status.status === "completed") {
-          setSyncStatus(status);
-          loadPhotos();
-        } else if (status.status === "error") {
-          setSyncStatus(status);
-        }
-        setTimeout(() => setSyncStatus(null), DONE_DISPLAY_MS);
-      } catch {
-        clearInterval(pollRef.current);
-        setSyncStatus(null);
+  const refreshJobs = useCallback(
+    (known) => {
+      if (known) {
+        setJobs(known);
+        return Promise.resolve();
       }
-    }, POLL_INTERVAL_MS);
-  }, [loadPhotos]);
+      return fetchJobs()
+        .then(setJobs)
+        .catch(() => {});
+    },
+    []
+  );
 
   useEffect(() => {
     loadPhotos();
     loadIndividuals();
     loadTags();
-    fetchSyncStatus()
-      .then((status) => {
-        if (status.status === "running") {
-          setSyncStatus(status);
-          pollSyncStatus();
-        }
-      })
-      .catch(() => {});
-    return () => clearInterval(pollRef.current);
-  }, [loadPhotos, loadIndividuals, loadTags, pollSyncStatus]);
+    refreshJobs();
+  }, [loadPhotos, loadIndividuals, loadTags, refreshJobs]);
+
+  // Keep the job snapshot fresh while it can matter: any job running (it
+  // may be someone else's, and ending one reloads the gallery), or the
+  // Manage page open (where anyone can start or watch one).
+  const jobActive = Boolean(jobs?.active);
+  useEffect(() => {
+    if (!jobActive && view !== "manage") return undefined;
+    const timer = setInterval(refreshJobs, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [jobActive, view, refreshJobs]);
+
+  // A sync finishing -- started here or in another browser -- changes the
+  // photo list.
+  useEffect(() => {
+    const previous = previousJobsActiveRef.current;
+    previousJobsActiveRef.current = jobs?.active ?? null;
+    if (previous === "sync" && jobs?.active !== "sync" && jobs?.sync?.status === "completed") {
+      loadPhotos();
+    }
+  }, [jobs, loadPhotos]);
 
   // Fetches the selected individual's tagged photo ids whenever the
   // selection changes -- the faces endpoint, not a bulk photos-by-person
@@ -300,15 +302,13 @@ export default function App() {
 
   async function handleRefresh() {
     try {
-      // POST /api/sync flips status to "running" before it responds, so we
-      // could just use its response directly -- setting this locally too
-      // just means the progress UI appears one round-trip sooner.
+      // POST /api/sync takes the server's single job slot before it
+      // responds (409 if any job is already running).
       await startSync();
-      setSyncStatus({ status: "running", processed: 0, total: 0 });
-      pollSyncStatus();
     } catch (err) {
       setError(err.message);
     }
+    refreshJobs();
   }
 
   // Used by ManagementPage's per-face "go to the photo this was tagged
@@ -578,7 +578,8 @@ export default function App() {
         )}
         {view === "manage" ? (
           <ManagementPage
-            syncStatus={syncStatus}
+            jobs={jobs}
+            onJobsChange={refreshJobs}
             onRefresh={handleRefresh}
             onBack={() => {
               setView("gallery");

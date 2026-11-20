@@ -295,3 +295,16 @@ export function thumbnailUrl(photoId) {
 export function originalUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/original`;
 }
+
+// Every background job (sync, face matching, descriptions, locations) in one
+// response -- `active` names the one that holds the server's single job
+// slot, `cancelling` is true between a cancel request and the job actually
+// stopping. All browsers see the same thing, not just the one that started
+// the job. Starting a job while another is active rejects with HTTP 409.
+export async function fetchJobs() {
+  return request("/jobs");
+}
+
+export async function cancelJob() {
+  return request("/jobs/cancel", { method: "POST" });
+}

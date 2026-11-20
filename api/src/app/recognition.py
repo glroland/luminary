@@ -138,7 +138,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import enrich, face_detection, people, storage
+from . import enrich, face_detection, jobs, people, storage
 from .config import get_face_match_threshold, get_face_reject_threshold, get_max_concurrency
 from .database import get_connection
 
@@ -657,11 +657,18 @@ class _RefreshProgress:
         with self._lock:
             self._state["status"] = "completed"
             self._state["matched"] = matched
+            jobs.release(jobs.FACES)
 
     def fail(self, error: str) -> None:
         with self._lock:
             self._state["status"] = "error"
             self._state["error"] = error
+            jobs.release(jobs.FACES)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._state["status"] = "cancelled"
+            jobs.release(jobs.FACES)
 
 
 progress = _RefreshProgress()
@@ -683,12 +690,10 @@ def start_refresh(full: bool = False) -> dict:
     settings first -- discarding every existing tag, manual or auto,
     along with the stale boxes -- then re-match the whole library)."""
     global _thread
-    if progress.try_start(full=full):
-        logger.info("Starting face refresh (full=%s)", full)
-        _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh(full=full)), daemon=True)
-        _thread.start()
-    else:
-        logger.info("Face refresh already in progress; ignoring duplicate start request")
+    jobs.try_claim(jobs.FACES)  # raises jobs.JobBusy if any job is running
+    progress.try_start(full=full)
+    logger.info("Starting face refresh (full=%s)", full)
+    _thread = jobs.run_in_thread(jobs.FACES, lambda: _run_refresh(full=full))
     return progress.snapshot()
 
 
@@ -724,6 +729,8 @@ async def _run_refresh(full: bool = False) -> None:
         async def redetect(photo: dict) -> None:
             nonlocal redetected_photos, redetected_faces
             async with redetect_semaphore:
+                if jobs.cancelled():
+                    return
                 count = await loop.run_in_executor(_executor, _redetect_photo_faces, photo)
             if count is not None:
                 redetected_photos += 1
@@ -734,6 +741,13 @@ async def _run_refresh(full: bool = False) -> None:
         except Exception as exc:
             logger.exception("Refresh faces failed redetecting faces for a full refresh")
             progress.fail(str(exc))
+            return
+
+        if jobs.cancelled():
+            # Photos not reached keep their existing faces/tags; those
+            # already redetected are done (their tags were discarded).
+            logger.info("Full face refresh cancelled after re-detecting %d of %d photo(s)", redetected_photos, len(photos))
+            progress.cancel()
             return
 
         logger.info(
@@ -785,6 +799,8 @@ async def _run_refresh(full: bool = False) -> None:
         async def handle(photo_id: str, faces: list[dict]) -> None:
             nonlocal total_matched, global_best_unmatched
             async with semaphore:
+                if jobs.cancelled():
+                    return
                 matched, best_unmatched = await loop.run_in_executor(
                     _executor, _process_photo_faces,
                     photo_id,
@@ -804,6 +820,11 @@ async def _run_refresh(full: bool = False) -> None:
             progress.record(len(faces))
 
         await asyncio.gather(*(handle(photo_id, faces) for photo_id, faces in by_photo.items()))
+
+        if jobs.cancelled():
+            logger.info("Refresh faces cancelled: %d matched before stopping", total_matched)
+            progress.cancel()
+            return
 
         progress.finish(total_matched)
         logger.info("Refresh faces completed: %d matched of %d candidate face(s)", total_matched, len(candidates))

@@ -57,6 +57,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from . import jobs
 from .config import get_geocode_base_url, get_geocode_user_agent, get_geocode_zoom
 from .database import get_connection
 
@@ -250,11 +251,18 @@ class _RefreshProgress:
     def finish(self) -> None:
         with self._lock:
             self._state["status"] = "completed"
+            jobs.release(jobs.LOCATIONS)
 
     def fail(self, error: str) -> None:
         with self._lock:
             self._state["status"] = "error"
             self._state["error"] = error
+            jobs.release(jobs.LOCATIONS)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._state["status"] = "cancelled"
+            jobs.release(jobs.LOCATIONS)
 
 
 progress = _RefreshProgress()
@@ -310,12 +318,10 @@ def start_refresh() -> dict:
     before this returns). Returns the current status snapshot either
     way."""
     global _thread
-    if progress.try_start():
-        logger.info("Starting location refresh")
-        _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh()), daemon=True)
-        _thread.start()
-    else:
-        logger.info("Location refresh already in progress; ignoring duplicate start request")
+    jobs.try_claim(jobs.LOCATIONS)  # raises jobs.JobBusy if any job is running
+    progress.try_start()
+    logger.info("Starting location refresh")
+    _thread = jobs.run_in_thread(jobs.LOCATIONS, _run_refresh)
     return progress.snapshot()
 
 
@@ -329,10 +335,17 @@ async def _run_refresh() -> None:
 
         async def handle(photo_id: str) -> None:
             async with semaphore:
+                if jobs.cancelled():
+                    return
                 updated = await loop.run_in_executor(_executor, _refresh_one, photo_id)
             progress.record(updated)
 
         await asyncio.gather(*(handle(photo_id) for photo_id in photo_ids))
+
+        if jobs.cancelled():
+            logger.info("Location refresh cancelled after %d of %d photo(s)", progress.snapshot()["processed"], len(photo_ids))
+            progress.cancel()
+            return
 
         progress.finish()
         logger.info(

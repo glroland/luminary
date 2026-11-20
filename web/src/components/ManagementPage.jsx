@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  cancelJob,
   createIndividual,
   createTag,
   deleteIndividual,
@@ -7,11 +8,8 @@ import {
   downloadDuplicatesCsv,
   downloadTagCsv,
   faceThumbnailUrl,
-  fetchDescriptionRefreshStatus,
-  fetchFaceRefreshStatus,
   fetchIndividualFaces,
   fetchIndividuals,
-  fetchLocationRefreshStatus,
   fetchTags,
   individualThumbnailUrl,
   purgeDatabase,
@@ -22,12 +20,11 @@ import {
   updateIndividual,
   updateTag,
 } from "../api/client.js";
-import SyncStatus from "./SyncStatus.jsx";
+import JobControl from "./JobControl.jsx";
 
-const REFRESH_POLL_INTERVAL_MS = 1000;
 const REFRESH_DONE_DISPLAY_MS = 2000;
 
-export default function ManagementPage({ syncStatus, onRefresh, onBack, onNavigateToPhoto, onPurged }) {
+export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, onNavigateToPhoto, onPurged }) {
   const [individuals, setIndividuals] = useState(null);
   const [pageError, setPageError] = useState(null);
   const [newName, setNewName] = useState("");
@@ -40,29 +37,14 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
   const [facesByIndividual, setFacesByIndividual] = useState({});
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState("");
-  // recognition.py's background face-matching job -- null means idle/no
-  // job ever started this page visit. Polling mirrors App.jsx's
-  // pollSyncStatus/SyncStatus pattern, scoped locally to this page instead
-  // of global app state, since it's specific to the individuals catalog.
-  // The destructive "Full Face Refresh" button (down in the danger zone --
-  // see routers/faces.py's `full` query param) and the non-destructive
-  // matching a sync auto-triggers (sync.py's _trigger_face_refresh; there
-  // is no standalone button for it) share this single poll loop/state,
-  // since the backend only ever runs one such job at a time
-  // (recognition.py's `_RefreshProgress.try_start()`).
-  // `refreshStatus.full` -- set by the backend -- is what the danger-zone
-  // slot checks to tell its own job apart from the auto-triggered one.
-  const [refreshStatus, setRefreshStatus] = useState(null);
-  const refreshPollRef = useRef(null);
-  // "Refresh Descriptions" (enrich.py's bulk enrich_description job) --
-  // same shape as refreshStatus/refreshPollRef above, but its own state
-  // since the two jobs are independent and can run/poll concurrently.
-  const [descriptionRefreshStatus, setDescriptionRefreshStatus] = useState(null);
-  const descriptionRefreshPollRef = useRef(null);
-  // "Refresh Locations" (geocode.py's bulk re-geocode job) -- same shape
-  // again, its own independent state/poll loop.
-  const [locationRefreshStatus, setLocationRefreshStatus] = useState(null);
-  const locationRefreshPollRef = useRef(null);
+  // `jobs` is the server's one shared snapshot of every background job
+  // (App.jsx polls GET /api/jobs while this page is open), so a job started
+  // from any browser shows up here, and only one can run at a time. The
+  // kind that most recently finished is remembered briefly here so its
+  // "Done" text can show for a moment, then go away -- an error stays up
+  // (it lives in the server's snapshot until the next run replaces it).
+  const [justFinished, setJustFinished] = useState(null);
+  const previousActiveRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
 
   // "Identify Duplicates" -- a synchronous CSV download (storage.
@@ -91,63 +73,24 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     fetchTags()
       .then(setTags)
       .catch((err) => setTagsError(err.message));
-    // A sync may already have auto-triggered face matching (see sync.py's
-    // _trigger_face_refresh) before this page was ever opened -- same
-    // "resume polling if it's already running" check App.jsx does for sync
-    // itself on mount.
-    fetchFaceRefreshStatus()
-      .then((status) => {
-        if (status.status === "running") {
-          setRefreshStatus(status);
-          pollRefreshStatus();
-        }
-      })
-      .catch(() => {});
-    // Same "resume polling if already running" check, for a description
-    // refresh left running from before this page was (re)opened -- unlike
-    // face refresh, nothing auto-triggers this one server-side, but it can
-    // still outlive a page navigation since it's a background job either way.
-    fetchDescriptionRefreshStatus()
-      .then((status) => {
-        if (status.status === "running") {
-          setDescriptionRefreshStatus(status);
-          pollDescriptionRefreshStatus();
-        }
-      })
-      .catch(() => {});
-    // Same "resume polling if already running" check, for a location
-    // refresh left running from before this page was (re)opened.
-    fetchLocationRefreshStatus()
-      .then((status) => {
-        if (status.status === "running") {
-          setLocationRefreshStatus(status);
-          pollLocationRefreshStatus();
-        }
-      })
-      .catch(() => {});
-    return () => {
-      clearInterval(refreshPollRef.current);
-      clearInterval(descriptionRefreshPollRef.current);
-      clearInterval(locationRefreshPollRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A successful sync auto-triggers face matching server-side (see
-  // sync.py's _trigger_face_refresh) -- pick it up here too, so the
-  // catalog reloads with whatever it matched.
+  // Notice a job ending, whichever browser started it. Face matching
+  // (a sync auto-triggers it too) may have tagged faces, so the catalog
+  // reloads; any ended job shows its outcome for a moment.
   useEffect(() => {
-    if (syncStatus?.status !== "completed") return;
-    fetchFaceRefreshStatus()
-      .then((status) => {
-        setRefreshStatus(status);
-        if (status.status === "running") pollRefreshStatus();
-        else if (status.status === "completed") reloadAfterRefresh();
-        if (status.status !== "running") clearRefreshStatusSoon(status);
-      })
-      .catch(() => {});
+    const previous = previousActiveRef.current;
+    const current = jobs?.active ?? null;
+    previousActiveRef.current = current;
+    if (!previous || previous === current || !jobs) return undefined;
+    if (previous === "faces" && jobs.faces?.status === "completed") reloadAfterRefresh();
+    setJustFinished(previous);
+    // No cleanup: `jobs` is a fresh object every poll, which would cancel
+    // this timer before it fired.
+    setTimeout(() => setJustFinished(null), REFRESH_DONE_DISPLAY_MS);
+    return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncStatus]);
+  }, [jobs]);
 
   function sortByName(list) {
     return [...list].sort((a, b) => a.name.localeCompare(b.name));
@@ -185,93 +128,29 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     });
   }
 
-  // A finished job's status lingers briefly, then goes away -- except an
-  // error, which stays up until the next run replaces it so it can't be
-  // missed.
-  function clearRefreshStatusSoon(status) {
-    if (status.status === "error") return;
-    setTimeout(() => setRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
+  async function handleCancel() {
+    try {
+      onJobsChange?.(await cancelJob());
+    } catch (err) {
+      setPageError(err.message);
+    }
   }
 
-  function pollRefreshStatus() {
-    clearInterval(refreshPollRef.current);
-    refreshPollRef.current = setInterval(async () => {
-      try {
-        const status = await fetchFaceRefreshStatus();
-        if (status.status === "running") {
-          setRefreshStatus(status);
-          return;
-        }
-        clearInterval(refreshPollRef.current);
-        setRefreshStatus(status);
-        if (status.status === "completed") reloadAfterRefresh();
-        clearRefreshStatusSoon(status);
-      } catch {
-        clearInterval(refreshPollRef.current);
-        setRefreshStatus(null);
-      }
-    }, REFRESH_POLL_INTERVAL_MS);
-  }
-
-  function pollDescriptionRefreshStatus() {
-    clearInterval(descriptionRefreshPollRef.current);
-    descriptionRefreshPollRef.current = setInterval(async () => {
-      try {
-        const status = await fetchDescriptionRefreshStatus();
-        if (status.status === "running") {
-          setDescriptionRefreshStatus(status);
-          return;
-        }
-        clearInterval(descriptionRefreshPollRef.current);
-        setDescriptionRefreshStatus(status);
-        // The regenerated text itself is only visible on a photo's own
-        // modal (App.jsx's photos list), not anywhere on this page -- no
-        // reload here, unlike reloadAfterRefresh() for faces.
-        setTimeout(() => setDescriptionRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
-      } catch {
-        clearInterval(descriptionRefreshPollRef.current);
-        setDescriptionRefreshStatus(null);
-      }
-    }, REFRESH_POLL_INTERVAL_MS);
+  function startJob(start) {
+    start()
+      .then(() => onJobsChange?.())
+      .catch((err) => {
+        setPageError(err.message);
+        onJobsChange?.();
+      });
   }
 
   function handleRefreshDescriptions() {
-    refreshDescriptions()
-      .then((status) => {
-        setDescriptionRefreshStatus(status);
-        pollDescriptionRefreshStatus();
-      })
-      .catch((err) => setPageError(err.message));
-  }
-
-  function pollLocationRefreshStatus() {
-    clearInterval(locationRefreshPollRef.current);
-    locationRefreshPollRef.current = setInterval(async () => {
-      try {
-        const status = await fetchLocationRefreshStatus();
-        if (status.status === "running") {
-          setLocationRefreshStatus(status);
-          return;
-        }
-        clearInterval(locationRefreshPollRef.current);
-        setLocationRefreshStatus(status);
-        // Like description refresh, the result is only visible on a
-        // photo's own modal/map -- no reload needed here.
-        setTimeout(() => setLocationRefreshStatus(null), REFRESH_DONE_DISPLAY_MS);
-      } catch {
-        clearInterval(locationRefreshPollRef.current);
-        setLocationRefreshStatus(null);
-      }
-    }, REFRESH_POLL_INTERVAL_MS);
+    startJob(refreshDescriptions);
   }
 
   function handleRefreshLocations() {
-    refreshLocations()
-      .then((status) => {
-        setLocationRefreshStatus(status);
-        pollLocationRefreshStatus();
-      })
-      .catch((err) => setPageError(err.message));
+    startJob(refreshLocations);
   }
 
   // Re-detects every photo's faces against the current detection settings
@@ -290,12 +169,7 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
     ) {
       return;
     }
-    refreshFaces(true)
-      .then((status) => {
-        setRefreshStatus(status);
-        pollRefreshStatus();
-      })
-      .catch((err) => setPageError(err.message));
+    startJob(() => refreshFaces(true));
   }
 
   function handleIdentifyDuplicates() {
@@ -458,38 +332,28 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
       <div className="management-refresh-zone">
         <div className="management-refresh-row">
           <div className="management-refresh-control">
-            <SyncStatus status={syncStatus} onRefresh={onRefresh} />
-            {refreshStatus && !refreshStatus.full && refreshStatus.status === "error" ? (
-              <div className="sync-status sync-status-error" role="status">
-                Face matching failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
-              </div>
-            ) : refreshStatus && !refreshStatus.full && refreshStatus.status !== "idle" ? (
-              <div className="sync-status" role="status" aria-live="polite">
-                <span className="sync-status-label">
-                  {refreshStatus.status === "completed"
-                    ? `Faces done -- ${refreshStatus.matched} matched`
-                    : `Matching faces… ${
-                        refreshStatus.total > 0
-                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
-                          : 0
-                      }%`}
-                </span>
-                <div className="sync-progress-track">
-                  <div
-                    className="sync-progress-fill"
-                    style={{
-                      width: `${
-                        refreshStatus.status === "completed"
-                          ? 100
-                          : refreshStatus.total > 0
-                            ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
-                            : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
+            <JobControl
+              kind="sync"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Refresh"
+              running={(_state, pct) => `Syncing ${pct}%`}
+              done={() => "Done"}
+              failed={() => "Sync failed"}
+              onStart={onRefresh}
+              onCancel={handleCancel}
+            />
+            {/* The face matching a sync triggers (not the danger-zone full refresh). */}
+            <JobControl
+              kind="faces"
+              jobs={jobs}
+              justFinished={justFinished}
+              owns={(state) => !state.full}
+              running={(_state, pct) => `Matching faces… ${pct}%`}
+              done={(state) => `Faces done -- ${state.matched} matched`}
+              failed={(state) => `Face matching failed${state.error ? `: ${state.error}` : ""}`}
+              onCancel={handleCancel}
+            />
           </div>
           <p className="management-refresh-description">
             Scans the photos backend for new, changed, or removed files and updates the index to
@@ -499,43 +363,17 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
-            {!descriptionRefreshStatus || descriptionRefreshStatus.status === "idle" ? (
-              <button type="button" className="refresh-button" onClick={handleRefreshDescriptions}>
-                Refresh Descriptions
-              </button>
-            ) : descriptionRefreshStatus.status === "error" ? (
-              <div className="sync-status sync-status-error" role="status">
-                Refresh failed{descriptionRefreshStatus.error ? `: ${descriptionRefreshStatus.error}` : ""}
-              </div>
-            ) : (
-              <div className="sync-status" role="status" aria-live="polite">
-                <span className="sync-status-label">
-                  {descriptionRefreshStatus.status === "completed"
-                    ? `Done -- ${descriptionRefreshStatus.updated} updated`
-                    : `Refreshing descriptions… ${
-                        descriptionRefreshStatus.total > 0
-                          ? Math.round(
-                              (descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100
-                            )
-                          : 0
-                      }%`}
-                </span>
-                <div className="sync-progress-track">
-                  <div
-                    className="sync-progress-fill"
-                    style={{
-                      width: `${
-                        descriptionRefreshStatus.total > 0
-                          ? Math.round(
-                              (descriptionRefreshStatus.processed / descriptionRefreshStatus.total) * 100
-                            )
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
+            <JobControl
+              kind="descriptions"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Refresh Descriptions"
+              running={(_state, pct) => `Refreshing descriptions… ${pct}%`}
+              done={(state) => `Done -- ${state.updated} updated`}
+              failed={(state) => `Refresh failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleRefreshDescriptions}
+              onCancel={handleCancel}
+            />
           </div>
           <p className="management-refresh-description">
             Rewrites each photo's description from its caption, tagged people, and location --
@@ -545,39 +383,17 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
-            {!locationRefreshStatus || locationRefreshStatus.status === "idle" ? (
-              <button type="button" className="refresh-button" onClick={handleRefreshLocations}>
-                Refresh Locations
-              </button>
-            ) : locationRefreshStatus.status === "error" ? (
-              <div className="sync-status sync-status-error" role="status">
-                Refresh failed{locationRefreshStatus.error ? `: ${locationRefreshStatus.error}` : ""}
-              </div>
-            ) : (
-              <div className="sync-status" role="status" aria-live="polite">
-                <span className="sync-status-label">
-                  {locationRefreshStatus.status === "completed"
-                    ? `Done -- ${locationRefreshStatus.updated} updated`
-                    : `Refreshing locations… ${
-                        locationRefreshStatus.total > 0
-                          ? Math.round((locationRefreshStatus.processed / locationRefreshStatus.total) * 100)
-                          : 0
-                      }%`}
-                </span>
-                <div className="sync-progress-track">
-                  <div
-                    className="sync-progress-fill"
-                    style={{
-                      width: `${
-                        locationRefreshStatus.total > 0
-                          ? Math.round((locationRefreshStatus.processed / locationRefreshStatus.total) * 100)
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
+            <JobControl
+              kind="locations"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Refresh Locations"
+              running={(_state, pct) => `Refreshing locations… ${pct}%`}
+              done={(state) => `Done -- ${state.updated} updated`}
+              failed={(state) => `Refresh failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleRefreshLocations}
+              onCancel={handleCancel}
+            />
           </div>
           <p className="management-refresh-description">
             Re-geocodes every photo that already has GPS coordinates -- useful after changing the
@@ -826,43 +642,19 @@ export default function ManagementPage({ syncStatus, onRefresh, onBack, onNaviga
 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
-            {refreshStatus && !refreshStatus.full && refreshStatus.status === "running" ? (
-              <div className="sync-status" role="status" aria-live="polite">
-                Face matching is running…
-              </div>
-            ) : !refreshStatus || refreshStatus.status === "idle" || !refreshStatus.full ? (
-              <button type="button" className="management-purge" onClick={handleFullFaceRefresh}>
-                Full Face Refresh
-              </button>
-            ) : refreshStatus.status === "error" ? (
-              <div className="sync-status sync-status-error" role="status">
-                Refresh failed{refreshStatus.error ? `: ${refreshStatus.error}` : ""}
-              </div>
-            ) : (
-              <div className="sync-status" role="status" aria-live="polite">
-                <span className="sync-status-label">
-                  {refreshStatus.status === "completed"
-                    ? `Done -- ${refreshStatus.matched} matched`
-                    : `Redetecting & matching faces… ${
-                        refreshStatus.total > 0
-                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
-                          : 0
-                      }%`}
-                </span>
-                <div className="sync-progress-track">
-                  <div
-                    className="sync-progress-fill"
-                    style={{
-                      width: `${
-                        refreshStatus.total > 0
-                          ? Math.round((refreshStatus.processed / refreshStatus.total) * 100)
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
+            <JobControl
+              kind="faces"
+              jobs={jobs}
+              justFinished={justFinished}
+              owns={(state) => Boolean(state.full)}
+              idleLabel="Full Face Refresh"
+              buttonClass="management-purge"
+              running={(_state, pct) => `Redetecting & matching faces… ${pct}%`}
+              done={(state) => `Done -- ${state.matched} matched`}
+              failed={(state) => `Refresh failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleFullFaceRefresh}
+              onCancel={handleCancel}
+            />
           </div>
           <p className="management-refresh-description">
             Re-detects faces in every photo against the current detection settings, and deletes all

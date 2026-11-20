@@ -358,6 +358,28 @@ cached) is also per-pod, in-memory state — same caveat.
   subject to the same one-request/second cap against the public Nominatim
   instance as a sync is, since both go through the same `_rate_limit()`.
 
+- `jobs.py` is the **single job slot** shared by the four long-running
+  background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`).
+  Each `start_*()` calls `jobs.try_claim(kind)` first, which raises
+  `jobs.JobBusy` (→ `409` via `main.py`) if *any* job holds the slot, then
+  runs through `jobs.run_in_thread`. Cancellation is cooperative:
+  `POST /api/jobs/cancel` sets a flag, each job checks `jobs.cancelled()`
+  per file/photo, stops picking up work, and ends with progress status
+  `"cancelled"`; the slot stays held until then (the UI shows "Cancelling").
+  Every progress object's `finish`/`fail`/`cancel` calls `jobs.release(kind)`
+  *inside its own lock, in the same step as setting the terminal status* —
+  keep it that way, or a caller that sees "completed" can race a still-held
+  slot (or a new job's `try_start` can see a stale `running`). A cancelled
+  sync skips `_delete_missing` (never delete rows after a partial scan); a
+  cancelled full face refresh leaves un-reached photos' faces/tags alone
+  and skips the description re-enrich for photos it had already wiped
+  (Refresh Descriptions fixes those). `sync._trigger_face_refresh` runs
+  after the sync's own `finish()` released the slot, and tolerates `JobBusy`.
+  `GET /api/jobs` (`routers/jobs.py`) returns `{active, cancelling}` plus
+  all four progress snapshots — the one thing the web UI polls. New
+  background jobs must claim the slot the same way; `conftest.py` calls
+  `jobs.reset()`.
+
 - `enrich.py` composes `photos.description` — the description actually
   shown in the UI — by having a general-purpose LLM (any
   OpenAI-*compatible* chat endpoint, the same `LUMINARY_OPENAI_*` config
@@ -981,6 +1003,18 @@ cached) is also per-pod, in-memory state — same caveat.
   (`"completed"`/`"error"`) is shown briefly then cleared back to the
   button. `App.jsx` also checks sync status once on mount so a page reload
   mid-sync resumes polling instead of losing the progress UI.
+- **Job status is server-wide.** `App.jsx` polls `GET /api/jobs` (1s while
+  any job is active or the Manage page is open; once on mount otherwise)
+  and hands the snapshot to `ManagementPage.jsx` as `jobs`; there is no
+  per-job client polling any more, so every browser shows the same running
+  job. `JobControl.jsx` renders one job: start button (disabled while a
+  *different* job runs), or — when its job is the active one — "Cancel"
+  (`POST /api/jobs/cancel`) plus the progress bar, or a disabled
+  "Cancelling" until the server releases the slot, then the start button
+  again. `owns` splits the `faces` kind between the post-sync matching
+  (next to Refresh, `!full`) and the danger-zone Full Face Refresh. "Done"
+  text shows ~2s after the page sees a job end; errors stay until the next
+  run. `App.jsx` reloads the photo list when it sees a sync end.
 - `ManagementPage.jsx` (reached via the sidebar's "Manage" link,
   `view === "manage"` in `App.jsx`) is the individuals catalog's full
   CRUD surface, plus "Full Face Refresh" (`recognition.py`'s backend — see its

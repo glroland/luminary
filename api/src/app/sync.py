@@ -77,7 +77,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, enrich, face_detection, geocode, recognition, storage
+from . import chat, enrich, face_detection, geocode, jobs, recognition, storage
 from .config import get_max_concurrency
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
@@ -161,11 +161,18 @@ class _SyncProgress:
         with self._lock:
             self._state["status"] = "completed"
             self._state["deleted"] = deleted
+            jobs.release(jobs.SYNC)
 
     def fail(self, error: str) -> None:
         with self._lock:
             self._state["status"] = "error"
             self._state["error"] = error
+            jobs.release(jobs.SYNC)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._state["status"] = "cancelled"
+            jobs.release(jobs.SYNC)
 
     def reset(self) -> None:
         with self._lock:
@@ -200,12 +207,10 @@ def start_sync() -> dict:
     calling this while a sync is in flight just reports on it rather than
     starting a second one."""
     global _thread
-    if progress.try_start():
-        logger.info("Starting photo sync")
-        _thread = threading.Thread(target=lambda: asyncio.run(_run_sync()), daemon=True)
-        _thread.start()
-    else:
-        logger.info("Sync already in progress; ignoring duplicate start request")
+    jobs.try_claim(jobs.SYNC)  # raises jobs.JobBusy if any job is running
+    progress.try_start()
+    logger.info("Starting photo sync")
+    _thread = jobs.run_in_thread(jobs.SYNC, _run_sync)
     return progress.snapshot()
 
 
@@ -609,7 +614,14 @@ def _trigger_face_refresh() -> None:
     without having to stub out recognition.start_refresh() itself, which
     test_recognition.py's own tests (and routers/faces.py's standalone
     "Refresh Faces" endpoint) rely on behaving normally."""
-    recognition.start_refresh()
+    try:
+        recognition.start_refresh()
+    except jobs.JobBusy:
+        # The sync's own claim is released by progress.finish() just
+        # before this runs, so this only happens if someone else started
+        # a job in that instant. Face matching is incremental and runs
+        # after every later sync too -- skipping it once is harmless.
+        logger.info("Skipping post-sync face matching: another job is already running")
 
 
 async def _run_sync() -> None:
@@ -630,6 +642,8 @@ async def _run_sync() -> None:
             relative_path = path[len(root) + 1 :]
             seen.add(relative_path)
             async with semaphore:
+                if jobs.cancelled():
+                    return
                 try:
                     outcome = await loop.run_in_executor(
                         _executor, _sync_one_file, fs, path, relative_path, existing.get(relative_path)
@@ -644,6 +658,13 @@ async def _run_sync() -> None:
             progress.record(outcome)
 
         await asyncio.gather(*(handle(path) for path in paths))
+
+        if jobs.cancelled():
+            # Not every file was seen, so "missing" rows can't be told
+            # from "not reached yet" -- never run the delete step.
+            logger.info("Sync cancelled after %d of %d file(s)", progress.snapshot()["processed"], len(paths))
+            progress.cancel()
+            return
 
         deleted = await loop.run_in_executor(_executor, _delete_missing, existing, seen)
         progress.finish(deleted=deleted)

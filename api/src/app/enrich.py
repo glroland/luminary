@@ -74,7 +74,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from . import embeddings, tracing
+from . import embeddings, jobs, tracing
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -257,11 +257,18 @@ class _RefreshProgress:
     def finish(self) -> None:
         with self._lock:
             self._state["status"] = "completed"
+            jobs.release(jobs.DESCRIPTIONS)
 
     def fail(self, error: str) -> None:
         with self._lock:
             self._state["status"] = "error"
             self._state["error"] = error
+            jobs.release(jobs.DESCRIPTIONS)
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._state["status"] = "cancelled"
+            jobs.release(jobs.DESCRIPTIONS)
 
 
 progress = _RefreshProgress()
@@ -282,12 +289,10 @@ def start_refresh() -> dict:
     synchronously before this returns). Returns the current status
     snapshot either way."""
     global _thread
-    if progress.try_start():
-        logger.info("Starting description refresh")
-        _thread = threading.Thread(target=lambda: asyncio.run(_run_refresh()), daemon=True)
-        _thread.start()
-    else:
-        logger.info("Description refresh already in progress; ignoring duplicate start request")
+    jobs.try_claim(jobs.DESCRIPTIONS)  # raises jobs.JobBusy if any job is running
+    progress.try_start()
+    logger.info("Starting description refresh")
+    _thread = jobs.run_in_thread(jobs.DESCRIPTIONS, _run_refresh)
     return progress.snapshot()
 
 
@@ -301,10 +306,17 @@ async def _run_refresh() -> None:
 
         async def handle(photo_id: str) -> None:
             async with semaphore:
+                if jobs.cancelled():
+                    return
                 updated = await loop.run_in_executor(_executor, enrich_description, photo_id)
             progress.record(updated)
 
         await asyncio.gather(*(handle(photo_id) for photo_id in photo_ids))
+
+        if jobs.cancelled():
+            logger.info("Description refresh cancelled after %d of %d photo(s)", progress.snapshot()["processed"], len(photo_ids))
+            progress.cancel()
+            return
 
         progress.finish()
         logger.info(

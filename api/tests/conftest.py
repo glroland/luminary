@@ -74,6 +74,9 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(main_module, "start_backfill", lambda: None)
 
+    from app import jobs as jobs_module
+
+    jobs_module.reset()
     sync_progress.reset()
     refresh_progress.reset()
     description_progress.reset()

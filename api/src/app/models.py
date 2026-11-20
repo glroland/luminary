@@ -58,7 +58,7 @@ class PhotoSearchResults(BaseModel):
 
 
 class SyncStatus(BaseModel):
-    status: str  # "idle" | "running" | "completed" | "error"
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
     processed: int = 0
     total: int = 0
     inserted: int = 0
@@ -164,7 +164,7 @@ class TaggedFaceList(BaseModel):
 
 class FaceRefreshStatus(BaseModel):
     # Mirrors SyncStatus's shape -- see recognition.py's _RefreshProgress.
-    status: str  # "idle" | "running" | "completed" | "error"
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
     processed: int = 0  # candidate (untagged) faces considered so far
     total: int = 0  # candidate faces found at the start of this run
     matched: int = 0  # of those, how many got auto-tagged
@@ -218,7 +218,7 @@ class PhotoTagList(BaseModel):
 
 class DescriptionRefreshStatus(BaseModel):
     # Mirrors FaceRefreshStatus's shape -- see enrich.py's _RefreshProgress.
-    status: str  # "idle" | "running" | "completed" | "error"
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
     processed: int = 0  # photos considered so far
     total: int = 0  # photos in the library at the start of this run
     updated: int = 0  # of those, how many actually got a new description
@@ -228,8 +228,22 @@ class DescriptionRefreshStatus(BaseModel):
 class LocationRefreshStatus(BaseModel):
     # Mirrors DescriptionRefreshStatus's shape -- see geocode.py's
     # _RefreshProgress.
-    status: str  # "idle" | "running" | "completed" | "error"
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
     processed: int = 0  # photos with GPS coordinates considered so far
     total: int = 0  # such photos in the library at the start of this run
     updated: int = 0  # of those, how many were successfully re-geocoded
     error: Optional[str] = None
+
+
+class JobsStatus(BaseModel):
+    """Every background job in one response -- see jobs.py. `active` is the
+    one job holding the single claim ("sync" | "faces" | "descriptions" |
+    "locations"), or null when idle; `cancelling` is true once a cancel
+    was requested and the job hasn't stopped yet."""
+
+    active: Optional[str] = None
+    cancelling: bool = False
+    sync: SyncStatus
+    faces: FaceRefreshStatus
+    descriptions: DescriptionRefreshStatus
+    locations: LocationRefreshStatus

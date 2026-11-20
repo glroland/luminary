@@ -5,11 +5,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from . import jobs
 from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
-from .routers import descriptions, faces, health, individuals, locations, photos, sync, tags
+from .routers import descriptions, faces, health, individuals, jobs as jobs_router, locations, photos, sync, tags
 
 configure_logging()
 
@@ -42,6 +43,16 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(jobs.JobBusy)
+async def job_busy(request: Request, exc: jobs.JobBusy) -> JSONResponse:
+    # Only one background job (sync / face matching / descriptions /
+    # locations) runs at a time, whoever asks -- see jobs.py.
+    return JSONResponse(
+        status_code=409,
+        content={"detail": f"Another job is already running ({exc.active}). Wait for it to finish or cancel it."},
+    )
+
+
 @app.exception_handler(Exception)
 async def log_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -51,6 +62,7 @@ async def log_unhandled_exception(request: Request, exc: Exception) -> JSONRespo
 app.include_router(health.router, prefix="/api")
 app.include_router(photos.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(jobs_router.router, prefix="/api")
 app.include_router(individuals.router, prefix="/api")
 app.include_router(faces.router, prefix="/api")
 app.include_router(descriptions.router, prefix="/api")
