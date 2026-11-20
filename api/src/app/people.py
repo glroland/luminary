@@ -274,7 +274,20 @@ def crop_face_thumbnail(original_bytes: bytes, box: dict) -> Optional[bytes]:
         logger.warning("Could not decode original image to crop a tagged face", exc_info=True)
         return None
 
-    crop = rgb_image.crop((box["x1"], box["y1"], box["x2"], box["y2"]))
+    # A stored box can be degenerate (zero/negative area) or lie outside the
+    # image (e.g. detected in a different pixel space than the one decoded
+    # here); PIL then yields an empty crop and JPEG save raises "cannot write
+    # empty image". Clamp to the image, and treat an empty result as "no crop".
+    width, height = rgb_image.size
+    x1 = max(0, int(min(box["x1"], box["x2"])))
+    y1 = max(0, int(min(box["y1"], box["y2"])))
+    x2 = min(width, int(max(box["x1"], box["x2"])))
+    y2 = min(height, int(max(box["y1"], box["y2"])))
+    if x2 <= x1 or y2 <= y1:
+        logger.warning("Face box %s is empty or outside the %dx%d image; skipping crop", box, width, height)
+        return None
+
+    crop = rgb_image.crop((x1, y1, x2, y2))
     crop.thumbnail(REPRESENTATIVE_THUMBNAIL_SIZE)
     buffer = io.BytesIO()
     crop.save(buffer, "JPEG")
