@@ -19,7 +19,7 @@ People list, not a gallery). `faces.thumbnail` is only ever non-NULL while
 together, so that pairing is never violated.
 
 Every function here that changes "who's tagged in a photo" --
-tag_face/untag_face for one face, delete_individual for however many faces
+tag_face for one face, delete_individual for however many faces
 were tagged to the deleted individual -- also calls
 enrich.enrich_description(photo_id) for each affected photo afterward:
 `photos.description` (see enrich.py's module docstring) is partly composed
@@ -28,8 +28,10 @@ is one of the things that has to invalidate/recompute it, same as a sync
 re-detecting faces does. That call is synchronous, inline, on the same
 request this module is already handling (an LLM call, same as
 POST /api/photos/{id}/chat already makes synchronously) -- and best-effort,
-so a failure there never turns a successful tag/untag/delete into an error
-response.
+so a failure there never turns a successful tag/delete into an error
+response. untag_face is the exception: it only clears the photo's
+description and description embeddings (a cheap SQL write) and leaves
+regenerating them to the next "Refresh Descriptions" run.
 
 Untagging a face that recognition.py *auto*-tagged also records a
 `face_rejections` row (the crop, the wrong match's score and the threshold
@@ -49,7 +51,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import enrich, storage
+from . import embeddings, enrich, storage
 from .config import get_face_match_threshold
 from .database import get_connection
 
@@ -180,9 +182,13 @@ def untag_face(face_id: str) -> bool:
     was manual or recognition.py's auto-match. Returns whether the face
     existed.
 
-    Regenerates photos.description (enrich.py, see this module's
-    docstring) for the face's photo -- `RETURNING photo_id` so that's
-    available without a second query."""
+    Does *not* regenerate photos.description inline -- that is an LLM call
+    plus one embedding call per sentence, which made unmatching take
+    seconds. Instead the photo's description (which named the person) and
+    its description embeddings are cleared, in the same transaction, so
+    nothing stale is shown or searched; "Refresh Descriptions" writes a
+    new one. `RETURNING photo_id` gives the photo without a second
+    query."""
     with get_connection() as conn:
         # An *auto* tag being removed means recognition.py got it wrong:
         # keep the crop and score as a face_rejections row (recognition.py
@@ -203,12 +209,15 @@ def untag_face(face_id: str) -> bool:
             (face_id,),
         )
         row = cursor.fetchone()
+        if row:
+            conn.execute("UPDATE photos SET description = NULL WHERE id = %s", (row["photo_id"],))
+            conn.execute(
+                "DELETE FROM photo_embeddings WHERE photo_id = %s AND source_type = %s",
+                (row["photo_id"], embeddings.SOURCE_DESCRIPTION),
+            )
         conn.commit()
 
-    if not row:
-        return False
-    enrich.enrich_description(row["photo_id"])
-    return True
+    return row is not None
 
 
 def box_iou(a: dict, b: dict) -> float:

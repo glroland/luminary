@@ -399,7 +399,7 @@ cached) is also per-pod, in-memory state — same caveat.
   composes from can change for a photo: `sync.py`'s
   `_run_florence_pipeline` right after a fresh `vlm_description`/face set
   is written (even before anyone is tagged — `individuals` is just empty
-  at that point); `people.py`'s `tag_face`/`untag_face`, since a face's
+  at that point); `people.py`'s `tag_face`, since a face's
   identity changed; `recognition.py`'s auto-tagging, once per *photo* (not
   once per face matched — `enrich_description` already reads every tagged
   individual for a photo in one query) after a "Refresh Faces" run
@@ -718,8 +718,12 @@ cached) is also per-pod, in-memory state — same caveat.
   `DELETE /api/individuals/{id}`/`delete_individual`, both of which clear
   `person_id`/`thumbnail`/`tag_source`/`match_confidence` together.)
 
-  (As of `enrich.py` above, `tag_face`/`untag_face`/`delete_individual` all
-  also call `enrich.enrich_description` for every photo they affect —
+  (As of `enrich.py` above, `tag_face`/`delete_individual` also call
+  `enrich.enrich_description` for every photo they affect; `untag_face` does
+  *not* (an LLM call plus per-sentence embeddings made unmatching take
+  seconds) — it sets that photo's `description` to `NULL` and deletes its
+  description `photo_embeddings` rows in the same transaction, and Refresh
+  Descriptions regenerates it —
   "who's in this photo" changing is one of the facts `photos.description`
   is composed from.)
 

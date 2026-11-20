@@ -158,19 +158,24 @@ def test_untag_face_clears_person_id_and_thumbnail(client, tmp_path, monkeypatch
     assert client.get(f"/api/individuals/{person_id}/faces").json() == {"faces": []}
 
 
-def test_untag_face_triggers_description_enrichment_for_its_photo(client, tmp_path, monkeypatch):
+def test_untag_face_clears_description_without_enriching(client, tmp_path, monkeypatch):
     from app import enrich
+    from app.database import get_connection
 
     photo_id, face = _sync_one_detected_face(client, tmp_path, monkeypatch)
     person_id = client.post("/api/individuals", json={"name": "Ray"}).json()["id"]
     client.post(f"/api/faces/{face['id']}/tag", json={"person_id": person_id})
+    with get_connection() as conn:
+        conn.execute("UPDATE photos SET description = 'Ray at the beach.' WHERE id = %s", (photo_id,))
+        conn.commit()
 
     calls = []
     monkeypatch.setattr(enrich, "enrich_description", lambda pid: calls.append(pid))
 
     client.delete(f"/api/faces/{face['id']}/tag")
 
-    assert calls == [photo_id]
+    assert calls == []
+    assert client.get(f"/api/photos/{photo_id}").json()["description"] is None
 
 
 def test_untag_face_for_unknown_face_returns_404(client):
