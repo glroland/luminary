@@ -128,6 +128,27 @@ describe("ManagementPage", () => {
     expect(onNavigateToPhoto).toHaveBeenCalledWith("photo-1");
   });
 
+  it("shows the source-photo popup after the face has been hovered for 3 seconds", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "fetchIndividualFaces").mockResolvedValue([{ id: "f1", photo_id: "photo-1" }]);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    await waitFor(() => expect(document.querySelector(".management-face-image")).toBeInTheDocument());
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseEnter(document.querySelector(".management-face-image"));
+      await act(() => vi.advanceTimersByTimeAsync(2900));
+      expect(screen.queryByAltText("Source photo for this face")).not.toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(screen.getByAltText("Source photo for this face")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("removes a tag (untags the face) from the accordion", async () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
     vi.spyOn(client, "fetchIndividualFaces").mockResolvedValue([{ id: "f1", photo_id: "photo-1" }]);

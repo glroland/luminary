@@ -27,7 +27,18 @@ import {
 import JobControl from "./JobControl.jsx";
 
 const REFRESH_DONE_DISPLAY_MS = 2000;
-const SOURCE_PREVIEW_DELAY_MS = 5000;
+// How long the pointer rests on an auto-matched face before the source-photo
+// popup appears. Build-time setting (VITE_FACE_PREVIEW_DELAY_MS, in ms), like
+// VITE_API_BASE_URL; falls back to 3s when unset or not a non-negative number.
+const DEFAULT_SOURCE_PREVIEW_DELAY_MS = 3000;
+const configuredDelay = Number(import.meta.env.VITE_FACE_PREVIEW_DELAY_MS);
+const SOURCE_PREVIEW_DELAY_MS =
+  import.meta.env.VITE_FACE_PREVIEW_DELAY_MS !== undefined &&
+  import.meta.env.VITE_FACE_PREVIEW_DELAY_MS !== "" &&
+  Number.isFinite(configuredDelay) &&
+  configuredDelay >= 0
+    ? configuredDelay
+    : DEFAULT_SOURCE_PREVIEW_DELAY_MS;
 
 export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, onNavigateToPhoto, onPurged }) {
   const [individuals, setIndividuals] = useState(null);
