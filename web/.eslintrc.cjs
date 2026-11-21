@@ -10,5 +10,7 @@ module.exports = {
   settings: { react: { version: "detect" } },
   rules: {
     "react/react-in-jsx-scope": "off",
+    // The app is plain JS with no PropTypes (or TypeScript) anywhere.
+    "react/prop-types": "off",
   },
 };

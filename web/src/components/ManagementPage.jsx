@@ -127,7 +127,6 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     // this timer before it fired.
     setTimeout(() => setJustFinished(null), REFRESH_DONE_DISPLAY_MS);
     return undefined;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs]);
 
   function sortByName(list) {
@@ -438,7 +437,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
             />
           </div>
           <p className="management-refresh-description">
-            Rewrites each photo's description from its caption, tagged people, and location --
+            Rewrites each photo&apos;s description from its caption, tagged people, and location --
             useful after tagging or renaming people.
           </p>
         </div>
@@ -766,7 +765,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
           </div>
           <p className="management-refresh-description">
             Re-detects faces in every photo against the current detection settings, and deletes all
-            existing face tags -- manual and automatic -- along with them. You'll need to re-tag
+            existing face tags -- manual and automatic -- along with them. You&apos;ll need to re-tag
             individuals afterward before auto-matching can find anything. This cannot be undone.
           </p>
         </div>
