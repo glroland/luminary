@@ -156,6 +156,8 @@ class TaggedFace(BaseModel):
     # construction -- see people.list_faces_for_individual), so this is
     # never null in practice, unlike FaceBox.tag_source.
     tag_source: Optional[str] = None
+    # Cosine similarity of an auto match (0-1); null for manual tags.
+    match_confidence: Optional[float] = None
 
 
 class TaggedFaceList(BaseModel):

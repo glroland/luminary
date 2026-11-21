@@ -164,7 +164,7 @@ def list_faces_for_individual(person_id: str) -> list[dict]:
     order by "most recently tagged" (see this module's docstring)."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, photo_id, tag_source FROM faces WHERE person_id = %s ORDER BY id", (person_id,)
+            "SELECT id, photo_id, tag_source, match_confidence FROM faces WHERE person_id = %s ORDER BY id", (person_id,)
         ).fetchall()
         return [dict(row) for row in rows]
 

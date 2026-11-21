@@ -603,7 +603,11 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
                             <img src={faceThumbnailUrl(face.id)} alt="" />
                           </button>
                           {face.tag_source === "auto" && (
-                            <span className="management-face-auto-badge">auto</span>
+                            <span className="management-face-auto-badge">
+                              auto
+                              {typeof face.match_confidence === "number" &&
+                                ` - ${Math.round(face.match_confidence * 100)}%`}
+                            </span>
                           )}
                           <button
                             type="button"
