@@ -91,6 +91,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   // to poll: just an in-flight flag (to disable the button/show progress
   // text while the request is out) and an error slot.
   const [duplicatesLoading, setDuplicatesLoading] = useState(false);
+  const [duplicatesMode, setDuplicatesMode] = useState("all");
   const [duplicatesError, setDuplicatesError] = useState(null);
 
   // Tag catalog (tags.py/routers/tags.py) -- a separate full-CRUD list
@@ -222,7 +223,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   function handleIdentifyDuplicates() {
     setDuplicatesLoading(true);
     setDuplicatesError(null);
-    downloadDuplicatesCsv()
+    downloadDuplicatesCsv(duplicatesMode)
       .catch((err) => setDuplicatesError(err.message))
       .finally(() => setDuplicatesLoading(false));
   }
@@ -465,6 +466,16 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
+            <select
+              aria-label="Duplicate type"
+              value={duplicatesMode}
+              onChange={(event) => setDuplicatesMode(event.target.value)}
+              disabled={duplicatesLoading}
+            >
+              <option value="all">All duplicates</option>
+              <option value="exact">Exact copies only</option>
+              <option value="similar">Resized / re-encoded only</option>
+            </select>
             <button
               type="button"
               className="refresh-button"
@@ -475,9 +486,10 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
             </button>
           </div>
           <p className="management-refresh-description">
-            Downloads a CSV of byte-identical photos, found by comparing checksums -- one row per
-            duplicate file, with the original it duplicates in the first column. Run the sync above
-            first if any photos have not been checksummed yet.
+            Downloads a CSV of duplicate photos: byte-identical files, plus the same picture
+            resized, re-encoded or saved in another format. One row per duplicate file, with the
+            original (the highest-resolution copy) in the first column, then how it matches. Run the
+            sync above first if any photos have not been indexed yet.
           </p>
         </div>
       </div>

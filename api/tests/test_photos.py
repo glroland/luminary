@@ -46,7 +46,7 @@ def test_duplicate_photos_csv_lists_each_duplicate_against_the_earliest_original
     write_image(photos_dir / "unique.jpg", size=(20, 20), color="blue")
     sync_and_wait(client)
 
-    response = client.get("/api/photos/duplicates/csv")
+    response = client.get("/api/photos/duplicates/csv?mode=exact")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
@@ -61,7 +61,7 @@ def test_duplicate_photos_csv_has_only_a_header_when_there_are_no_duplicates(cli
     write_image(tmp_path / "photos" / "only.jpg")
     sync_and_wait(client)
 
-    response = client.get("/api/photos/duplicates/csv")
+    response = client.get("/api/photos/duplicates/csv?mode=exact")
 
     assert response.status_code == 200
     assert response.text.strip().splitlines() == ['"Original Image","Duplicate Image"']
@@ -222,3 +222,36 @@ def test_search_photos_returns_results_ordered_by_similarity(client, monkeypatch
     results = response.json()["results"]
     assert [r["id"] for r in results] == ["photo-identical"]
     assert results[0]["similarity"] == pytest.approx(1.0, abs=1e-3)
+
+
+def test_duplicate_photos_csv_similar_mode_has_extended_columns(client, tmp_path):
+    from PIL import Image, ImageDraw
+
+    def scene(size):
+        img = Image.new("RGB", size, (30, 60, 120))
+        d = ImageDraw.Draw(img)
+        w, h = size
+        d.rectangle([w * 0.1, h * 0.1, w * 0.5, h * 0.6], fill=(220, 200, 40))
+        d.ellipse([w * 0.5, h * 0.4, w * 0.9, h * 0.9], fill=(200, 30, 30))
+        return img
+
+    photos_dir = tmp_path / "photos"
+    photos_dir.mkdir(exist_ok=True)
+    scene((800, 600)).save(photos_dir / "big.jpg", "JPEG")
+    scene((200, 150)).save(photos_dir / "small.png", "PNG")
+    sync_and_wait(client)
+
+    response = client.get("/api/photos/duplicates/csv?mode=similar")
+
+    assert response.status_code == 200
+    rows = response.text.strip().splitlines()
+    assert rows[0] == (
+        '"Original Image","Duplicate Image","Match Type","Distance","Original Size","Duplicate Size"'
+    )
+    assert len(rows) == 2
+    assert rows[1].startswith('"big.jpg","small.png","resize",')
+    assert rows[1].endswith('"800x600","200x150"')
+
+
+def test_duplicate_photos_csv_rejects_unknown_mode(client):
+    assert client.get("/api/photos/duplicates/csv?mode=bogus").status_code == 422

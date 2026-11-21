@@ -96,6 +96,14 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL
 -- UPDATE here, since computing it requires reading the file itself.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS checksum TEXT;
 
+-- 64-bit perceptual hash (perceptual.dhash) of the stored thumbnail, a signed
+-- BIGINT, for finding resized/re-encoded/reformatted duplicates -- see
+-- docs/duplicate-detection.md. NULL for a photo with no thumbnail or a flat
+-- image; phash_done records that hashing was attempted for the current
+-- thumbnail. Backfilled by database.backfill_data() (needs Pillow, not SQL).
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS phash BIGINT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS phash_done BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- A face a user untagged after recognition.py auto-matched it to
 -- `person_id` ("this is NOT that person"). Unlike a faces row it survives
 -- re-detection (faces get fresh ids), because it carries the crop itself:

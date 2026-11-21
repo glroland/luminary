@@ -288,8 +288,10 @@ async function downloadCsv(path, filename) {
   }
 }
 
-export async function downloadDuplicatesCsv() {
-  await downloadCsv("/photos/duplicates/csv", "duplicate_photos.csv");
+// mode: "all" (default), "exact" (byte-identical only) or "similar"
+// (resized/re-encoded/reformatted only) -- see GET /api/photos/duplicates/csv.
+export async function downloadDuplicatesCsv(mode = "all") {
+  await downloadCsv(`/photos/duplicates/csv?mode=${encodeURIComponent(mode)}`, "duplicate_photos.csv");
 }
 
 // The per-tag "List" button on the management page: every path+filename

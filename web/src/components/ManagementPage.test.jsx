@@ -439,10 +439,23 @@ describe("ManagementPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /identify duplicates/i }));
 
-    expect(downloadMock).toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledWith("all");
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /identify duplicates/i })).not.toBeDisabled()
     );
+  });
+
+  it("passes the chosen duplicate type to the download", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    const downloadMock = vi.spyOn(client, "downloadDuplicatesCsv").mockResolvedValue();
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Duplicate type"), { target: { value: "exact" } });
+    fireEvent.click(screen.getByRole("button", { name: /identify duplicates/i }));
+
+    expect(downloadMock).toHaveBeenCalledWith("exact");
   });
 
   it("shows an error if the duplicates CSV download fails", async () => {

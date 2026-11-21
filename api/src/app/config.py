@@ -318,3 +318,22 @@ def get_face_reject_threshold() -> float:
     correct value; 0.7 is a starting point -- recognition.py logs each veto
     and records the score on the rejection row (last_vetoed_score)."""
     return float(os.environ.get("LUMINARY_FACE_REJECT_THRESHOLD", "0.7"))
+
+
+def get_duplicate_max_distance() -> int:
+    """Largest Hamming distance (of 64 bits) between two photos' perceptual
+    hashes (perceptual.dhash) for storage.find_similar_photos to treat them
+    as candidate duplicates. The same picture resized/re-encoded usually
+    lands at 0-4 and unrelated photos around 32, but 6 is a starting point,
+    not a value verified against any real library -- tune it from the
+    distance histogram the duplicate search logs at INFO. Clamped to 0-15
+    (the banded candidate search needs distance + 1 bands)."""
+    return max(0, min(15, int(os.environ.get("LUMINARY_DUPLICATE_MAX_DISTANCE", "6"))))
+
+
+def get_duplicate_min_correlation() -> float:
+    """Minimum normalised cross-correlation between two candidate
+    duplicates' stored thumbnails (perceptual.correlation) to confirm a
+    perceptual-hash match. Like LUMINARY_DUPLICATE_MAX_DISTANCE, a starting
+    point rather than a verified value."""
+    return float(os.environ.get("LUMINARY_DUPLICATE_MIN_CORRELATION", "0.95"))

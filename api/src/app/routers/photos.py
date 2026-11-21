@@ -3,7 +3,7 @@ import io
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
 from .. import chat, embeddings, storage, tags
@@ -40,22 +40,42 @@ def search_photos(q: str, threshold: float = 0.5) -> dict:
 
 
 @router.get("/photos/duplicates/csv")
-def get_duplicate_photos_csv() -> Response:
-    """Backs the management page's "Identify Duplicates" button. Returns a
-    CSV listing every duplicate file found by storage.find_duplicate_photos
-    (byte-identical via `photos.checksum`) -- one row per duplicate, never
-    for the original it's a duplicate of. `filename` already holds the
-    path relative to the photos root (e.g. "vacation/2019/beach.jpg"), so
-    no separate "path" column is needed for either side. Registered before
-    "/photos/{photo_id}" below, same collision-avoidance reasoning as
-    "/photos/search" above -- both are nested under "/photos", and a
-    literal path registered after a dynamic "{photo_id}" segment would
+def get_duplicate_photos_csv(mode: str = Query("all", pattern="^(exact|similar|all)$")) -> Response:
+    """Backs the management page's "Identify Duplicates" button. One row per
+    duplicate file, never for the original it's a duplicate of. `filename`
+    already holds the path relative to the photos root, so no separate
+    "path" column is needed for either side.
+
+    `mode=all` (the default) reports both kinds; `similar` only the
+    resized/re-encoded/reformatted ones (via the perceptual hash --
+    docs/duplicate-detection.md); both add match type, hash distance and
+    both pixel sizes. `exact` is the original byte-identical check via
+    `photos.checksum`, with just the two columns. Registered before "/photos/{photo_id}"
+    below, same collision-avoidance reasoning as "/photos/search" above --
+    a literal path registered after a dynamic "{photo_id}" segment would
     never be reached."""
     buffer = io.StringIO()
     writer = csv.writer(buffer, quoting=csv.QUOTE_ALL)
-    writer.writerow(["Original Image", "Duplicate Image"])
-    for row in storage.find_duplicate_photos():
-        writer.writerow([row["original"], row["duplicate"]])
+    rows = storage.find_duplicate_pairs(mode)
+    if mode == "exact":
+        writer.writerow(["Original Image", "Duplicate Image"])
+        for row in rows:
+            writer.writerow([row["original"], row["duplicate"]])
+    else:
+        writer.writerow(
+            ["Original Image", "Duplicate Image", "Match Type", "Distance", "Original Size", "Duplicate Size"]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    row["original"],
+                    row["duplicate"],
+                    row["match_type"],
+                    row["distance"],
+                    row["original_size"],
+                    row["duplicate_size"],
+                ]
+            )
     return Response(
         content=buffer.getvalue(),
         media_type="text/csv",

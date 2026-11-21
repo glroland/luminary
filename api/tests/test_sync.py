@@ -822,3 +822,55 @@ def test_sync_retries_a_transient_smb_credit_error(client, tmp_path, monkeypatch
     assert status["failed"] == 0
     assert status["inserted"] == 1
     assert calls["count"] >= 3
+
+
+def _phash_row(photo_id):
+    from app.database import get_connection
+
+    with get_connection() as conn:
+        return conn.execute("SELECT phash, phash_done FROM photos WHERE id = %s", (photo_id,)).fetchone()
+
+
+def test_sync_stores_perceptual_hash_and_resize_matches(client, tmp_path):
+    from PIL import ImageDraw
+
+    from app import perceptual
+
+    def scene(size):
+        img = Image.new("RGB", size, (30, 60, 120))
+        d = ImageDraw.Draw(img)
+        w, h = size
+        d.rectangle([w * 0.1, h * 0.1, w * 0.5, h * 0.6], fill=(220, 200, 40))
+        d.ellipse([w * 0.5, h * 0.4, w * 0.9, h * 0.9], fill=(200, 30, 30))
+        return img
+
+    (tmp_path / "photos").mkdir(exist_ok=True)
+    scene((800, 600)).save(tmp_path / "photos" / "big.jpg", "JPEG")
+    scene((200, 150)).save(tmp_path / "photos" / "small.png", "PNG")
+    sync_and_wait(client)
+
+    by_name = {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+    big, small = _phash_row(by_name["big.jpg"]), _phash_row(by_name["small.png"])
+    assert big["phash_done"] and small["phash_done"]
+    assert perceptual.hamming(big["phash"], small["phash"]) <= 6
+
+
+def test_flat_image_is_marked_done_without_a_hash(client, tmp_path):
+    write_image(tmp_path / "photos" / "flat.jpg", size=(50, 50), color="red")
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    row = _phash_row(photo_id)
+    assert row["phash"] is None and row["phash_done"] is True
+
+
+def test_backfill_hashes_rows_with_a_thumbnail(client, tmp_path):
+    from app import database
+
+    write_image(tmp_path / "photos" / "a.jpg", size=(60, 40), color="blue")
+    sync_and_wait(client)
+    photo_id = client.get("/api/photos").json()["photos"][0]["id"]
+    with database.get_connection() as conn:
+        conn.execute("UPDATE photos SET phash = NULL, phash_done = FALSE WHERE id = %s", (photo_id,))
+        conn.commit()
+    database.backfill_data()
+    assert _phash_row(photo_id)["phash_done"] is True

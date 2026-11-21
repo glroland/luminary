@@ -151,6 +151,16 @@ def init_db() -> None:
         # requires reading the file itself.
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS checksum TEXT")
 
+        # 64-bit perceptual hash (perceptual.dhash) of the stored thumbnail,
+        # as a signed BIGINT, for finding resized/re-encoded/reformatted
+        # duplicates -- see docs/duplicate-detection.md. NULL when the photo
+        # has no thumbnail or is a flat image; `phash_done` says whether
+        # hashing has been attempted for the current thumbnail, so a flat
+        # image isn't retried on every startup. Row-level backfill lives in
+        # backfill_data() (it needs Pillow, not just SQL).
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS phash BIGINT")
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS phash_done BOOLEAN NOT NULL DEFAULT FALSE")
+
         # Catalog of named individuals faces can be manually tagged as --
         # see people.py / routers/individuals.py.
         conn.execute(
@@ -364,6 +374,34 @@ def backfill_data() -> None:
         "SELECT id FROM photos WHERE NOT face_detection_done AND EXISTS "
         "(SELECT 1 FROM faces WHERE faces.photo_id = photos.id) LIMIT %s)",
     )
+    _backfill_phashes()
+
+
+def _backfill_phashes() -> None:
+    """Hashes every photo that has a thumbnail but hasn't been through
+    perceptual.dhash yet. Reads only the stored thumbnail (no backend I/O),
+    commits per batch like _backfill_in_batches."""
+    from . import perceptual  # lazy: keeps database.py importable on its own
+
+    total = 0
+    while True:
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, thumbnail FROM photos WHERE NOT phash_done AND thumbnail IS NOT NULL LIMIT %s",
+                (BACKFILL_BATCH_SIZE,),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    "UPDATE photos SET phash = %s, phash_done = TRUE WHERE id = %s",
+                    (perceptual.dhash_from_bytes(bytes(row["thumbnail"])), row["id"]),
+                )
+            conn.commit()
+        total += len(rows)
+        if len(rows) < BACKFILL_BATCH_SIZE:
+            break
+        logger.info("Backfilling photos.phash: %d rows so far", total)
+    if total:
+        logger.info("Backfilled photos.phash for %d rows", total)
 
 
 def _backfill_in_batches(label: str, statement: str) -> None:

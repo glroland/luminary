@@ -12,7 +12,7 @@ import psycopg
 from PIL import Image, ImageOps
 from PIL.ExifTags import IFD
 
-from . import config, embeddings
+from . import config, embeddings, perceptual
 from . import rerank as rerank_module
 from .config import get_photos_password, get_photos_uri, get_photos_username
 from .database import get_connection
@@ -658,6 +658,194 @@ def find_duplicate_photos() -> list[dict]:
         original, *copies = row["filenames"]
         duplicates.extend({"original": original, "duplicate": copy} for copy in copies)
     return duplicates
+
+
+# Preference when choosing which copy is "the original": a camera/lossless
+# format over a re-saved JPEG over everything else.
+_FORMAT_RANK = {"image/png": 0, "image/tiff": 0, "image/heic": 0, "image/heif": 0, "image/jpeg": 1}
+
+# Same dimensions, same format, different bytes: could be a re-encode or two
+# frames of a burst, so it needs a much closer pixel match than a resize does.
+_REENCODE_MIN_CORRELATION = 0.99
+
+DUPLICATE_MODES = ("exact", "similar", "all")
+
+
+def _quality_key(row: dict):
+    """Sort key, best copy first: most pixels, then preferred format, then
+    larger file, then earliest date, then filename (deterministic)."""
+    pixels = (row["width"] or 0) * (row["height"] or 0)
+    created = row["created_at"]
+    return (
+        -pixels,
+        _FORMAT_RANK.get(row["content_type"], 2),
+        -(row["size_bytes"] or 0),
+        created is None,
+        created or 0,
+        row["filename"],
+    )
+
+
+def _size_label(row: dict) -> str:
+    return f"{row['width']}x{row['height']}" if row["width"] and row["height"] else ""
+
+
+def _candidate_pairs(rows: list[dict], max_distance: int) -> dict[tuple[int, int], int]:
+    """Index pairs (i < j) of rows whose phash is within `max_distance` bits,
+    mapped to their distance. Pigeonhole banding: split the 64 bits into
+    max_distance + 1 bands; two hashes within that distance must agree
+    exactly on at least one band, so only rows sharing a band value are
+    compared -- roughly linear in the library size instead of N^2."""
+    bands = max_distance + 1
+    bounds = [64 * k // bands for k in range(bands + 1)]
+    hashes = [
+        perceptual.to_unsigned(r["phash"]) if r["phash"] is not None else None for r in rows
+    ]
+    pairs: dict[tuple[int, int], int] = {}
+    for k in range(bands):
+        shift, width = bounds[k], bounds[k + 1] - bounds[k]
+        mask = (1 << width) - 1
+        buckets: dict[int, list[int]] = {}
+        for index, value in enumerate(hashes):
+            if value is not None:
+                buckets.setdefault((value >> shift) & mask, []).append(index)
+        for members in buckets.values():
+            for a in range(len(members)):
+                i = members[a]
+                for b in range(a + 1, len(members)):
+                    j = members[b]
+                    if (i, j) in pairs:
+                        continue
+                    distance = (hashes[i] ^ hashes[j]).bit_count()
+                    if distance <= max_distance:
+                        pairs[(i, j)] = distance
+    return pairs
+
+
+def _match_type(original: dict, copy: dict) -> str:
+    if original["checksum"] and original["checksum"] == copy["checksum"]:
+        return "exact"
+    same_dims = (
+        abs((original["width"] or 0) - (copy["width"] or 0)) <= 1
+        and abs((original["height"] or 0) - (copy["height"] or 0)) <= 1
+    )
+    if not same_dims:
+        return "resize"
+    return "reformat" if original["content_type"] != copy["content_type"] else "reencode"
+
+
+def _same_aspect(a: dict, b: dict) -> bool:
+    if not (a["width"] and a["height"] and b["width"] and b["height"]):
+        return True  # unknown dimensions: don't reject on them
+    ratio_a, ratio_b = a["width"] / a["height"], b["width"] / b["height"]
+    return abs(ratio_a - ratio_b) / ratio_a <= 0.02
+
+
+def find_similar_photos(
+    max_distance: Optional[int] = None, min_correlation: Optional[float] = None
+) -> list[dict]:
+    """Duplicates that are not necessarily byte-identical: the same picture
+    resized, re-encoded or saved in another format (docs/duplicate-
+    detection.md). Candidates are byte-identical files (same `checksum`) plus
+    photos whose `phash` is within `max_distance` bits; a non-identical pair
+    must then also have the same aspect ratio and a thumbnail pixel
+    correlation of at least `min_correlation` (stricter for a same-size,
+    same-format pair, which may be two burst frames rather than one picture).
+
+    Grouping never chains: photos are walked best-copy-first (_quality_key);
+    each one not already claimed is an "original" and claims every unclaimed
+    photo that matches *it* directly. Rows without a phash can still be
+    reported as exact duplicates via their checksum.
+
+    Returns dicts with original/duplicate filenames, `match_type`
+    (exact/reformat/resize/reencode), `distance` and both pixel sizes."""
+    if max_distance is None:
+        max_distance = config.get_duplicate_max_distance()
+    if min_correlation is None:
+        min_correlation = config.get_duplicate_min_correlation()
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, filename, content_type, size_bytes, width, height, created_at, checksum, phash
+            FROM photos
+            WHERE checksum IS NOT NULL OR phash IS NOT NULL
+            """
+        ).fetchall()
+    rows = sorted((dict(r) for r in rows), key=_quality_key)  # best copy first
+
+    # neighbours[i] = {j: distance}, i < j in quality order (j is the lesser copy)
+    neighbours: dict[int, dict[int, int]] = {}
+    by_checksum: dict[str, list[int]] = {}
+    for index, row in enumerate(rows):
+        if row["checksum"]:
+            by_checksum.setdefault(row["checksum"], []).append(index)
+    for members in by_checksum.values():
+        for j in members[1:]:
+            neighbours.setdefault(members[0], {})[j] = 0
+            for i in members[1:]:
+                if i < j:
+                    neighbours.setdefault(i, {})[j] = 0
+    histogram: dict[int, int] = {}
+    for (i, j), distance in _candidate_pairs(rows, max_distance).items():
+        histogram[distance] = histogram.get(distance, 0) + 1
+        neighbours.setdefault(i, {}).setdefault(j, distance)
+    logger.info(
+        "Duplicate search: %d candidate pairs by hash distance %s",
+        sum(histogram.values()),
+        dict(sorted(histogram.items())),
+    )
+
+    claimed: set[int] = set()
+    results: list[dict] = []
+    for i, row in enumerate(rows):
+        if i in claimed or i not in neighbours:
+            continue
+        matches = [(j, d) for j, d in sorted(neighbours[i].items()) if j not in claimed]
+        to_verify = [
+            j for j, d in matches if _match_type(row, rows[j]) != "exact" and _same_aspect(row, rows[j])
+        ]
+        thumbnails: dict[str, bytes] = {}
+        if to_verify:
+            ids = [row["id"]] + [rows[j]["id"] for j in to_verify]
+            with get_connection() as conn:
+                for t in conn.execute("SELECT id, thumbnail FROM photos WHERE id = ANY(%s)", (ids,)).fetchall():
+                    if t["thumbnail"] is not None:
+                        thumbnails[t["id"]] = bytes(t["thumbnail"])
+        for j, distance in matches:
+            copy = rows[j]
+            match_type = _match_type(row, copy)
+            if match_type != "exact":
+                if not _same_aspect(row, copy):
+                    continue
+                a, b = thumbnails.get(row["id"]), thumbnails.get(copy["id"])
+                if a is None or b is None:
+                    continue
+                needed = _REENCODE_MIN_CORRELATION if match_type == "reencode" else min_correlation
+                if perceptual.correlation(a, b) < needed:
+                    continue
+            claimed.add(j)
+            results.append(
+                {
+                    "original": row["filename"],
+                    "duplicate": copy["filename"],
+                    "match_type": match_type,
+                    "distance": distance,
+                    "original_size": _size_label(row),
+                    "duplicate_size": _size_label(copy),
+                }
+            )
+    return results
+
+
+def find_duplicate_pairs(mode: str = "exact") -> list[dict]:
+    """`exact`: byte-identical only (find_duplicate_photos, the original
+    behaviour). `similar`: only resized/re-encoded/reformatted matches.
+    `all`: both."""
+    if mode == "exact":
+        return find_duplicate_photos()
+    pairs = find_similar_photos()
+    return pairs if mode == "all" else [p for p in pairs if p["match_type"] != "exact"]
 
 
 def get_faces(photo_id: str) -> list[dict]:

@@ -77,7 +77,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, enrich, face_detection, geocode, jobs, recognition, storage
+from . import chat, enrich, face_detection, geocode, jobs, perceptual, recognition, storage
 from .config import get_max_concurrency
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
@@ -352,6 +352,8 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             description=None,
             face_detection_done=False,
             checksum=None,
+            phash=None,
+            phash_done=False,
         )
 
     if needs_checksum:
@@ -407,6 +409,10 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
                         buffer = io.BytesIO()
                         thumbnail.save(buffer, "JPEG")
                         fields["thumbnail"] = buffer.getvalue()
+                        # Hashed from the stored JPEG bytes, exactly what the
+                        # startup backfill reads, so both paths agree.
+                        fields["phash"] = perceptual.dhash_from_bytes(fields["thumbnail"])
+                        fields["phash_done"] = True
         return rgb
 
     rgb_image = None
