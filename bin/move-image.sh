@@ -129,6 +129,7 @@ def main(source_url, target_url, rel):
         dbg("  result: target is free")
 
     # 1. copy to a temp name on the target
+    stage = "copy"
     try:
         parent = dst.rsplit("/", 1)[0]
         dbg(f"step 1: creating target directory {parent}")
@@ -153,10 +154,13 @@ def main(source_url, target_url, rel):
 
         # 3. move into place, 4. verify the final file
         if dst_fs.exists(dst):  # only reachable with --force
+            stage = "replacing the existing target"
             dbg(f"step 3: replacing existing target {dst}")
-            dst_fs.rm(dst)
+            dst_fs.rm_file(dst)  # rm_file, not rm: rm() glob-expands [ ] * ?
+        stage = "moving the copy into place"
         dbg(f"step 3: renaming {tmp} -> {dst}")
         dst_fs.mv(tmp, dst)
+        stage = "verifying the final file"
         final_size = dst_fs.info(dst)["size"]
         dbg(f"step 4: verifying final file size: {final_size} (expected {src_size})")
         if final_size != src_size:
@@ -168,19 +172,20 @@ def main(source_url, target_url, rel):
             try:
                 if dst_fs.exists(leftover):
                     dbg(f"cleanup: removing temp file {leftover}")
-                    dst_fs.rm(leftover)
+                    dst_fs.rm_file(leftover)
                     dbg("  result: removed")
                 else:
                     dbg("cleanup: no temp file to remove")
             except Exception as cexc:
                 dbg(f"  result: cleanup failed ({cexc})")
         dbg("source was not touched")
-        fail(f"copy failed, source left untouched: {exc}")
+        fail(f"failed while {stage if stage != 'copy' else 'copying'}; "
+             f"source left untouched: {exc}")
 
     # 5. copy is confirmed; now (and only now) delete the original
     dbg(f"step 5: deleting source {src}")
     try:
-        src_fs.rm(src)
+        src_fs.rm_file(src)  # rm_file, not rm: rm() glob-expands [ ] * ?
         dbg("  result: source deleted")
     except Exception as exc:
         dbg(f"  result: FAILED to delete source ({type(exc).__name__}: {exc})")
