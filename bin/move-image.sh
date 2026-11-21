@@ -3,7 +3,7 @@
 # Move one image from one repo to another, copy-then-delete.
 #
 # Usage: bin/move-image.sh <source-repo-url> <target-repo-url> <relative-path>
-#                          [--force] [--debug]
+#                          [--force] [--dry-run] [--debug]
 #   e.g. bin/move-image.sh smb://host/images smb://host/backup vacation/2019/beach.jpg
 #
 # Transactional in the sense that the source is only deleted after the copy
@@ -26,6 +26,10 @@
 # LUMINARY_PHOTOS_USERNAME / LUMINARY_PHOTOS_PASSWORD (never put them in the
 # URL). Uses the project venv's Python (target/venv; run `make install`).
 #
+# --dry-run performs only the read-only checks (source exists, target
+# free or --force given) and prints what would be copied and deleted. It
+# writes and deletes nothing, on either repo.
+#
 # NOTE: this script deletes from the *source* repo. It is a standalone
 # operator tool; the Luminary API itself never writes to or deletes from its
 # photos backend, and nothing here changes that. Run `POST /api/sync`
@@ -35,19 +39,21 @@ set -euo pipefail
 
 DEBUG=0
 FORCE=0
+DRY_RUN=0
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --debug) DEBUG=1 ;;
         --force) FORCE=1 ;;
+        --dry-run) DRY_RUN=1 ;;
         *) ARGS+=("$arg") ;;
     esac
 done
 if [ "${#ARGS[@]}" -ne 3 ]; then
-    echo "usage: $0 <source-repo-url> <target-repo-url> <relative-path> [--force] [--debug]" >&2
+    echo "usage: $0 <source-repo-url> <target-repo-url> <relative-path> [--force] [--dry-run] [--debug]" >&2
     exit 2
 fi
-export MOVE_IMAGE_DEBUG="$DEBUG" MOVE_IMAGE_FORCE="$FORCE"
+export MOVE_IMAGE_DEBUG="$DEBUG" MOVE_IMAGE_FORCE="$FORCE" MOVE_IMAGE_DRY_RUN="$DRY_RUN"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${LUMINARY_PYTHON:-$ROOT/target/venv/bin/python}"
@@ -68,6 +74,7 @@ CHUNK = 1024 * 1024
 USERNAME_PASSWORD_PROTOCOLS = {"smb"}
 DEBUG = os.environ.get("MOVE_IMAGE_DEBUG") == "1"
 FORCE = os.environ.get("MOVE_IMAGE_FORCE") == "1"
+DRY_RUN = os.environ.get("MOVE_IMAGE_DRY_RUN") == "1"
 
 
 def dbg(msg):
@@ -127,6 +134,12 @@ def main(source_url, target_url, rel):
         dbg("  result: target exists, --force given; will replace after verified copy")
     else:
         dbg("  result: target is free")
+
+    if DRY_RUN:
+        replace = " (replacing existing target)" if dst_fs.exists(dst) else ""
+        print(f"dry run: would move {source_url}/{rel} -> "
+              f"{target_url}/{rel} ({src_size} bytes){replace}")
+        return
 
     # 1. copy to a temp name on the target
     stage = "copy"
