@@ -14,6 +14,7 @@ import {
   fetchIndividuals,
   fetchTags,
   individualThumbnailUrl,
+  originalUrl,
   purgeDatabase,
   refreshDescriptions,
   refreshFaces,
@@ -26,9 +27,39 @@ import {
 import JobControl from "./JobControl.jsx";
 
 const REFRESH_DONE_DISPLAY_MS = 2000;
+const SOURCE_PREVIEW_DELAY_MS = 5000;
 
 export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, onNavigateToPhoto, onPurged }) {
   const [individuals, setIndividuals] = useState(null);
+  // Photo a hovered auto-matched face came from, shown in a popup after the
+  // pointer rests on the face for SOURCE_PREVIEW_DELAY_MS.
+  const [previewPhotoId, setPreviewPhotoId] = useState(null);
+  const previewTimer = useRef(null);
+
+  function startPreviewTimer(photoId) {
+    clearTimeout(previewTimer.current);
+    previewTimer.current = setTimeout(() => setPreviewPhotoId(photoId), SOURCE_PREVIEW_DELAY_MS);
+  }
+
+  function cancelPreviewTimer() {
+    clearTimeout(previewTimer.current);
+  }
+
+  useEffect(() => () => clearTimeout(previewTimer.current), []);
+
+  useEffect(() => {
+    if (previewPhotoId === null) return undefined;
+    const close = () => setPreviewPhotoId(null);
+    const onKey = (event) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", close);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", close);
+    };
+  }, [previewPhotoId]);
   const [pageError, setPageError] = useState(null);
   const [newName, setNewName] = useState("");
   const [addError, setAddError] = useState(null);
@@ -557,7 +588,12 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
                       <p className="empty-state">No faces tagged to this person yet.</p>
                     ) : (
                       faces.map((face) => (
-                        <div key={face.id} className="management-face">
+                        <div
+                          key={face.id}
+                          className="management-face"
+                          onMouseEnter={() => startPreviewTimer(face.photo_id)}
+                          onMouseLeave={cancelPreviewTimer}
+                        >
                           <button
                             type="button"
                             className="management-face-image"
@@ -589,7 +625,12 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
                         </p>
                         <div className="management-rejections-faces">
                           {rejectionsByIndividual[individual.id].map((rejection) => (
-                            <div key={rejection.id} className="management-face">
+                            <div
+                              key={rejection.id}
+                              className="management-face"
+                              onMouseEnter={() => startPreviewTimer(rejection.photo_id)}
+                              onMouseLeave={cancelPreviewTimer}
+                            >
                               <button
                                 type="button"
                                 className="management-face-image"
@@ -740,6 +781,11 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
           </p>
         )}
       </div>
+      {previewPhotoId !== null && (
+        <div className="management-source-preview" role="dialog" aria-label="Source photo">
+          <img src={originalUrl(previewPhotoId)} alt="Source photo for this face" />
+        </div>
+      )}
     </div>
   );
 }
