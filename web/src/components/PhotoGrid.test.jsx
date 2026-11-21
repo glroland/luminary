@@ -35,6 +35,94 @@ describe("PhotoGrid", () => {
     vi.clearAllMocks();
   });
 
+  describe("multi-selection", () => {
+    const THREE = [
+      { id: "1", filename: "a.jpg" },
+      { id: "2", filename: "b.jpg" },
+      { id: "3", filename: "c.jpg" },
+    ];
+    const card = (name) => screen.getByAltText(name).closest(".photo-card");
+    const selectedNames = () =>
+      Array.from(document.querySelectorAll(".photo-card-selected img")).map((img) => img.alt);
+
+    it("ctrl-click toggles photos without opening them", () => {
+      const onSelect = vi.fn();
+      render(<PhotoGrid photos={THREE} onSelect={onSelect} />);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      fireEvent.click(screen.getByAltText("c.jpg"), { metaKey: true });
+      expect(selectedNames()).toEqual(["a.jpg", "c.jpg"]);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      expect(selectedNames()).toEqual(["c.jpg"]);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("shift-click selects a range, and a plain click clears it and opens the photo", () => {
+      const onSelect = vi.fn();
+      render(<PhotoGrid photos={THREE} onSelect={onSelect} />);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      fireEvent.click(screen.getByAltText("c.jpg"), { shiftKey: true });
+      expect(selectedNames()).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
+      fireEvent.click(screen.getByAltText("b.jpg"));
+      expect(selectedNames()).toEqual([]);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("moves and extends the selection with the arrow keys, Escape clears it", () => {
+      render(<PhotoGrid photos={THREE} onSelect={() => {}} />);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      fireEvent.keyDown(window, { key: "ArrowRight", shiftKey: true });
+      fireEvent.keyDown(window, { key: "ArrowRight", shiftKey: true });
+      expect(selectedNames()).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
+      fireEvent.keyDown(window, { key: "ArrowLeft" });
+      expect(selectedNames()).toEqual(["b.jpg"]);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(selectedNames()).toEqual([]);
+    });
+
+    it("ignores the arrow keys when keysEnabled is false", () => {
+      const { rerender } = render(<PhotoGrid photos={THREE} onSelect={() => {}} />);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      rerender(<PhotoGrid photos={THREE} onSelect={() => {}} keysEnabled={false} />);
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      expect(selectedNames()).toEqual(["a.jpg"]);
+    });
+
+    it("tags every selected photo, and untags them all once they all share the tag", async () => {
+      client.fetchPhotoTags.mockImplementation(async (id) =>
+        id === "1" ? [{ id: "tag-1", name: "Vacation" }] : []
+      );
+      render(<PhotoGrid photos={THREE} onSelect={() => {}} />);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      fireEvent.click(screen.getByAltText("b.jpg"), { ctrlKey: true });
+      rightClick(card("b.jpg"));
+      expect(await screen.findByText("2 photos selected")).toBeInTheDocument();
+
+      // Only one of the two has it: partial, so clicking adds it to the other.
+      const vacation = await screen.findByText("Vacation");
+      await waitFor(() => expect(vacation.closest("[aria-checked]")).toHaveAttribute("aria-checked", "mixed"));
+      fireEvent.click(vacation);
+      await waitFor(() => expect(client.tagPhoto).toHaveBeenCalledTimes(1));
+      expect(client.tagPhoto).toHaveBeenCalledWith("2", "tag-1");
+      await waitFor(() => expect(vacation.closest("[aria-checked]")).toHaveAttribute("aria-checked", "true"));
+
+      // Now both have it: clicking removes it from both.
+      fireEvent.click(vacation);
+      await waitFor(() => expect(client.untagPhoto).toHaveBeenCalledTimes(2));
+      expect(client.untagPhoto).toHaveBeenCalledWith("1", "tag-1");
+      expect(client.untagPhoto).toHaveBeenCalledWith("2", "tag-1");
+    });
+
+    it("right-clicking an unselected photo acts on just that photo", async () => {
+      render(<PhotoGrid photos={THREE} onSelect={() => {}} />);
+      fireEvent.click(screen.getByAltText("a.jpg"), { ctrlKey: true });
+      rightClick(card("c.jpg"));
+      fireEvent.click(await screen.findByText("Vacation"));
+      await waitFor(() => expect(client.tagPhoto).toHaveBeenCalledWith("3", "tag-1"));
+      expect(client.tagPhoto).toHaveBeenCalledTimes(1);
+      expect(selectedNames()).toEqual([]);
+    });
+  });
+
   it("shows the empty message when there are no photos", () => {
     render(<PhotoGrid photos={[]} onSelect={() => {}} emptyMessage="Nothing here." />);
     expect(screen.getByText("Nothing here.")).toBeInTheDocument();

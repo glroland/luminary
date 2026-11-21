@@ -616,6 +616,7 @@ export default function App() {
             groupBy={groupBy}
             onToggleSidebar={handleToggleSidebar}
             sidebarOpen={sidebarOpen}
+            keysEnabled={!selectedPhoto}
             onSelect={handleSelectPhoto}
             emptyMessage={
               searchResults === null

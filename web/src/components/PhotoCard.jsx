@@ -29,7 +29,7 @@ function formatDate(createdAt) {
 // drives the fade-in and the end of the shimmer placeholder. The ref
 // callback covers a thumbnail already complete from cache by the time
 // React attaches onLoad.
-export default function PhotoCard({ photo, onSelect, onContextMenu }) {
+export default function PhotoCard({ photo, onSelect, onContextMenu, selected = false }) {
   const [loaded, setLoaded] = useState(false);
   const date = formatDate(photo.created_at);
   const hasScore = typeof photo.search_score === "number";
@@ -38,7 +38,7 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
     // The tile's centre, in viewport px: where PhotoModal's open animation
     // scales up from.
     const rect = event.currentTarget.getBoundingClientRect();
-    onSelect(photo, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    onSelect(photo, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, event);
   }
 
   // The tooltip sits beside the tile: to its right, unless there isn't
@@ -56,7 +56,9 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
 
   return (
     <div
-      className={`photo-card${loaded ? " photo-card-loaded" : ""}${hasScore ? " photo-card-scored" : ""}`}
+      className={`photo-card${loaded ? " photo-card-loaded" : ""}${hasScore ? " photo-card-scored" : ""}${selected ? " photo-card-selected" : ""}`}
+      data-photo-id={photo.id}
+      aria-selected={selected}
       onContextMenu={onContextMenu}
       onMouseEnter={handleMouseEnter}
     >
@@ -77,6 +79,11 @@ export default function PhotoCard({ photo, onSelect, onContextMenu }) {
             {date && <span className="photo-card-overlay-date">{date}</span>}
             {photo.location_name && <span>{photo.location_name}</span>}
           </div>
+        )}
+        {selected && (
+          <span className="photo-card-check" aria-hidden="true">
+            ✓
+          </span>
         )}
         {hasScore && (
           <span className="photo-card-score" title="Match score">

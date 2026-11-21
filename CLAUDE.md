@@ -936,6 +936,15 @@ cached) is also per-pod, in-memory state — same caveat.
   writes it straight to `data-tooltip-side` on the card. It deliberately
   doesn't use React state, so hovering still never re-renders anything. While the list is first loading,
   `App.jsx` renders shimmering `.photo-skeleton` tiles in its place.
+  **Multi-select** is `PhotoGrid.jsx`'s `selection` state (ids + anchor +
+  focus; no backend change): Ctrl/Cmd-click toggles, Shift-click and
+  Shift+arrows select a range, plain arrows move a single selection, Escape
+  or a plain click clears it. Arrow handling is off (`keysEnabled`) while the
+  photo modal is open. Right-clicking a selected photo opens the tag menu for
+  the whole selection (per-photo `tagPhoto`/`untagPhoto` calls, 8 in flight):
+  a tag every photo has shows ✓ and removes from all, a partial one shows –
+  and adds to the rest. Up/down move by the grid's column count over the flat
+  list, so across a month/folder section boundary they're approximate.
 - `App.jsx` holds top-level state: the photo list, loading/error, sync
   status, which top-level `view` is showing (`"gallery"` | `"manage"`),
   whether the sidebar is open, and the currently-selected directory filter
