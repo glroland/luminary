@@ -10,9 +10,14 @@ import {
   thumbnailUrl,
   tagFace,
   tagPhoto,
+  untagFace,
   untagPhoto,
 } from "../api/client.js";
 import PhotoMap from "./PhotoMap.jsx";
+
+// Sentinel `hoveredId` for the face menu's "Unmatch" entry (never a real
+// individual id).
+const UNMATCH_ID = "__unmatch__";
 
 // Computes the <img>'s actual *visible* image content box -- which, under
 // object-fit: contain, can be smaller than the <img> element's own box
@@ -412,6 +417,25 @@ export default function PhotoModal({
       const current = tagMenuRef.current;
       setTagMenu(null);
       if (!current?.hoveredId) return;
+      if (current.hoveredId === UNMATCH_ID) {
+        // Same call as the Manage page's "×": the server just clears a
+        // manual tag, and for an auto tag also records a rejection.
+        untagFace(current.faceId)
+          .then(() => {
+            setFaceBoxes((prev) =>
+              prev
+                ? prev.map((box) =>
+                    box.id === current.faceId
+                      ? { ...box, person_id: null, tag_source: null, match_confidence: null }
+                      : box
+                  )
+                : prev
+            );
+            setTagError(null);
+          })
+          .catch((err) => setTagError(err.message));
+        return;
+      }
       tagFace(current.faceId, current.hoveredId)
         .then((updated) => {
           setFaceBoxes((prev) =>
@@ -777,6 +801,17 @@ export default function PhotoModal({
           style={{ left: tagMenu.x, top: tagMenu.y }}
           onClick={(event) => event.stopPropagation()}
         >
+          {faceBoxes?.find((box) => box.id === tagMenu.faceId)?.person_id && (
+            <div
+              className={`face-tag-menu-item${tagMenu.hoveredId === UNMATCH_ID ? " face-tag-menu-item-active" : ""}`}
+              onMouseEnter={() => setTagMenu((prev) => (prev ? { ...prev, hoveredId: UNMATCH_ID } : prev))}
+              onMouseLeave={() =>
+                setTagMenu((prev) => (prev && prev.hoveredId === UNMATCH_ID ? { ...prev, hoveredId: null } : prev))
+              }
+            >
+              Unmatch
+            </div>
+          )}
           {individuals === null ? (
             <div className="face-tag-menu-item face-tag-menu-message">Loading…</div>
           ) : individuals.length === 0 ? (

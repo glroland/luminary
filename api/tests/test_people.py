@@ -135,7 +135,9 @@ def test_list_faces_for_individual(client, tmp_path, monkeypatch):
 
     response = client.get(f"/api/individuals/{person_id}/faces")
     assert response.status_code == 200
-    assert response.json() == {"faces": [{"id": face["id"], "photo_id": photo_id, "tag_source": "manual"}]}
+    assert response.json() == {
+        "faces": [{"id": face["id"], "photo_id": photo_id, "tag_source": "manual", "match_confidence": None}]
+    }
 
 
 def test_list_faces_for_unknown_individual_returns_404(client):
