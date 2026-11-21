@@ -3,11 +3,15 @@
 # Move every image listed in a CSV from one repo to another, by calling
 # bin/move-image.sh once per row.
 #
-# Usage: bin/move-images.sh <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--force] [--dry-run] [--debug]
+# Usage: bin/move-images.sh <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--force] [--dry-run] [--column N] [--debug]
 #   e.g. bin/move-images.sh files.csv smb://host/images smb://host/backup
 #
-# Column 1 of each row is the image path relative to the repo root; any other
-# columns are ignored. Values may be wrapped in double quotes (the CSVs the
+# Column 1 of each row (or column N with --column N) is the image path relative
+# to the repo root; any other columns are ignored. The app's duplicates CSV puts
+# the duplicate in column 1 and its original in column 2; for an older download
+# with the columns the other way round, use --column 2. A path that appears on
+# more than one row (an original with several duplicates) is moved once; later
+# rows for it are skipped. Values may be wrapped in double quotes (the CSVs the
 # app downloads quote every value); inside quotes a comma is literal and ""
 # is an escaped quote. The first line of the file is assumed to be a header
 # and is skipped; pass --no-header if the file has none. Blank lines and lines
@@ -35,48 +39,65 @@
 set -uo pipefail
 
 usage() {
-    echo "usage: $0 <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--force] [--dry-run] [--debug]" >&2
+    echo "usage: $0 <file-list.csv> <source-repo-url> <target-repo-url> [--continue-on-error] [--no-header] [--force] [--dry-run] [--column N] [--debug]" >&2
     exit 2
 }
 
 dbg() { if [ "$DEBUG" -eq 1 ]; then echo "[debug] $*"; fi; }
 
-# Print column 1 of one CSV line, with surrounding double quotes removed.
-# Handles quoted fields containing commas and "" escapes; unquoted also fine.
-first_column() {
-    local line="$1" out="" rest ch
-    if [ "${line:0:1}" != '"' ]; then
-        printf '%s' "${line%%,*}"
-        return
-    fi
-    rest="${line:1}"
-    while [ -n "$rest" ]; do
-        ch="${rest:0:1}"; rest="${rest:1}"
-        if [ "$ch" = '"' ]; then
-            if [ "${rest:0:1}" = '"' ]; then out+='"'; rest="${rest:1}"; else break; fi
-        else
+# Print column N (1-based) of one CSV line, with surrounding double quotes
+# removed. Handles quoted fields containing commas and "" escapes; unquoted
+# fields are fine too. Prints nothing if the line has fewer than N columns.
+nth_column() {
+    local line="$1" want="$2" col=1 out="" inq=0 i ch next
+    for ((i = 0; i < ${#line}; i++)); do
+        ch="${line:i:1}"
+        if [ "$inq" -eq 1 ]; then
+            if [ "$ch" = '"' ]; then
+                next="${line:i+1:1}"
+                if [ "$next" = '"' ]; then
+                    [ "$col" -eq "$want" ] && out+='"'
+                    i=$((i + 1))
+                else
+                    inq=0
+                fi
+            elif [ "$col" -eq "$want" ]; then
+                out+="$ch"
+            fi
+        elif [ "$ch" = '"' ]; then
+            inq=1
+        elif [ "$ch" = ',' ]; then
+            [ "$col" -eq "$want" ] && break
+            col=$((col + 1))
+        elif [ "$col" -eq "$want" ]; then
             out+="$ch"
         fi
     done
-    printf '%s' "$out"
+    [ "$col" -eq "$want" ] && printf '%s' "$out"
 }
 
 CONTINUE=0
+COLUMN=1
 HEADER=1
 DEBUG=0
 FORCE=0
 DRY_RUN=0
 ARGS=()
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --debug) DEBUG=1 ;;
         --continue-on-error) CONTINUE=1 ;;
         --no-header) HEADER=0 ;;
         --force) FORCE=1 ;;
         --dry-run) DRY_RUN=1 ;;
+        --column)
+            shift
+            case "${1:-}" in ''|*[!0-9]*|0) echo "error: --column needs a positive number" >&2; exit 2 ;; esac
+            COLUMN="$1" ;;
         -h|--help) usage ;;
-        *) ARGS+=("$arg") ;;
+        *) ARGS+=("$1") ;;
     esac
+    shift
 done
 [ "${#ARGS[@]}" -eq 3 ] || usage
 
@@ -98,7 +119,10 @@ MOVE_ARGS=()
 dbg "csv=$CSV source=$SOURCE target=$TARGET header=$HEADER continue-on-error=$CONTINUE"
 dbg "per-file script: $MOVE"
 
+SEEN="$(mktemp)"
+trap 'rm -f "$SEEN"' EXIT
 moved=0
+skipped=0
 failed=0
 failures=()
 lineno=0
@@ -117,8 +141,14 @@ while IFS= read -r line || [ -n "$line" ]; do
         '#'*) dbg "line $lineno: skipping comment"; continue ;;
     esac
 
-    path="$(first_column "$line")"
-    [ -n "$path" ] || { dbg "line $lineno: empty first column, skipping"; continue; }
+    path="$(nth_column "$line" "$COLUMN")"
+    [ -n "$path" ] || { dbg "line $lineno: empty column $COLUMN, skipping"; continue; }
+    if grep -Fxq -- "$path" "$SEEN"; then
+        dbg "line $lineno: '$path' already handled on an earlier row, skipping"
+        skipped=$((skipped + 1))
+        continue
+    fi
+    printf '%s\n' "$path" >> "$SEEN"
 
     dbg "line $lineno: moving '$path'"
     if "$MOVE" "$SOURCE" "$TARGET" "$path" ${MOVE_ARGS[@]+"${MOVE_ARGS[@]}"} </dev/null; then
@@ -137,9 +167,9 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$CSV"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-    echo "dry run: would move: $moved, would fail: $failed"
+    echo "dry run: would move: $moved, would fail: $failed, repeated paths skipped: $skipped"
 else
-    echo "moved: $moved, failed: $failed"
+    echo "moved: $moved, failed: $failed, repeated paths skipped: $skipped"
 fi
 if [ "$failed" -gt 0 ]; then
     echo "failed files:" >&2

@@ -174,9 +174,10 @@ cluster. Instead: pick the original, then include a photo only if it matches
 
 - `GET /api/photos/duplicates/csv?mode=exact|similar|all`. The default is `all`;
   `exact` gives today's two-column output.
-- CSV columns: `Original Image, Duplicate Image, Match Type, Distance,
-  Original Size, Duplicate Size`, where size is `WxH`. The first two columns
-  are unchanged, so existing consumers still work; new columns are appended.
+- CSV columns: `Duplicate Image, Original Image, Match Type, Distance,
+  Duplicate Size, Original Size`, where size is `WxH`. The duplicate is column
+  1 so `bin/move-images.sh` (which reads column 1 by default) moves duplicates
+  and leaves originals alone; `exact` mode has just the first two columns.
 - Optional `max_distance` query override for tuning.
 - **Decision: stays a synchronous download.** The production library is about
   40k photos: hashes are ~320 KB, candidate search takes seconds, and

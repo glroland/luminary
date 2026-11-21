@@ -42,7 +42,9 @@ def search_photos(q: str, threshold: float = 0.5) -> dict:
 @router.get("/photos/duplicates/csv")
 def get_duplicate_photos_csv(mode: str = Query("all", pattern="^(exact|similar|all)$")) -> Response:
     """Backs the management page's "Identify Duplicates" button. One row per
-    duplicate file, never for the original it's a duplicate of. `filename`
+    duplicate file, never for the original it's a duplicate of. Column 1 is
+    the duplicate and column 2 its original, so bin/move-images.sh (which
+    reads column 1 by default) moves the duplicates. `filename`
     already holds the path relative to the photos root, so no separate
     "path" column is needed for either side.
 
@@ -58,22 +60,22 @@ def get_duplicate_photos_csv(mode: str = Query("all", pattern="^(exact|similar|a
     writer = csv.writer(buffer, quoting=csv.QUOTE_ALL)
     rows = storage.find_duplicate_pairs(mode)
     if mode == "exact":
-        writer.writerow(["Original Image", "Duplicate Image"])
+        writer.writerow(["Duplicate Image", "Original Image"])
         for row in rows:
-            writer.writerow([row["original"], row["duplicate"]])
+            writer.writerow([row["duplicate"], row["original"]])
     else:
         writer.writerow(
-            ["Original Image", "Duplicate Image", "Match Type", "Distance", "Original Size", "Duplicate Size"]
+            ["Duplicate Image", "Original Image", "Match Type", "Distance", "Duplicate Size", "Original Size"]
         )
         for row in rows:
             writer.writerow(
                 [
-                    row["original"],
                     row["duplicate"],
+                    row["original"],
                     row["match_type"],
                     row["distance"],
-                    row["original_size"],
                     row["duplicate_size"],
+                    row["original_size"],
                 ]
             )
     return Response(

@@ -53,8 +53,8 @@ def test_duplicate_photos_csv_lists_each_duplicate_against_the_earliest_original
     assert response.headers["content-disposition"] == 'attachment; filename="duplicate_photos.csv"'
 
     rows = response.text.strip().splitlines()
-    assert rows[0] == '"Original Image","Duplicate Image"'
-    assert rows[1:] == ['"first.jpg","second.jpg"']  # unique.jpg has no duplicate, so no row for it
+    assert rows[0] == '"Duplicate Image","Original Image"'
+    assert rows[1:] == ['"second.jpg","first.jpg"']  # unique.jpg has no duplicate, so no row for it
 
 
 def test_duplicate_photos_csv_has_only_a_header_when_there_are_no_duplicates(client, tmp_path):
@@ -64,7 +64,7 @@ def test_duplicate_photos_csv_has_only_a_header_when_there_are_no_duplicates(cli
     response = client.get("/api/photos/duplicates/csv?mode=exact")
 
     assert response.status_code == 200
-    assert response.text.strip().splitlines() == ['"Original Image","Duplicate Image"']
+    assert response.text.strip().splitlines() == ['"Duplicate Image","Original Image"']
 
 
 def test_delete_removes_index_entry_but_not_the_source_file(client, tmp_path):
@@ -246,11 +246,11 @@ def test_duplicate_photos_csv_similar_mode_has_extended_columns(client, tmp_path
     assert response.status_code == 200
     rows = response.text.strip().splitlines()
     assert rows[0] == (
-        '"Original Image","Duplicate Image","Match Type","Distance","Original Size","Duplicate Size"'
+        '"Duplicate Image","Original Image","Match Type","Distance","Duplicate Size","Original Size"'
     )
     assert len(rows) == 2
-    assert rows[1].startswith('"big.jpg","small.png","resize",')
-    assert rows[1].endswith('"800x600","200x150"')
+    assert rows[1].startswith('"small.png","big.jpg","resize",')
+    assert rows[1].endswith('"200x150","800x600"')
 
 
 def test_duplicate_photos_csv_rejects_unknown_mode(client):
