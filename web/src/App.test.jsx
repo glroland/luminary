@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import L from "leaflet";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
 import * as client from "./api/client.js";
@@ -12,6 +13,7 @@ const IDLE_JOBS = {
   descriptions: { ...idleState, updated: 0 },
   locations: { ...idleState, updated: 0 },
   pets: { ...idleState, found: 0 },
+  trips: { ...idleState, created: 0, updated: 0, removed: 0, homes: 0 },
 };
 
 describe("App", () => {
@@ -20,6 +22,7 @@ describe("App", () => {
     vi.spyOn(client, "fetchJobs").mockResolvedValue(IDLE_JOBS);
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
     vi.spyOn(client, "fetchTags").mockResolvedValue([]);
+    vi.spyOn(client, "fetchTrips").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -432,5 +435,87 @@ describe("App", () => {
 
     await searchViaChat("find unicorns");
     await waitFor(() => expect(screen.getByText(/no photos match your search/i)).toBeInTheDocument());
+  });
+
+  describe("trips", () => {
+    const TRIP = {
+      id: "t1",
+      name: "Boone, North Carolina, May 2019",
+      kind: "trip",
+      status: "active",
+      start_at: "2019-05-10T09:00:00",
+      end_at: "2019-05-11T17:00:00",
+      photo_count: 2,
+    };
+
+    function mockTrip() {
+      vi.spyOn(L, "polyline").mockReturnValue({ addTo: vi.fn() }); // jsdom has no SVG
+      vi.spyOn(client, "fetchPhotos").mockResolvedValue(
+        ["1", "2", "3"].map((id) => ({
+          id,
+          filename: `${id}.jpg`,
+          width: 100,
+          height: 100,
+          created_at: id === "3" ? "2020-01-01T10:00:00+00:00" : `2019-05-1${id}T09:00:00+00:00`,
+        })),
+      );
+      vi.spyOn(client, "fetchTrips").mockResolvedValue([TRIP]);
+      vi.spyOn(client, "fetchTripPhotoIds").mockResolvedValue(["1", "2"]);
+      vi.spyOn(client, "fetchTripLocations").mockResolvedValue({
+        stops: [
+          { latitude: 36.2, longitude: -81.6, count: 1, first_at: "2019-05-10T09:00:00", last_at: "2019-05-10T09:00:00", place: "Boone", cover_photo_id: "1", photo_ids: ["1"] },
+          { latitude: 36.1, longitude: -81.7, count: 1, first_at: "2019-05-11T09:00:00", last_at: "2019-05-11T09:00:00", place: "Blowing Rock", cover_photo_id: "2", photo_ids: ["2"] },
+        ],
+        route: [0, 1],
+        home: null,
+        unlocated_count: 0,
+      });
+    }
+
+    async function openTrip() {
+      render(<App />);
+      await waitFor(() => expect(screen.getByAltText("3.jpg")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: /^by trip$/i }));
+      fireEvent.click(await screen.findByText("2019"));
+      fireEvent.click(screen.getByText(TRIP.name));
+    }
+
+    it("narrows the gallery to a selected trip and shows its map", async () => {
+      mockTrip();
+      await openTrip();
+
+      expect(await screen.findByRole("heading", { name: TRIP.name })).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByAltText("3.jpg")).not.toBeInTheDocument());
+      expect(screen.getByAltText("1.jpg")).toBeInTheDocument();
+      expect(screen.getByAltText("2.jpg")).toBeInTheDocument();
+      expect(client.fetchTripPhotoIds).toHaveBeenCalledWith("t1");
+      await waitFor(() => expect(document.querySelectorAll(".trip-stop-marker")).toHaveLength(2));
+      // A trip is always chronological, so the sort control goes away.
+      expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    });
+
+    it("narrows to one map stop when it is clicked, and back again", async () => {
+      mockTrip();
+      await openTrip();
+      await waitFor(() => expect(document.querySelectorAll(".trip-stop-marker")).toHaveLength(2));
+
+      fireEvent.click(document.querySelector(".trip-stop-marker"));
+
+      await waitFor(() => expect(screen.queryByAltText("2.jpg")).not.toBeInTheDocument());
+      expect(screen.getByAltText("1.jpg")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /show the whole trip/i }));
+      await waitFor(() => expect(screen.getByAltText("2.jpg")).toBeInTheDocument());
+    });
+
+    it("leaves the trip view when All Images is chosen", async () => {
+      mockTrip();
+      await openTrip();
+      await screen.findByRole("heading", { name: TRIP.name });
+
+      fireEvent.click(screen.getByRole("button", { name: /all images/i }));
+
+      await waitFor(() => expect(screen.getByAltText("3.jpg")).toBeInTheDocument());
+      expect(screen.queryByRole("heading", { name: TRIP.name })).not.toBeInTheDocument();
+    });
   });
 });

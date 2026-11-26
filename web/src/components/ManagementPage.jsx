@@ -19,6 +19,7 @@ import {
   refreshDescriptions,
   refreshFaces,
   refreshLocations,
+  refreshTrips,
   refreshPets,
   rejectionThumbnailUrl,
   untagFace,
@@ -212,6 +213,10 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
 
   function handleRefreshLocations() {
     startJob(refreshLocations);
+  }
+
+  function handleRebuildTrips() {
+    startJob(refreshTrips);
   }
 
   function handleRefreshPets() {
@@ -478,6 +483,31 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
             Re-geocodes every photo that already has GPS coordinates -- useful after changing the
             geocoding zoom level, or to pick up a named business/street address for photos indexed
             before that detail was added.
+          </p>
+        </div>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            <JobControl
+              kind="trips"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Rebuild Trips"
+              running={(_state, pct) => `Finding trips… ${pct}%`}
+              done={(state) =>
+                state.homes === 0
+                  ? "No home location found, so no trips could be told apart"
+                  : `Done -- ${state.created} new, ${state.updated} updated, ${state.removed} removed`
+              }
+              failed={(state) => `Trip detection failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleRebuildTrips}
+              onCancel={handleCancel}
+            />
+          </div>
+          <p className="management-refresh-description">
+            Finds trips: runs of photos that have both a date and GPS coordinates and were taken away
+            from home. Home is worked out from where most of your days are spent. It also runs after
+            every sync. Photos without a date or location are never placed in a trip automatically.
           </p>
         </div>
 

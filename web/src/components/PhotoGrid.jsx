@@ -29,13 +29,27 @@ async function mapLimited(items, limit, fn) {
   return results;
 }
 
-// "month" groups by the calendar month of created_at, "folder" by the
+// The calendar day written in a created_at string, as-is. An EXIF time is the
+// wall clock where the photo was taken (no real zone), so a trip's days are
+// read off the string rather than converted through the browser's timezone.
+function wallClockDay(createdAt) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(createdAt ?? "");
+  if (!match) return null;
+  return {
+    key: `${match[1]}-${match[2]}-${match[3]}`,
+    date: new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  };
+}
+
+// "month" groups by the calendar month of created_at, "day" by its day (a
+// trip's gallery), "folder" by the
 // photo's directory (everything in filename before the last "/").
 function groupKeyOf(photo, groupBy) {
   if (groupBy === "folder") {
     const slash = photo.filename.lastIndexOf("/");
     return slash === -1 ? "" : photo.filename.slice(0, slash);
   }
+  if (groupBy === "day") return wallClockDay(photo.created_at)?.key ?? "undated";
   const date = new Date(photo.created_at);
   if (!photo.created_at || Number.isNaN(date.getTime())) return "undated";
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
@@ -43,6 +57,12 @@ function groupKeyOf(photo, groupBy) {
 
 function groupLabelOf(photo, groupBy) {
   if (groupBy === "folder") return groupKeyOf(photo, groupBy) || "(Root)";
+  if (groupBy === "day") {
+    const day = wallClockDay(photo.created_at);
+    return day
+      ? day.date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+      : "Undated";
+  }
   const date = new Date(photo.created_at);
   if (!photo.created_at || Number.isNaN(date.getTime())) return "Undated";
   return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
@@ -55,7 +75,7 @@ function groupLabelOf(photo, groupBy) {
 // remounts this component (via `key`) whenever the filter/sort changes to
 // start again from the top.
 //
-// `groupBy` ("month" | "folder" | null) splits the grid into sections with
+// `groupBy` ("month" | "day" | "folder" | null) splits the grid into sections with
 // a sticky header each. Sections are runs of *consecutive* photos sharing
 // a key, so it only makes sense when `photos` is sorted by that same
 // thing -- App.jsx picks it from the sort order, and passes null for

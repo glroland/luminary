@@ -77,7 +77,7 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, enrich, face_detection, geocode, jobs, perceptual, pet_detection, recognition, storage
+from . import chat, enrich, face_detection, geocode, jobs, perceptual, pet_detection, recognition, storage, trips
 from .config import get_max_concurrency, get_pet_detection_enabled
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
@@ -634,6 +634,12 @@ def _delete_missing(existing: dict, seen: set) -> int:
                 "DELETE FROM photo_tags WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
             )
             cursor.executemany(
+                "DELETE FROM trip_photos WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
+            )
+            cursor.executemany(
+                "DELETE FROM trip_exclusions WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
+            )
+            cursor.executemany(
                 "DELETE FROM photo_embeddings WHERE photo_id = %s", [(photo_id,) for photo_id in missing_ids]
             )
             cursor.executemany("DELETE FROM photos WHERE id = %s", [(photo_id,) for photo_id in missing_ids])
@@ -702,6 +708,11 @@ async def _run_sync() -> None:
             return
 
         deleted = await loop.run_in_executor(_executor, _delete_missing, existing, seen)
+        # Trips are derived from dates + GPS, which this sync may just have
+        # changed. Run inline, while sync still holds the job slot, so the
+        # face matching chained below never finds the slot taken. Never
+        # fails the sync (see trips.rebuild_quietly).
+        await loop.run_in_executor(_executor, trips.rebuild_quietly)
         progress.finish(deleted=deleted)
         summary = progress.snapshot()
         logger.info(

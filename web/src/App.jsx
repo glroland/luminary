@@ -7,6 +7,7 @@ import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import SortControl, { SORT_OPTIONS } from "./components/SortControl.jsx";
+import TripHeader from "./components/TripHeader.jsx";
 import {
   fetchIndividualFaces,
   fetchIndividuals,
@@ -14,13 +15,26 @@ import {
   fetchJobs,
   fetchTagPhotoIds,
   fetchTags,
+  fetchTripLocations,
+  fetchTripPhotoIds,
+  fetchTrips,
   startSync,
 } from "./api/client.js";
 import { applyTheme, getStoredTheme } from "./theme.js";
 
 import { matchesLocation } from "./locations.js";
+import { orderByIds } from "./trips.js";
 
 const POLL_INTERVAL_MS = 1000;
+const SHOW_OUTINGS_KEY = "luminary.showDayOutings";
+
+function storedShowOutings() {
+  try {
+    return window.localStorage.getItem(SHOW_OUTINGS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 // Placeholder tiles shown while the photo list is first loading.
 const SKELETON_TILE_COUNT = 24;
 
@@ -149,6 +163,20 @@ export default function App() {
   const [selectedTag, setSelectedTag] = useState(null);
   const [tagPhotoIds, setTagPhotoIds] = useState(null);
   const [tagsVersion, setTagsVersion] = useState(0);
+  // The sidebar's "By Trip" section: detected trips (trips.py), the
+  // selected trip id (null = no trip filter), its photo ids in the trip's own
+  // chronological order, and what its map draws. `selectedStop` is the map
+  // stop (an index into tripLocations.stops) the gallery is narrowed to, or
+  // null for the whole trip. tripsVersion is bumped by every loadTrips() so
+  // the selected trip is re-fetched after a rebuild. Day outings are hidden
+  // unless the sidebar's toggle (remembered in localStorage) is on.
+  const [trips, setTrips] = useState([]);
+  const [selectedTrip, setSelectedTrip] = useState(null);
+  const [tripPhotoIds, setTripPhotoIds] = useState(null);
+  const [tripLocations, setTripLocations] = useState(null);
+  const [selectedStop, setSelectedStop] = useState(null);
+  const [tripsVersion, setTripsVersion] = useState(0);
+  const [showOutings, setShowOutings] = useState(storedShowOutings);
   // Search is done by asking the chat (ChatWidget.jsx): the model runs a
   // search tool server-side and the reply carries its search list -- the
   // matching photo ids, each with a match score (handleSearchResults
@@ -226,6 +254,18 @@ export default function App() {
       .catch((err) => setError(err.message));
   }, []);
 
+  const loadTrips = useCallback(() => {
+    fetchTrips()
+      .then((list) => {
+        setTrips(list);
+        // A selected trip that no longer exists (a rebuild dropped it) can't
+        // filter anything any more -- drop the filter rather than 404.
+        setSelectedTrip((prev) => (prev !== null && !list.some((trip) => trip.id === prev) ? null : prev));
+        setTripsVersion((prev) => prev + 1);
+      })
+      .catch((err) => setError(err.message));
+  }, []);
+
   const refreshJobs = useCallback(
     (known) => {
       if (known) {
@@ -243,8 +283,9 @@ export default function App() {
     loadPhotos();
     loadIndividuals();
     loadTags();
+    loadTrips();
     refreshJobs();
-  }, [loadPhotos, loadIndividuals, loadTags, refreshJobs]);
+  }, [loadPhotos, loadIndividuals, loadTags, loadTrips, refreshJobs]);
 
   // Keep the job snapshot fresh while it can matter: any job running (it
   // may be someone else's, and ending one reloads the gallery), or the
@@ -264,7 +305,15 @@ export default function App() {
     if (previous === "sync" && jobs?.active !== "sync" && jobs?.sync?.status === "completed") {
       loadPhotos();
     }
-  }, [jobs, loadPhotos]);
+    // A sync, a location refresh and the trips job itself all rebuild trips.
+    if (
+      (previous === "sync" || previous === "locations" || previous === "trips") &&
+      jobs?.active !== previous &&
+      jobs?.[previous]?.status === "completed"
+    ) {
+      loadTrips();
+    }
+  }, [jobs, loadPhotos, loadTrips]);
 
   // Fetches the selected individual's tagged photo ids whenever the
   // selection changes -- the faces endpoint, not a bulk photos-by-person
@@ -307,6 +356,45 @@ export default function App() {
     };
   }, [selectedTag, tagsVersion]);
 
+  // Same as the tag effect above, for the selected trip -- its ids arrive in
+  // the trip's own order -- plus the map's stops. Changing trips drops any
+  // stop selection.
+  useEffect(() => {
+    setSelectedStop(null);
+    if (selectedTrip === null) {
+      setTripPhotoIds(null);
+      setTripLocations(null);
+      return undefined;
+    }
+    let cancelled = false;
+    fetchTripPhotoIds(selectedTrip)
+      .then((ids) => {
+        if (!cancelled) setTripPhotoIds(ids);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    fetchTripLocations(selectedTrip)
+      .then((locations) => {
+        if (!cancelled) setTripLocations(locations);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTrip, tripsVersion]);
+
+  function handleToggleOutings(value) {
+    setShowOutings(value);
+    try {
+      window.localStorage.setItem(SHOW_OUTINGS_KEY, value ? "1" : "0");
+    } catch {
+      // Not remembered; the toggle still works for this visit.
+    }
+  }
+
   async function handleRefresh() {
     try {
       // POST /api/sync takes the server's single job slot before it
@@ -337,6 +425,7 @@ export default function App() {
     setSelectedDirectory(null);
     setSelectedIndividual(null);
     setSelectedTag(null);
+    setSelectedTrip(null);
     setSelectedDate(null);
     setSelectedLocation(null);
     setSelectedPhoto(null);
@@ -398,6 +487,14 @@ export default function App() {
   // comment).
   const visiblePhotos = useMemo(() => {
     if (searchResults !== null) return searchResults;
+    if (selectedTrip !== null) {
+      // A trip keeps its own chronological order -- never the sort control's.
+      const inTrip = orderByIds(photos, tripPhotoIds ?? []);
+      const stopIds = selectedStop !== null ? tripLocations?.stops[selectedStop]?.photo_ids : null;
+      if (!stopIds) return inTrip;
+      const wanted = new Set(stopIds);
+      return inTrip.filter((photo) => wanted.has(photo.id));
+    }
     const filtered =
       selectedIndividual !== null
         ? photos.filter((photo) => individualPhotoIds?.has(photo.id))
@@ -424,6 +521,10 @@ export default function App() {
     individualPhotoIds,
     selectedTag,
     tagPhotoIds,
+    selectedTrip,
+    tripPhotoIds,
+    tripLocations,
+    selectedStop,
     selectedDirectory,
     selectedLocation,
     selectedDate,
@@ -436,7 +537,9 @@ export default function App() {
   const groupBy =
     searchResults !== null
       ? null
-      : sortOrder.startsWith("date")
+      : selectedTrip !== null
+        ? "day"
+        : sortOrder.startsWith("date")
         ? "month"
         : sortOrder.startsWith("folder")
           ? "folder"
@@ -463,6 +566,7 @@ export default function App() {
           setSelectedTag(null);
           setSelectedDate(null);
           setSelectedLocation(null);
+          setSelectedTrip(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -475,6 +579,7 @@ export default function App() {
           setSelectedDirectory(null);
           setSelectedDate(null);
           setSelectedLocation(null);
+          setSelectedTrip(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -487,6 +592,7 @@ export default function App() {
           setSelectedIndividual(null);
           setSelectedDate(null);
           setSelectedLocation(null);
+          setSelectedTrip(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -498,6 +604,22 @@ export default function App() {
           setSelectedIndividual(null);
           setSelectedTag(null);
           setSelectedDate(null);
+          setSelectedTrip(null);
+          setSearchResults(null);
+          setView("gallery");
+          resetGrid();
+        }}
+        trips={trips}
+        selectedTrip={selectedTrip}
+        showOutings={showOutings}
+        onToggleOutings={handleToggleOutings}
+        onSelectTrip={(tripId) => {
+          setSelectedTrip(tripId);
+          setSelectedDirectory(null);
+          setSelectedIndividual(null);
+          setSelectedTag(null);
+          setSelectedDate(null);
+          setSelectedLocation(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -509,6 +631,7 @@ export default function App() {
           setSelectedDirectory(null);
           setSelectedIndividual(null);
           setSelectedTag(null);
+          setSelectedTrip(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -519,6 +642,7 @@ export default function App() {
           setSelectedTag(null);
           setSelectedDate(null);
           setSelectedLocation(null);
+          setSelectedTrip(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -576,7 +700,7 @@ export default function App() {
                     {visiblePhotos.length.toLocaleString()} {visiblePhotos.length === 1 ? "photo" : "photos"}
                   </span>
                 )}
-                {searchResults === null && (
+                {searchResults === null && selectedTrip === null && (
                   <SortControl
                     value={sortOrder}
                     onChange={(value) => {
@@ -624,6 +748,7 @@ export default function App() {
               // deleted) while on this page -- refresh the sidebar's copy.
               loadIndividuals();
               loadTags();
+              loadTrips();
             }}
             onNavigateToPhoto={handleNavigateToPhoto}
             onPurged={() => {
@@ -632,10 +757,12 @@ export default function App() {
               setSelectedTag(null);
               setSelectedDate(null);
               setSelectedLocation(null);
+              setSelectedTrip(null);
               setSearchResults(null);
               setLastSearchResults(null);
               setIndividuals([]);
               setTags([]);
+              setTrips([]);
               setSelectedPhoto(null);
               resetGrid();
               loadPhotos();
@@ -648,6 +775,18 @@ export default function App() {
             ))}
           </div>
         ) : (
+          <>
+            {selectedTrip !== null && searchResults === null && trips.some((trip) => trip.id === selectedTrip) && (
+              <TripHeader
+                trip={trips.find((trip) => trip.id === selectedTrip)}
+                locations={tripLocations}
+                selectedStop={selectedStop}
+                onSelectStop={(index) => {
+                  setSelectedStop(index);
+                  resetGrid();
+                }}
+              />
+            )}
           <PhotoGrid
             key={gridGeneration}
             photos={visiblePhotos}
@@ -664,6 +803,7 @@ export default function App() {
                   : "No photos match your search."
             }
           />
+          </>
         )}
         {/* `photos` here is the list the arrow keys/filmstrip step through:
             whatever the gallery is currently showing, in its order. */}

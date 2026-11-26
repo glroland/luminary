@@ -409,3 +409,44 @@ def get_duplicate_min_correlation() -> float:
     perceptual-hash match. Like LUMINARY_DUPLICATE_MAX_DISTANCE, a starting
     point rather than a verified value."""
     return float(os.environ.get("LUMINARY_DUPLICATE_MIN_CORRELATION", "0.95"))
+
+
+def _env_number(name: str, default: float, cast=float):
+    try:
+        return cast(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return cast(default)
+
+
+def get_trip_home_radius_km() -> float:
+    """How far from a home location a photo can be and still count as "at
+    home" for trip detection (trip_detection.py). No verified-correct value
+    across very different people's lives -- tune against your own library."""
+    return _env_number("LUMINARY_TRIP_HOME_RADIUS_KM", 50.0)
+
+
+def get_trip_gap_days() -> int:
+    """A run of away photos is split into separate trips by a gap of more
+    than this many days with no away photos between them."""
+    return _env_number("LUMINARY_TRIP_GAP_DAYS", 2, int)
+
+
+def get_trip_min_photos() -> int:
+    """Fewest located, dated photos a candidate needs to be a trip/outing."""
+    return _env_number("LUMINARY_TRIP_MIN_PHOTOS", 10, int)
+
+
+def get_trip_min_hours() -> float:
+    """Shortest span (first to last photo) a candidate needs."""
+    return _env_number("LUMINARY_TRIP_MIN_HOURS", 4.0)
+
+
+def get_trip_home_min_days() -> int:
+    """Distinct days a place needs in one calendar year to be detected as
+    home automatically."""
+    return _env_number("LUMINARY_TRIP_HOME_MIN_DAYS", 30, int)
+
+
+def get_trip_stop_radius_km() -> float:
+    """Photos this close together become one stop on a trip's map."""
+    return _env_number("LUMINARY_TRIP_STOP_RADIUS_KM", 2.0)

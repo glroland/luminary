@@ -599,6 +599,8 @@ def delete_photo(photo_id: str) -> bool:
         conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
         conn.execute("DELETE FROM face_rejections WHERE photo_id = %s", (photo_id,))
         conn.execute("DELETE FROM photo_tags WHERE photo_id = %s", (photo_id,))
+        conn.execute("DELETE FROM trip_photos WHERE photo_id = %s", (photo_id,))
+        conn.execute("DELETE FROM trip_exclusions WHERE photo_id = %s", (photo_id,))
         conn.execute("DELETE FROM photo_embeddings WHERE photo_id = %s", (photo_id,))
         cursor = conn.execute("DELETE FROM photos WHERE id = %s", (photo_id,))
         conn.commit()
@@ -606,8 +608,8 @@ def delete_photo(photo_id: str) -> bool:
 
 
 def purge_all() -> None:
-    """Delete every row from every table -- individuals, faces, tags, and
-    photos. Like delete_photo, this only ever touches Postgres; the photos
+    """Delete every row from every table -- individuals, faces, tags, trips,
+    homes and photos. Like delete_photo, this only ever touches Postgres; the photos
     backend itself is never written to or deleted from. Originals are
     untouched and will simply be re-indexed as new photos the next time
     someone syncs."""
@@ -617,6 +619,10 @@ def purge_all() -> None:
         conn.execute("DELETE FROM individuals")
         conn.execute("DELETE FROM photo_tags")
         conn.execute("DELETE FROM tags")
+        conn.execute("DELETE FROM trip_photos")
+        conn.execute("DELETE FROM trip_exclusions")
+        conn.execute("DELETE FROM trips")
+        conn.execute("DELETE FROM homes")
         conn.execute("DELETE FROM photo_embeddings")
         conn.execute("DELETE FROM photos")
         conn.commit()

@@ -232,6 +232,7 @@ describe("ManagementPage", () => {
       descriptions: idle({ updated: 0 }),
       locations: idle({ updated: 0 }),
       pets: idle({ found: 0 }),
+      trips: idle({ created: 0, updated: 0, removed: 0, homes: 0 }),
       ...overrides,
     });
     const running = (extra = {}) => ({ status: "running", processed: 4, total: 10, error: null, ...extra });
@@ -245,7 +246,7 @@ describe("ManagementPage", () => {
     it("shows every start button enabled when nothing is running", async () => {
       renderPage(snapshot());
       await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-      for (const name of ["Refresh", "Refresh Descriptions", "Refresh Locations", "Full Face Refresh"]) {
+      for (const name of ["Refresh", "Refresh Descriptions", "Refresh Locations", "Rebuild Trips", "Full Face Refresh"]) {
         expect(screen.getByRole("button", { name })).toBeEnabled();
       }
       expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
@@ -339,6 +340,39 @@ describe("ManagementPage", () => {
 
       await act(() => vi.advanceTimersByTimeAsync(2500));
       expect(screen.queryByText(/done -- 8 updated/i)).not.toBeInTheDocument();
+    });
+
+    it("starts a trips rebuild, shows its progress, and says what it did", async () => {
+      const startMock = vi.spyOn(client, "refreshTrips").mockResolvedValueOnce({});
+      const onJobsChange = vi.fn();
+      const { rerender } = renderPage(snapshot(), { onJobsChange });
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Rebuild Trips" }));
+      expect(startMock).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <ManagementPage
+          jobs={snapshot({ active: "trips", trips: running({ created: 0, updated: 0, removed: 0, homes: 1 }) })}
+          onBack={() => {}}
+          onNavigateToPhoto={() => {}}
+        />,
+      );
+      expect(screen.getByText(/finding trips… 40%/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    });
+
+    it("says when no home was found, so no trips could be detected", async () => {
+      const { rerender } = renderPage(snapshot({ active: "trips", trips: running() }));
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+      rerender(
+        <ManagementPage
+          jobs={snapshot({ trips: { status: "completed", processed: 5, total: 5, created: 0, updated: 0, removed: 0, homes: 0, error: null } })}
+          onBack={() => {}}
+          onNavigateToPhoto={() => {}}
+        />,
+      );
+      expect(await screen.findByText(/no home location found/i)).toBeInTheDocument();
     });
 
     it("keeps a job's error up", async () => {

@@ -274,10 +274,69 @@ class PetRefreshStatus(BaseModel):
     error: Optional[str] = None
 
 
+class TripRefreshStatus(BaseModel):
+    # See trips.py's _TripProgress.
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
+    processed: int = 0  # located, dated photos considered
+    total: int = 0
+    created: int = 0  # trips newly created by this run
+    updated: int = 0  # existing trips whose name/dates/photos changed
+    removed: int = 0  # unedited auto trips that no longer qualified
+    homes: int = 0  # home locations in force (0 = none found, so no trips)
+    error: Optional[str] = None
+
+
+class Trip(BaseModel):
+    id: str
+    name: str
+    kind: str  # "trip" (2+ calendar days) | "outing" (one day)
+    status: str  # "active" | "dismissed"
+    source: str  # "auto" | "manual"
+    start_at: Optional[str] = None
+    end_at: Optional[str] = None
+    cover_photo_id: Optional[str] = None
+    edited: bool = False
+    photo_count: int = 0
+
+
+class TripList(BaseModel):
+    trips: list[Trip]
+
+
+class TripPhotoIds(BaseModel):
+    # Member ids, oldest first -- the frontend already has every photo's
+    # metadata loaded and filters/orders that list itself.
+    photo_ids: list[str]
+
+
+class TripStop(BaseModel):
+    latitude: float
+    longitude: float
+    count: int
+    first_at: str
+    last_at: str
+    place: Optional[str] = None
+    cover_photo_id: Optional[str] = None
+    photo_ids: list[str]
+
+
+class TripHome(BaseModel):
+    latitude: float
+    longitude: float
+    name: str
+
+
+class TripLocations(BaseModel):
+    stops: list[TripStop]
+    route: list[int]  # indexes into `stops`, in visit order
+    home: Optional[TripHome] = None
+    unlocated_count: int = 0  # members with no GPS (not on the map)
+
+
 class JobsStatus(BaseModel):
     """Every background job in one response -- see jobs.py. `active` is the
     one job holding the single claim ("sync" | "faces" | "descriptions" |
-    "locations" | "pets"), or null when idle; `cancelling` is true once a cancel
+    "locations" | "pets" | "trips"), or null when idle; `cancelling` is true once a cancel
     was requested and the job hasn't stopped yet."""
 
     active: Optional[str] = None
@@ -287,3 +346,4 @@ class JobsStatus(BaseModel):
     descriptions: DescriptionRefreshStatus
     locations: LocationRefreshStatus
     pets: PetRefreshStatus
+    trips: TripRefreshStatus

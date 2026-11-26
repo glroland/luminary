@@ -57,7 +57,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from . import jobs
+from . import jobs, trips
 from .config import get_geocode_base_url, get_geocode_user_agent, get_geocode_zoom
 from .database import get_connection
 
@@ -396,6 +396,8 @@ async def _run_refresh() -> None:
             progress.cancel()
             return
 
+        # Trip names are built from these place names -- see trips.py.
+        await loop.run_in_executor(_executor, trips.rebuild_quietly)
         progress.finish()
         logger.info(
             "Location refresh completed: %d updated of %d photo(s)",

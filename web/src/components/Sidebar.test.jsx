@@ -154,10 +154,49 @@ describe("Sidebar", () => {
     const headers = screen
       .getAllByRole("button", { name: /^by /i })
       .map((button) => button.textContent.replace("›", "").trim());
-    expect(headers).toEqual(["By Folder", "By Tag", "By Individual", "By Location", "By Date"]);
+    expect(headers).toEqual(["By Folder", "By Tag", "By Individual", "By Location", "By Date", "By Trip"]);
     expandSection(/^by tag$/i);
     expect(screen.getByText("Favorites").closest(".directory-tree-item")).toHaveAttribute("data-count", "3");
     expect(screen.getByText("Empty").closest(".directory-tree-item")).not.toHaveAttribute("data-count");
+  });
+
+  it("lists trips by year under By Trip, hiding day outings until asked", () => {
+    const trips = [
+      { id: "a", name: "Italy, May 2019", kind: "trip", start_at: "2019-05-10T09:00:00", photo_count: 40 },
+      { id: "b", name: "Boone, North Carolina, Oct 12, 2021", kind: "outing", start_at: "2021-10-12T09:00:00", photo_count: 12 },
+      { id: "c", name: "Orlando, Florida, Dec 2019", kind: "trip", start_at: "2019-12-20T09:00:00", photo_count: 25 },
+    ];
+    const onToggleOutings = vi.fn();
+    const onSelectTrip = vi.fn();
+    renderSidebar({ open: true, trips, onToggleOutings, onSelectTrip });
+    expandSection(/^by trip$/i);
+
+    // Outings are hidden by default; only 2019 has trips.
+    expect(screen.queryByText("2021")).not.toBeInTheDocument();
+    expect(screen.getByText("2019").closest(".directory-tree-item")).toHaveAttribute("data-count", "65");
+    fireEvent.click(screen.getByText("2019"));
+    const names = screen.getAllByText(/, (May|Dec) 2019$/).map((node) => node.textContent);
+    expect(names).toEqual(["Orlando, Florida, Dec 2019", "Italy, May 2019"]); // newest first
+    fireEvent.click(screen.getByText("Italy, May 2019"));
+    expect(onSelectTrip).toHaveBeenCalledWith("a");
+
+    fireEvent.click(screen.getByLabelText(/show day outings/i));
+    expect(onToggleOutings).toHaveBeenCalledWith(true);
+  });
+
+  it("shows day outings, and marks the selected trip, when asked to", () => {
+    const trips = [{ id: "b", name: "Boone day", kind: "outing", start_at: "2021-10-12T09:00:00", photo_count: 12 }];
+    renderSidebar({ open: true, trips, showOutings: true, selectedTrip: "b" });
+    expandSection(/^by trip$/i);
+    // The year holding the selected trip starts open.
+    expect(screen.getByText("Boone day").closest(".directory-tree-item")).toHaveClass("directory-tree-item-active");
+    expect(screen.getByText("All Images")).not.toHaveClass("sidebar-all-images-active");
+  });
+
+  it("explains an empty By Trip section", () => {
+    renderSidebar({ open: true, trips: [] });
+    expandSection(/^by trip$/i);
+    expect(screen.getByText(/no trips found yet/i)).toBeInTheDocument();
   });
 
   it("shows an empty-state message when there are no tags", () => {

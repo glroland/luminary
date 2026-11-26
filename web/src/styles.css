@@ -2444,3 +2444,136 @@ textarea {
   background: rgba(245, 158, 11, 0.75);
   border-color: #b45309;
 }
+
+/* --- Trips (TripTree.jsx, TripHeader.jsx, TripMap.jsx) ----------------- */
+
+.trip-outings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.6rem 0.3rem calc(0.9rem + 0.3rem);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.trip-header {
+  margin: 0 0 0.75rem;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.trip-header-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.trip-header-title h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.trip-header-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.trip-map-toggle,
+.trip-stop-clear {
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.trip-stop-clear {
+  margin-left: 0.25rem;
+}
+
+.trip-map-toggle:hover,
+.trip-stop-clear:hover {
+  background: var(--hover);
+}
+
+.trip-header-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.trip-map {
+  height: 300px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.trip-stop-marker,
+.trip-home-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 600;
+  font-size: 0.8rem;
+  box-shadow: 0 1px 4px var(--shadow);
+}
+
+.trip-stop-marker {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 2px solid var(--on-accent);
+}
+
+.trip-stop-marker.trip-stop-selected {
+  background: var(--danger-bg);
+  transform: scale(1.2);
+}
+
+.trip-home-marker {
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--border-strong);
+  font-size: 1rem;
+}
+
+.trip-route {
+  stroke: var(--accent);
+  opacity: 0.8;
+}
+
+.trip-stop-popup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 140px;
+}
+
+.trip-stop-popup-meta {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.trip-stop-popup-thumbs {
+  display: flex;
+  gap: 3px;
+}
+
+.trip-stop-popup-thumbs img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 3px;
+}

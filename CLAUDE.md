@@ -376,9 +376,39 @@ cached) is also per-pod, in-memory state — same caveat.
   state, then city; no country → "Location Unknown", always last. Photos
   geocoded before those columns existed need "Refresh Locations".
 
-- `jobs.py` is the **single job slot** shared by the five long-running
+- `trip_detection.py` / `trips.py` (`routers/trips.py`) are trip detection —
+  see the README's "Trips" and `docs/database-schema.md`. **Only photos with
+  both `created_at` and GPS take part**; a photo missing either is never put
+  in a trip automatically (a user can still add one by hand). Postgres only —
+  never the photos backend. `trip_detection.py` is pure (no DB/clock/I/O; all
+  the algorithm's tests are in `test_trip_detection.py` and need no fixtures):
+  per-year home detection (`detect_homes`), away/home by distance
+  (`home_for`), segmenting (`detect`), naming, cover and map stops
+  (`build_stops`). `trips.py` loads input, reconciles, and runs the job.
+  Time zones are deliberately not determined: EXIF times are the wall clock
+  where the photo was taken, so days are read off the string
+  (`parse_timestamp` drops the fake UTC tzinfo `sync.py` attaches), and every
+  threshold but `MIN_HOURS` is in days. **Reconciliation rule**: detection may
+  create trips and extend them with photos in no trip; it never moves a photo
+  between trips, merges, splits, or recreates a dismissed one (a tombstone row
+  with `status = 'dismissed'`); `auto` members it no longer supports are
+  released, `manual` ones never are; an unedited auto trip under
+  `MIN_PHOTOS` is deleted, an edited/manual one is kept. Homes a user entered
+  or confirmed win outright over detection. A rebuild is one transaction under
+  an advisory lock (`trips.LOCK_KEY`, which the phase-2 edit endpoints must
+  also take), so a cancelled run writes nothing. It runs as the `TRIPS` job
+  *and* inline via `rebuild_quietly()` at the end of `sync._run_sync` and of
+  Refresh Locations — inline on purpose, while that job still holds the slot:
+  starting it as a job after sync would make the chained face matching find
+  the slot busy. Adding a table that references photos means adding its
+  cleanup to `storage.delete_photo`/`purge_all` and `sync._delete_missing`.
+  Not built yet: the edit endpoints (rename, add/remove photos, merge, split,
+  dismiss/restore) and the homes endpoints/UI; the tables and `edited`/
+  `source`/`membership` columns for them already exist.
+
+- `jobs.py` is the **single job slot** shared by the six long-running
   background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`,
-  `pets.py`).
+  `pets.py`, `trips.py`).
   Each `start_*()` calls `jobs.try_claim(kind)` first, which raises
   `jobs.JobBusy` (→ `409` via `main.py`) if *any* job holds the slot, then
   runs through `jobs.run_in_thread`. Cancellation is cooperative:
@@ -395,7 +425,7 @@ cached) is also per-pod, in-memory state — same caveat.
   (Refresh Descriptions fixes those). `sync._trigger_face_refresh` runs
   after the sync's own `finish()` released the slot, and tolerates `JobBusy`.
   `GET /api/jobs` (`routers/jobs.py`) returns `{active, cancelling}` plus
-  all five progress snapshots — the one thing the web UI polls. New
+  all six progress snapshots — the one thing the web UI polls. New
   background jobs must claim the slot the same way; `conftest.py` calls
   `jobs.reset()`.
 
@@ -1078,6 +1108,21 @@ cached) is also per-pod, in-memory state — same caveat.
   The wordmark's cursive face is Dancing Script, bundled through the
   `@fontsource/dancing-script` package (SIL OFL) rather than relying on a
   system cursive font, which differs wildly between operating systems.
+- **Trips** (`trips.js`, `TripTree.jsx`, `TripHeader.jsx`, `TripMap.jsx`):
+  "By Trip" in the sidebar (after "By Date") is `GET /api/trips` grouped by
+  start year, with a "Show day outings" toggle (`localStorage`). Selecting a
+  trip is `App.jsx`'s `selectedTrip` — same "clears the other filters" rule —
+  and fetches `/trips/{id}/photos` (ids in the trip's own order, which
+  `visiblePhotos` keeps instead of applying the sort control, which is hidden
+  then) and `/trips/{id}/locations`. The gallery groups by `"day"`
+  (`PhotoGrid`'s `groupBy`, read off the `created_at` string, not the
+  browser's timezone). `TripHeader` sits above the grid with a collapsible
+  `TripMap` (Leaflet, divIcon markers styled in `styles.css`, popups built
+  from DOM nodes — never an HTML string, place names come from OSM). Clicking
+  a stop sets `selectedStop` and narrows the gallery to that stop's
+  `photo_ids`; highlighting a stop toggles a class rather than rebuilding the
+  map (which would reset the user's pan/zoom). In jsdom tests, stub
+  `L.polyline` (no SVG there).
 - `SyncStatus.jsx` itself is unchanged by the above move: it renders a
   plain button when idle, or (while a backend sync is running/just
   finished) a small progress bar polled from `GET /api/sync/status` every

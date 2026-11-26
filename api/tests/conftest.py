@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     from app.main import app
     from app.recognition import progress as refresh_progress
     from app.sync import progress as sync_progress
+    from app.trips import progress as trip_progress
 
     # Sync (triggered by most tests that use this fixture) generates a
     # description per inserted/updated photo via chat.caption_image, which
@@ -88,6 +89,7 @@ def client(tmp_path, monkeypatch):
     description_progress.reset()
     location_progress.reset()
     pet_progress.reset()
+    trip_progress.reset()
 
     with TestClient(app) as test_client:
         # There's no per-test throwaway SQLite file anymore -- tests share
@@ -102,7 +104,8 @@ def client(tmp_path, monkeypatch):
         # No reranker in tests unless one opts in (it would download a model).
         monkeypatch.setenv("LUMINARY_RERANKER_MODEL", "")
         with get_connection() as conn:
-            conn.execute("TRUNCATE TABLE photos, faces, face_rejections, individuals, tags, photo_tags, photo_embeddings")
+            conn.execute("TRUNCATE TABLE photos, faces, face_rejections, individuals, tags, photo_tags, photo_embeddings, "
+                "homes, trips, trip_photos, trip_exclusions")
             conn.commit()
         yield test_client
 
@@ -192,3 +195,17 @@ def refresh_pets_and_wait(client, timeout=30.0):
             return status
         time.sleep(0.05)
     raise AssertionError(f"pet backfill did not finish in time: {status}")
+
+
+def refresh_trips_and_wait(client, timeout=30.0):
+    """Same polling pattern as sync_and_wait, for trips.py's "Rebuild trips"
+    job (POST /api/trips/refresh)."""
+    client.post("/api/trips/refresh")
+    deadline = time.monotonic() + timeout
+    status = {}
+    while time.monotonic() < deadline:
+        status = client.get("/api/trips/refresh/status").json()
+        if status["status"] in ("completed", "error", "cancelled"):
+            return status
+        time.sleep(0.05)
+    raise AssertionError(f"trips rebuild did not finish in time: {status}")

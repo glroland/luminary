@@ -515,6 +515,52 @@ shape as "Refresh Faces"/"Refresh Descriptions" (own thread, progress
 polling, `idle`/`running`/`completed`/`error`), and subject to the same
 one-request-per-second cap against the public Nominatim instance above.
 
+### Trips
+
+The sidebar's **By Trip** section groups photos into trips: runs of photos
+taken away from home. Only photos with **both a date and GPS coordinates**
+take part — without either there's nothing to place on a timeline or a map,
+so such a photo is never put in a trip automatically. Everything is derived
+from data already in Postgres; the photos backend is never touched.
+
+How it decides (`trip_detection.py`, pure and unit-tested; `trips.py` stores
+the result):
+
+1. **Home** is worked out from where the most distinct days are spent in each
+   calendar year, so a move gives two dated homes. If you've entered or
+   confirmed a home, that wins outright.
+2. A photo farther than `LUMINARY_TRIP_HOME_RADIUS_KM` from the home in force
+   on its date is *away*.
+3. Away photos form a trip until more than `LUMINARY_TRIP_GAP_DAYS` pass with
+   none, or a whole day is spent at home.
+4. Candidates under `LUMINARY_TRIP_MIN_PHOTOS` photos or `LUMINARY_TRIP_MIN_HOURS`
+   hours are dropped. One calendar day is a **day outing** (hidden in the
+   sidebar until "Show day outings" is ticked); two or more are a **trip**.
+
+Selecting a trip shows its photos in date order, grouped by day, under a map:
+one numbered marker per stop (photos within `LUMINARY_TRIP_STOP_RADIUS_KM` of
+each other), a dashed line in the order they were visited, and a home marker.
+Click a stop to narrow the gallery to it. Times are treated as the wall clock
+where the photo was taken — no time zone is worked out, since every threshold
+is in days.
+
+Trips are rebuilt after every sync and Refresh Locations, and on demand with
+the management page's **Rebuild Trips** button (`POST /api/trips/refresh`,
+polled via `GET /api/trips/refresh/status`). Names use the place names from
+geocoding, so they get better after **Refresh Locations**.
+
+| Variable                          | Default | Purpose                                                                 |
+|-----------------------------------|---------|-------------------------------------------------------------------------|
+| `LUMINARY_TRIP_HOME_RADIUS_KM`    | `50`    | Distance from home beyond which a photo counts as away                  |
+| `LUMINARY_TRIP_GAP_DAYS`          | `2`     | Days with no away photo that end a trip                                 |
+| `LUMINARY_TRIP_MIN_PHOTOS`        | `10`    | Fewest photos for a trip/outing                                         |
+| `LUMINARY_TRIP_MIN_HOURS`         | `4`     | Shortest span (first to last photo)                                     |
+| `LUMINARY_TRIP_HOME_MIN_DAYS`     | `30`    | Distinct days in a year a place needs to be detected as home            |
+| `LUMINARY_TRIP_STOP_RADIUS_KM`    | `2`     | Photos this close together are one stop on the map                      |
+
+Like the face-match threshold, none of these has a verified-correct value;
+tune them against your own library.
+
 ### Pets
 
 Cats and dogs are detected while indexing (`pet_detection.py`; turn it off

@@ -220,6 +220,64 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id)")
+        # Trips -- see db/create_tables.sql's matching tables and
+        # trips.py / trip_detection.py. No FK constraints.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS homes (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                latitude DOUBLE PRECISION NOT NULL,
+                longitude DOUBLE PRECISION NOT NULL,
+                radius_km DOUBLE PRECISION,
+                start_date TEXT,
+                end_date TEXT,
+                country TEXT,
+                state TEXT,
+                city TEXT,
+                source TEXT NOT NULL DEFAULT 'auto',
+                confirmed BOOLEAN NOT NULL DEFAULT FALSE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trips (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                name_source TEXT NOT NULL DEFAULT 'auto',
+                kind TEXT NOT NULL DEFAULT 'trip',
+                status TEXT NOT NULL DEFAULT 'active',
+                source TEXT NOT NULL DEFAULT 'auto',
+                start_at TEXT,
+                end_at TEXT,
+                cover_photo_id TEXT,
+                cover_source TEXT NOT NULL DEFAULT 'auto',
+                edited BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trip_photos (
+                photo_id TEXT PRIMARY KEY,
+                trip_id TEXT NOT NULL,
+                membership TEXT NOT NULL DEFAULT 'auto'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trip_exclusions (
+                trip_id TEXT NOT NULL,
+                photo_id TEXT NOT NULL,
+                PRIMARY KEY (trip_id, photo_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trip_photos_trip_id ON trip_photos (trip_id)")
 
         # One photo -> many detected faces (sync.py's Florence-2 face
         # detection). No FK constraint -- this app already deletes rows

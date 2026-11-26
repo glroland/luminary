@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import { individualThumbnailUrl } from "../api/client.js";
+import TripTree from "./TripTree.jsx";
 import DateTree from "./DateTree.jsx";
 import DirectoryTree from "./DirectoryTree.jsx";
 import LocationTree from "./LocationTree.jsx";
 import LocationMapDialog from "./LocationMapDialog.jsx";
 import { LOCATION_UNKNOWN, buildLocationTree } from "../locations.js";
+import { visibleTrips } from "../trips.js";
 
 // Builds a nested {children: {name: node}} tree of every directory that
 // appears in `photos`' filenames (relative paths, e.g.
@@ -73,6 +75,7 @@ const ICON_PATHS = {
   pin: "M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
   calendar: "M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM4 10h16M8 3v4M16 3v4",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  trip: "M4 8h16v11H4zM9 8V5h6v3M4 13h16",
   sliders: "M4 7h10M18 7h2M4 17h2M10 17h10M16 4v6M8 14v6",
 };
 
@@ -132,7 +135,8 @@ function Section({ title, icon, expanded, onToggle, children }) {
 // get back to those results after browsing elsewhere); "By Folder" filters
 // by directory (via DirectoryTree, built from the photos' own paths); "By
 // Individual" filters to photos containing a selected catalogued person;
-// "By Tag" filters to photos with a selected tag attached; "By Date"
+// "By Tag" filters to photos with a selected tag attached; "By Trip"
+// filters to one detected trip (TripTree, from GET /api/trips); "By Date"
 // filters by the photo's created_at via a year -> month -> day tree
 // (DateTree, built from the photos' own created_at the same way the
 // folder tree is built from their filenames -- there's no dedicated
@@ -150,6 +154,11 @@ export default function Sidebar({
   onSelectTag = () => {},
   selectedLocation = null,
   onSelectLocation = () => {},
+  trips = [],
+  selectedTrip = null,
+  onSelectTrip = () => {},
+  showOutings = false,
+  onToggleOutings = () => {},
   selectedDate,
   onSelectDate,
   onAllImages,
@@ -169,11 +178,14 @@ export default function Sidebar({
   const [locationsExpanded, setLocationsExpanded] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [datesExpanded, setDatesExpanded] = useState(false);
+  const [tripsExpanded, setTripsExpanded] = useState(false);
+  const shownTrips = useMemo(() => visibleTrips(trips, showOutings), [trips, showOutings]);
   const noFilter =
     selectedDirectory === null &&
     selectedIndividual === null &&
     selectedTag === null &&
     selectedLocation === null &&
+    selectedTrip === null &&
     selectedDate === null &&
     !searchActive;
 
@@ -343,6 +355,17 @@ export default function Sidebar({
 
         <Section title="By Date" icon="calendar" expanded={datesExpanded} onToggle={() => setDatesExpanded((prev) => !prev)}>
           <DateTree node={dateTree} path={null} selectedDate={selectedDate} onSelectDate={onSelectDate} />
+        </Section>
+
+        <Section title="By Trip" icon="trip" expanded={tripsExpanded} onToggle={() => setTripsExpanded((prev) => !prev)}>
+          <TripTree
+            trips={shownTrips}
+            hasTrips={trips.length > 0}
+            selectedTrip={selectedTrip}
+            onSelectTrip={onSelectTrip}
+            showOutings={showOutings}
+            onToggleOutings={onToggleOutings}
+          />
         </Section>
       </nav>
 

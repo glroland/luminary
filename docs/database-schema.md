@@ -272,6 +272,65 @@ No foreign key, same explicit-cleanup rationale as `faces.photo_id`/
 alongside its `faces` rows, and `tags.delete_tag` deletes a removed tag's
 `photo_tags` rows before deleting the `tags` row itself.
 
+## `homes` / `trips` / `trip_photos` / `trip_exclusions`
+
+Trip detection — see `trips.py` (storage, reconciliation, job) and
+`trip_detection.py` (the pure algorithm), and the README's "Trips" section.
+A trip is a run of photos that have **both** `created_at` and
+`latitude`/`longitude` and were taken away from home. No foreign keys, same
+explicit-cleanup rationale as `faces`: `storage.delete_photo`,
+`storage.purge_all` and `sync._delete_missing` delete a removed photo's
+`trip_photos`/`trip_exclusions` rows.
+
+### `homes`
+
+Where the user lives. Auto-detected per calendar year (`source = 'auto'`,
+`confirmed = FALSE`; replaced on every run) or entered/confirmed by the user
+(never touched by detection, and if any exist they are the only homes used).
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | `TEXT` | no | Primary key, `uuid4`. |
+| `name` | `TEXT` | yes | Display name (city/state/country, or "Home"). |
+| `latitude`, `longitude` | `DOUBLE PRECISION` | no | Centre. |
+| `radius_km` | `DOUBLE PRECISION` | yes | `NULL` uses `LUMINARY_TRIP_HOME_RADIUS_KM`. |
+| `start_date`, `end_date` | `TEXT` | yes | `YYYY-MM-DD` range this home was in force; `NULL` is unbounded. A photo outside every range uses the nearest. |
+| `country`, `state`, `city` | `TEXT` | yes | Most common place among geocoded photos there. Display only. |
+| `source` | `TEXT` | no | `auto` or `manual`. |
+| `confirmed` | `BOOLEAN` | no | Default `FALSE`. |
+
+### `trips`
+
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | `TEXT` | no | Primary key, `uuid4`. |
+| `name` | `TEXT` | no | Auto-generated ("Italy, May 2019") unless `name_source = 'manual'`. |
+| `name_source`, `cover_source`, `source` | `TEXT` | no | `auto` or `manual`. Detection regenerates only `auto` values. |
+| `kind` | `TEXT` | no | `trip` (two or more calendar days) or `outing` (one day). |
+| `status` | `TEXT` | no | `active`, or `dismissed` — a tombstone that keeps `start_at`/`end_at` so detection doesn't recreate it. |
+| `start_at`, `end_at` | `TEXT` | yes | First/last member's wall-clock time (ISO 8601, no zone). |
+| `cover_photo_id` | `TEXT` | yes | Logically `photos.id`. Auto: the middle photo by time that has a thumbnail. |
+| `edited` | `BOOLEAN` | no | Set by any manual change. Detection never deletes an edited trip. |
+| `created_at`, `updated_at` | `TEXT` | no | ISO 8601 UTC. |
+
+### `trip_photos`
+
+`photo_id` is the **primary key**: a photo is in at most one trip. `trip_id`
+is indexed. `membership` is `auto` (detection may release it when the photo
+stops qualifying) or `manual` (never released by detection).
+
+### `trip_exclusions`
+
+Primary key `(trip_id, photo_id)`: a photo a user removed from a trip, which
+detection will not put back into that trip.
+
+### Reconciliation
+
+A rebuild runs in one transaction under a Postgres advisory lock. Detection
+may create trips and extend them with photos not in any trip; it never moves
+a photo between trips, merges, splits, or recreates a dismissed trip. An
+unedited auto trip left under `LUMINARY_TRIP_MIN_PHOTOS` is deleted.
+
 ## Automatic face recognition ("Refresh Faces")
 
 `recognition.py` (`POST /api/faces/refresh`, `GET /api/faces/refresh/status`)

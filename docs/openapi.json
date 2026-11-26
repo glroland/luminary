@@ -405,7 +405,7 @@
         "type": "object"
       },
       "JobsStatus": {
-        "description": "Every background job in one response -- see jobs.py. `active` is the\none job holding the single claim (\"sync\" | \"faces\" | \"descriptions\" |\n\"locations\" | \"pets\"), or null when idle; `cancelling` is true once a cancel\nwas requested and the job hasn't stopped yet.",
+        "description": "Every background job in one response -- see jobs.py. `active` is the\none job holding the single claim (\"sync\" | \"faces\" | \"descriptions\" |\n\"locations\" | \"pets\" | \"trips\"), or null when idle; `cancelling` is true once a cancel\nwas requested and the job hasn't stopped yet.",
         "properties": {
           "active": {
             "anyOf": [
@@ -437,6 +437,9 @@
           },
           "sync": {
             "$ref": "#/components/schemas/SyncStatus"
+          },
+          "trips": {
+            "$ref": "#/components/schemas/TripRefreshStatus"
           }
         },
         "required": [
@@ -444,7 +447,8 @@
           "faces",
           "descriptions",
           "locations",
-          "pets"
+          "pets",
+          "trips"
         ],
         "title": "JobsStatus",
         "type": "object"
@@ -1158,6 +1162,293 @@
           "photo_ids"
         ],
         "title": "TaggedPhotoIds",
+        "type": "object"
+      },
+      "Trip": {
+        "properties": {
+          "cover_photo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Photo Id"
+          },
+          "edited": {
+            "default": false,
+            "title": "Edited",
+            "type": "boolean"
+          },
+          "end_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "photo_count": {
+            "default": 0,
+            "title": "Photo Count",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "start_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "status",
+          "source"
+        ],
+        "title": "Trip",
+        "type": "object"
+      },
+      "TripHome": {
+        "properties": {
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "name"
+        ],
+        "title": "TripHome",
+        "type": "object"
+      },
+      "TripList": {
+        "properties": {
+          "trips": {
+            "items": {
+              "$ref": "#/components/schemas/Trip"
+            },
+            "title": "Trips",
+            "type": "array"
+          }
+        },
+        "required": [
+          "trips"
+        ],
+        "title": "TripList",
+        "type": "object"
+      },
+      "TripLocations": {
+        "properties": {
+          "home": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TripHome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Route",
+            "type": "array"
+          },
+          "stops": {
+            "items": {
+              "$ref": "#/components/schemas/TripStop"
+            },
+            "title": "Stops",
+            "type": "array"
+          },
+          "unlocated_count": {
+            "default": 0,
+            "title": "Unlocated Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stops",
+          "route"
+        ],
+        "title": "TripLocations",
+        "type": "object"
+      },
+      "TripPhotoIds": {
+        "properties": {
+          "photo_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Photo Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "photo_ids"
+        ],
+        "title": "TripPhotoIds",
+        "type": "object"
+      },
+      "TripRefreshStatus": {
+        "properties": {
+          "created": {
+            "default": 0,
+            "title": "Created",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "homes": {
+            "default": 0,
+            "title": "Homes",
+            "type": "integer"
+          },
+          "processed": {
+            "default": 0,
+            "title": "Processed",
+            "type": "integer"
+          },
+          "removed": {
+            "default": 0,
+            "title": "Removed",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "updated": {
+            "default": 0,
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "TripRefreshStatus",
+        "type": "object"
+      },
+      "TripStop": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "cover_photo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Photo Id"
+          },
+          "first_at": {
+            "title": "First At",
+            "type": "string"
+          },
+          "last_at": {
+            "title": "Last At",
+            "type": "string"
+          },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
+          "photo_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Photo Ids",
+            "type": "array"
+          },
+          "place": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Place"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "count",
+          "first_at",
+          "last_at",
+          "photo_ids"
+        ],
+        "title": "TripStop",
         "type": "object"
       },
       "ValidationError": {
@@ -2675,6 +2966,180 @@
           }
         },
         "summary": "Get Tagged Photos Csv"
+      }
+    },
+    "/api/trips": {
+      "get": {
+        "description": "Every active trip and day outing, newest first.",
+        "operationId": "list_trips_api_trips_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Trips"
+      }
+    },
+    "/api/trips/refresh": {
+      "post": {
+        "operationId": "refresh_trips_api_trips_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripRefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Trips"
+      }
+    },
+    "/api/trips/refresh/status": {
+      "get": {
+        "operationId": "get_refresh_status_api_trips_refresh_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripRefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Refresh Status"
+      }
+    },
+    "/api/trips/{trip_id}": {
+      "get": {
+        "operationId": "get_trip_api_trips__trip_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trip_id",
+            "required": true,
+            "schema": {
+              "title": "Trip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trip"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Trip"
+      }
+    },
+    "/api/trips/{trip_id}/locations": {
+      "get": {
+        "description": "Backs the trip map: stops, the route between them, and the home.",
+        "operationId": "get_trip_locations_api_trips__trip_id__locations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trip_id",
+            "required": true,
+            "schema": {
+              "title": "Trip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripLocations"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Trip Locations"
+      }
+    },
+    "/api/trips/{trip_id}/photos": {
+      "get": {
+        "description": "Backs the sidebar's \"By Trip\" filter: ids of every photo in the trip,\noldest first.",
+        "operationId": "get_trip_photo_ids_api_trips__trip_id__photos_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trip_id",
+            "required": true,
+            "schema": {
+              "title": "Trip Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripPhotoIds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Trip Photo Ids"
       }
     }
   }

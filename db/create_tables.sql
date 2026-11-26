@@ -237,6 +237,67 @@ CREATE TABLE IF NOT EXISTS photo_tags (
 
 CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags (tag_id);
 
+-- Trips (trips.py / trip_detection.py): runs of dated, GPS-tagged photos
+-- taken away from home. No FK constraints, same explicit-delete rationale
+-- as photo_tags above (storage.delete_photo/purge_all and
+-- sync._delete_missing clean up trip_photos/trip_exclusions).
+--
+-- Where the user lives: auto-detected per calendar year (unconfirmed,
+-- replaced on every run) or entered by hand / confirmed (never touched by
+-- detection). NULL start/end = unbounded. country/state/city are for
+-- display only.
+CREATE TABLE IF NOT EXISTS homes (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    latitude DOUBLE PRECISION NOT NULL,
+    longitude DOUBLE PRECISION NOT NULL,
+    radius_km DOUBLE PRECISION,
+    start_date TEXT,
+    end_date TEXT,
+    country TEXT,
+    state TEXT,
+    city TEXT,
+    source TEXT NOT NULL DEFAULT 'auto',
+    confirmed BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- kind: 'trip' (2+ calendar days) | 'outing' (one day). status: 'active' |
+-- 'dismissed' (a tombstone: keeps start_at/end_at so detection doesn't
+-- recreate it). source/name_source/cover_source: 'auto' | 'manual'.
+-- edited: any manual change -- detection never deletes an edited trip.
+CREATE TABLE IF NOT EXISTS trips (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_source TEXT NOT NULL DEFAULT 'auto',
+    kind TEXT NOT NULL DEFAULT 'trip',
+    status TEXT NOT NULL DEFAULT 'active',
+    source TEXT NOT NULL DEFAULT 'auto',
+    start_at TEXT,
+    end_at TEXT,
+    cover_photo_id TEXT,
+    cover_source TEXT NOT NULL DEFAULT 'auto',
+    edited BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- photo_id is the primary key: a photo is in at most one trip.
+-- membership: 'auto' (detection may release it) | 'manual' (never).
+CREATE TABLE IF NOT EXISTS trip_photos (
+    photo_id TEXT PRIMARY KEY,
+    trip_id TEXT NOT NULL,
+    membership TEXT NOT NULL DEFAULT 'auto'
+);
+
+CREATE INDEX IF NOT EXISTS idx_trip_photos_trip_id ON trip_photos (trip_id);
+
+-- A photo a user removed from a trip: detection never puts it back.
+CREATE TABLE IF NOT EXISTS trip_exclusions (
+    trip_id TEXT NOT NULL,
+    photo_id TEXT NOT NULL,
+    PRIMARY KEY (trip_id, photo_id)
+);
+
 -- One photo -> many detected faces (sync.py's Florence-2 face detection).
 -- No FK constraint, to match the app's own explicit-delete approach
 -- (storage.delete_photo, sync._delete_missing) rather than relying on a
