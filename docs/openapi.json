@@ -120,6 +120,15 @@
       },
       "CreateIndividualRequest": {
         "properties": {
+          "kind": {
+            "default": "person",
+            "enum": [
+              "person",
+              "pet"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -200,6 +209,15 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "default": "person",
+            "enum": [
+              "person",
+              "pet"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "person_id": {
             "anyOf": [
               {
@@ -210,6 +228,17 @@
               }
             ],
             "title": "Person Id"
+          },
+          "species": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Species"
           },
           "tag_source": {
             "anyOf": [
@@ -334,6 +363,15 @@
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "person",
+            "enum": [
+              "person",
+              "pet"
+            ],
+            "title": "Kind",
             "type": "string"
           },
           "name": {

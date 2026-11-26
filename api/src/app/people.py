@@ -68,13 +68,22 @@ REPRESENTATIVE_THUMBNAIL_SIZE = (160, 160)
 def list_individuals() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, name, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, created_at "
-            "FROM individuals ORDER BY name"
+            "SELECT id, name, kind, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, "
+            "created_at FROM individuals ORDER BY name"
         ).fetchall()
         return [dict(row) for row in rows]
 
 
-def create_individual(name: str) -> dict:
+INDIVIDUAL_KINDS = ("person", "pet")
+
+
+class KindMismatch(Exception):
+    """A face can only be tagged to an individual of its own kind -- a
+    detected dog is never a catalogued person, or the other way round.
+    Mapped to a 409 by routers/faces.py."""
+
+
+def create_individual(name: str, kind: str = "person") -> dict:
     """Raises psycopg.errors.UniqueViolation (via get_connection, which logs
     and re-raises any psycopg.Error) if `name` is already catalogued --
     left for the router to map to a 409, rather than checked here first and
@@ -83,18 +92,24 @@ def create_individual(name: str) -> dict:
     created_at = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO individuals (id, name, created_at) VALUES (%s, %s, %s)",
-            (individual_id, name, created_at),
+            "INSERT INTO individuals (id, name, kind, created_at) VALUES (%s, %s, %s, %s)",
+            (individual_id, name, kind, created_at),
         )
         conn.commit()
-    return {"id": individual_id, "name": name, "has_representative_thumbnail": False, "created_at": created_at}
+    return {
+        "id": individual_id,
+        "name": name,
+        "kind": kind,
+        "has_representative_thumbnail": False,
+        "created_at": created_at,
+    }
 
 
 def get_individual(person_id: str) -> Optional[dict]:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id, name, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, created_at "
-            "FROM individuals WHERE id = %s",
+            "SELECT id, name, kind, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, "
+            "created_at FROM individuals WHERE id = %s",
             (person_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -258,6 +273,11 @@ def box_iou(a: dict, b: dict) -> float:
     return inter / union if union > 0 else 0.0
 
 
+# A pet's box is the whole animal, tight to the body; a small margin keeps
+# ears and tail tips in its crop. A human face box is used as detected.
+PET_CROP_MARGIN = 0.1
+
+
 def crop_face_thumbnail(original_bytes: bytes, box: dict) -> Optional[bytes]:
     """Crop `box` (x1/y1/x2/y2, in the same EXIF-transposed pixel space
     sync.py's face detection used -- see storage.replace_faces) out of a
@@ -279,10 +299,15 @@ def crop_face_thumbnail(original_bytes: bytes, box: dict) -> Optional[bytes]:
     # here); PIL then yields an empty crop and JPEG save raises "cannot write
     # empty image". Clamp to the image, and treat an empty result as "no crop".
     width, height = rgb_image.size
-    x1 = max(0, int(min(box["x1"], box["x2"])))
-    y1 = max(0, int(min(box["y1"], box["y2"])))
-    x2 = min(width, int(max(box["x1"], box["x2"])))
-    y2 = min(height, int(max(box["y1"], box["y2"])))
+    left, right = min(box["x1"], box["x2"]), max(box["x1"], box["x2"])
+    top, bottom = min(box["y1"], box["y2"]), max(box["y1"], box["y2"])
+    if box.get("kind") == "pet":
+        margin_x, margin_y = (right - left) * PET_CROP_MARGIN, (bottom - top) * PET_CROP_MARGIN
+        left, right, top, bottom = left - margin_x, right + margin_x, top - margin_y, bottom + margin_y
+    x1 = max(0, int(left))
+    y1 = max(0, int(top))
+    x2 = min(width, int(right))
+    y2 = min(height, int(bottom))
     if x2 <= x1 or y2 <= y1:
         logger.warning("Face box %s is empty or outside the %dx%d image; skipping crop", box, width, height)
         return None
@@ -319,16 +344,23 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
     manual tag always wins over, and replaces, an auto one.
 
     Regenerates photos.description (enrich.py, see this module's
-    docstring) for the face's photo before returning."""
+    docstring) for the face's photo before returning.
+
+    Raises KindMismatch if the face's kind (person/pet) differs from the
+    individual's."""
     with get_connection() as conn:
         face = conn.execute(
-            "SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE id = %s", (face_id,)
+            "SELECT id, photo_id, x1, y1, x2, y2, kind, species FROM faces WHERE id = %s", (face_id,)
         ).fetchone()
         if not face:
             return None
-        individual = conn.execute("SELECT id FROM individuals WHERE id = %s", (person_id,)).fetchone()
+        individual = conn.execute("SELECT id, kind FROM individuals WHERE id = %s", (person_id,)).fetchone()
         if not individual:
             return None
+        # "person" (a human face) <-> individual.kind "person"; a pet box
+        # <-> "pet". Checked before any I/O or write.
+        if face["kind"] != individual["kind"]:
+            raise KindMismatch(f"A {face['kind']} face can't be tagged to a {individual['kind']}")
         photo = conn.execute("SELECT filename FROM photos WHERE id = %s", (face["photo_id"],)).fetchone()
 
     thumbnail = None
@@ -373,4 +405,6 @@ def tag_face(face_id: str, person_id: str) -> Optional[dict]:
         "y2": face["y2"],
         "person_id": person_id,
         "tag_source": "manual",
+        "kind": face["kind"],
+        "species": face["species"],
     }

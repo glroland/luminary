@@ -30,3 +30,9 @@ CREATE INDEX IF NOT EXISTS idx_face_rejections_photo_id ON face_rejections (phot
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_country TEXT;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_state TEXT;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_city TEXT;
+
+-- Pets: faces/individuals gain a kind; photos track pet detection.
+ALTER TABLE individuals ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person';
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person';
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS species TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS pet_detection_done BOOLEAN NOT NULL DEFAULT FALSE;

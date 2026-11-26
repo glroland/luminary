@@ -66,6 +66,24 @@ describe("ManagementPage", () => {
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
   });
 
+  it("adds a pet via the kind selector and badges it", async () => {
+    const REX = { ...ALICE, id: "p9", name: "Rex", kind: "pet" };
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+    const createMock = vi.spyOn(client, "createIndividual").mockResolvedValue(REX);
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/no individuals catalogued yet/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "pet" } });
+    fireEvent.change(screen.getByPlaceholderText("Add a pet…"), { target: { value: "Rex" } });
+    const form = screen.getByPlaceholderText("Add a pet…").closest("form");
+    fireEvent.click(within(form).getByRole("button", { name: "Add" }));
+
+    expect(createMock).toHaveBeenCalledWith("Rex", "pet");
+    await waitFor(() => expect(screen.getByText("Rex")).toBeInTheDocument());
+    expect(screen.getByText("pet")).toBeInTheDocument();
+  });
+
   it("renames an individual", async () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
     const updateMock = vi

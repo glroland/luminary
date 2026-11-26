@@ -2,9 +2,9 @@
 
 Run by api/Containerfile (image build) and `make install-models` (local
 dev), so both populate the cache from the exact same list. Mirrors
-chat.py's _load_florence(), embeddings.py's _load_embedder() and
+chat.py's _load_florence(), embeddings.py's _load_embedder(),
 recognition.py's _load_embedder() (model id, trust_remote_code,
-pretrained="vggface2"). Where the files land is decided by the caller via
+pretrained="vggface2") and pet_detection.py's _load_detector(). Where the files land is decided by the caller via
 HF_HOME / TORCH_HOME, not here. Needs network access.
 """
 
@@ -24,6 +24,13 @@ def main() -> None:
     AutoModelForCausalLM.from_pretrained(florence, torch_dtype=torch.float32, trust_remote_code=True)
     AutoProcessor.from_pretrained(florence, trust_remote_code=True)
     InceptionResnetV1(pretrained="vggface2").eval()
+    # pet_detection.py's COCO detector (cats/dogs) -- same weights enum it loads.
+    from torchvision.models.detection import (
+        FasterRCNN_MobileNet_V3_Large_FPN_Weights,
+        fasterrcnn_mobilenet_v3_large_fpn,
+    )
+
+    fasterrcnn_mobilenet_v3_large_fpn(weights=FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT).eval()
     SentenceTransformer(embedding, device="cpu")
     if reranker:
         CrossEncoder(reranker, device="cpu")

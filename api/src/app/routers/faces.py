@@ -34,7 +34,10 @@ def get_refresh_status() -> dict:
 
 @router.post("/faces/{face_id}/tag", response_model=FaceBox)
 def tag_face(face_id: str, body: TagFaceRequest) -> dict:
-    face = people.tag_face(face_id, body.person_id)
+    try:
+        face = people.tag_face(face_id, body.person_id)
+    except people.KindMismatch as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if not face:
         raise HTTPException(status_code=404, detail="Face or individual not found")
     return face

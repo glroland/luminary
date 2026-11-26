@@ -283,7 +283,8 @@ def _reference_embeddings() -> dict[str, list[float]]:
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT person_id, thumbnail FROM faces "
-            "WHERE tag_source = 'manual' AND person_id IS NOT NULL AND thumbnail IS NOT NULL"
+            "WHERE tag_source = 'manual' AND person_id IS NOT NULL AND thumbnail IS NOT NULL "
+            "AND kind = 'person'"
         ).fetchall()
 
     by_person: dict[str, list[list[float]]] = {}
@@ -361,7 +362,9 @@ def _photos_with_tagged_faces() -> list[str]:
     bulk clear" pattern, just scoped to the whole library instead of one
     individual."""
     with get_connection() as conn:
-        rows = conn.execute("SELECT DISTINCT photo_id FROM faces WHERE person_id IS NOT NULL").fetchall()
+        rows = conn.execute(
+            "SELECT DISTINCT photo_id FROM faces WHERE person_id IS NOT NULL AND kind = 'person'"
+        ).fetchall()
         return [row["photo_id"] for row in rows]
 
 
@@ -416,7 +419,9 @@ def _redetect_photo_faces(photo: dict) -> Optional[int]:
         return None
 
     boxes = face_detection.detect_faces(image)
-    storage.replace_faces(photo["id"], boxes)
+    # Humans only: the redetect re-runs MTCNN, so it must not wipe pet
+    # boxes/tags it knows nothing about.
+    storage.replace_faces(photo["id"], boxes, kinds=["person"])
     with get_connection() as conn:
         conn.execute("UPDATE photos SET face_detection_done = TRUE WHERE id = %s", (photo["id"],))
         conn.commit()
@@ -429,7 +434,11 @@ def _candidate_faces() -> list[dict]:
     content changes produces fresh untagged candidates here too (its old
     tags, manual or auto, don't survive re-detection)."""
     with get_connection() as conn:
-        rows = conn.execute("SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE person_id IS NULL").fetchall()
+        # Humans only: this module's embedder is a *face* model, and a pet
+        # box embedded by it would be matched against human references.
+        rows = conn.execute(
+            "SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE person_id IS NULL AND kind = 'person'"
+        ).fetchall()
         return [dict(row) for row in rows]
 
 

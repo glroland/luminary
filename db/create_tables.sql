@@ -96,6 +96,10 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_city TEXT;
 -- the time it was indexed. No-op once the constraint is gone.
 ALTER TABLE photos ALTER COLUMN created_at DROP NOT NULL;
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
+-- TRUE once pet detection has successfully run for the photo (see
+-- pet_detection.py). Separate from face_detection_done so the pets backfill
+-- can find photos indexed before pets existed.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS pet_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- SHA-256 hex digest of the file's raw bytes (storage.compute_checksum),
 -- for reliably telling whether two files are byte-identical -- unlike
@@ -204,8 +208,13 @@ CREATE TABLE IF NOT EXISTS individuals (
     -- (people.tag_face) -- a single representative image, not a gallery of
     -- every face ever tagged to them.
     representative_thumbnail BYTEA,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- 'person' | 'pet'. A face can only be tagged to an individual of its
+    -- own kind (people.tag_face), and recognition only compares like with
+    -- like.
+    kind TEXT NOT NULL DEFAULT 'person'
 );
+ALTER TABLE individuals ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person';
 
 -- Catalog of free-form tags whole photos can be tagged with (see
 -- `photo_tags` below) -- tags.py / routers/tags.py, routers/photos.py's
@@ -279,6 +288,12 @@ ALTER TABLE faces ADD COLUMN IF NOT EXISTS thumbnail BYTEA;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION;
 ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION;
+-- 'person' (face_detection.py's MTCNN) or 'pet' (pet_detection.py's
+-- whole-animal box). `species` is 'cat'/'dog' for a pet, NULL for a person.
+-- A constant DEFAULT is metadata-only in Postgres: no row rewrite, and every
+-- pre-existing row correctly reads 'person'.
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person';
+ALTER TABLE faces ADD COLUMN IF NOT EXISTS species TEXT;
 
 -- Backfill: any face tagged before tag_source existed was necessarily
 -- tagged via the manual tag_face endpoint (recognition.py's auto-tagging

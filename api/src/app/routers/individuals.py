@@ -22,7 +22,7 @@ def create_individual(body: CreateIndividualRequest) -> dict:
     if not name:
         raise HTTPException(status_code=422, detail="Name must not be empty")
     try:
-        return people.create_individual(name)
+        return people.create_individual(name, body.kind)
     except psycopg.errors.UniqueViolation:
         raise HTTPException(status_code=409, detail=f"An individual named {name!r} already exists")
 

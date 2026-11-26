@@ -159,6 +159,7 @@ export default function PhotoModal({
   // distinct from "[]", fetched but empty.
   const [individuals, setIndividuals] = useState(null);
   const [newPersonName, setNewPersonName] = useState("");
+  const [newPersonKind, setNewPersonKind] = useState("person");
   const [addPersonError, setAddPersonError] = useState(null);
   const [tagError, setTagError] = useState(null);
 
@@ -471,7 +472,7 @@ export default function PhotoModal({
     event.preventDefault();
     const name = newPersonName.trim();
     if (!name) return;
-    createIndividual(name)
+    (newPersonKind === "pet" ? createIndividual(name, "pet") : createIndividual(name))
       .then((created) => {
         setIndividuals((prev) => [...(prev ?? []), created].sort((a, b) => a.name.localeCompare(b.name)));
         setNewPersonName("");
@@ -519,6 +520,16 @@ export default function PhotoModal({
   const peopleInPhoto = faceBoxes
     ? Array.from(new Map(faceBoxes.filter((box) => box.person_id).map((box) => [box.person_id, box])).values())
     : [];
+
+  // Only mention pets in the panel's heading when one is actually in it.
+  const peopleInPhotoHavePets = peopleInPhoto.some(
+    (box) => individuals?.find((candidate) => candidate.id === box.person_id)?.kind === "pet"
+  );
+
+  // The right-click tag menu only offers individuals of the clicked box's
+  // own kind -- the API refuses (409) to tag a dog as a person anyway.
+  const menuFaceKind = tagMenu ? (faceBoxes?.find((box) => box.id === tagMenu.faceId)?.kind ?? "person") : "person";
+  const menuIndividuals = individuals?.filter((individual) => (individual.kind ?? "person") === menuFaceKind) ?? null;
 
   // Catalog tags not already applied to this photo -- what the "add a
   // tag…" dropdown offers. New tags themselves are only ever created via
@@ -587,7 +598,7 @@ export default function PhotoModal({
                 return (
                   <div
                     key={box.id ?? index}
-                    className={`photo-modal-bbox photo-modal-bbox-face${box.person_id ? " photo-modal-bbox-face-tagged" : ""}`}
+                    className={`photo-modal-bbox photo-modal-bbox-face${box.kind === "pet" ? " photo-modal-bbox-pet" : ""}${box.person_id ? " photo-modal-bbox-face-tagged" : ""}`}
                     style={boxStyle(box, photo, imgRect)}
                     onMouseDown={box.id ? (event) => handleFaceMouseDown(event, box.id) : undefined}
                     onContextMenu={box.id ? handleFaceContextMenu : undefined}
@@ -663,7 +674,7 @@ export default function PhotoModal({
           </div>
 
           <div className="photo-modal-people-in-photo">
-            <h3>People in this photo</h3>
+            <h3>{peopleInPhotoHavePets ? "People and pets in this photo" : "People in this photo"}</h3>
             {faceBoxes === null ? (
               <p className="photo-modal-people-loading">Loading…</p>
             ) : peopleInPhoto.length === 0 ? (
@@ -774,8 +785,16 @@ export default function PhotoModal({
                   type="text"
                   value={newPersonName}
                   onChange={(event) => setNewPersonName(event.target.value)}
-                  placeholder="Add a person…"
+                  placeholder={newPersonKind === "pet" ? "Add a pet…" : "Add a person…"}
                 />
+                <select
+                  aria-label="Kind"
+                  value={newPersonKind}
+                  onChange={(event) => setNewPersonKind(event.target.value)}
+                >
+                  <option value="person">Person</option>
+                  <option value="pet">Pet</option>
+                </select>
                 <button type="submit" disabled={!newPersonName.trim()}>
                   Add
                 </button>
@@ -812,12 +831,14 @@ export default function PhotoModal({
               Unmatch
             </div>
           )}
-          {individuals === null ? (
+          {menuIndividuals === null ? (
             <div className="face-tag-menu-item face-tag-menu-message">Loading…</div>
-          ) : individuals.length === 0 ? (
-            <div className="face-tag-menu-item face-tag-menu-message">No individuals catalogued yet</div>
+          ) : menuIndividuals.length === 0 ? (
+            <div className="face-tag-menu-item face-tag-menu-message">
+              {menuFaceKind === "pet" ? "No pets catalogued yet" : "No individuals catalogued yet"}
+            </div>
           ) : (
-            individuals.map((individual) => (
+            menuIndividuals.map((individual) => (
               <div
                 key={individual.id}
                 className={`face-tag-menu-item${tagMenu.hoveredId === individual.id ? " face-tag-menu-item-active" : ""}`}

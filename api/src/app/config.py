@@ -296,6 +296,29 @@ def get_face_min_size() -> int:
     return int(os.environ.get("LUMINARY_FACE_MIN_SIZE", "150"))
 
 
+# --- Pet detection (sync.py's indexing pipeline, pet_detection.py) ---------
+
+
+def get_pet_detection_enabled() -> bool:
+    """Whether sync.py also looks for cats and dogs (pet_detection.py).
+    On by default; `LUMINARY_PET_DETECTION=0` (or `false`/`no`/`off`) skips
+    the extra detector pass entirely -- it costs a second model load and a
+    second inference per photo, and a library with no pets has no use for
+    it. Human face detection never depends on this."""
+    return os.environ.get("LUMINARY_PET_DETECTION", "1").strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def get_pet_detection_threshold() -> float:
+    """Minimum torchvision detector score for a cat/dog box to be reported
+    (it's the `box_score_thresh` of the COCO detector, a per-box
+    probability, not comparable with MTCNN's `get_face_detection_threshold`
+    above). Like that one, there's no verified-correct value across
+    different libraries: lower finds more partly-hidden/far-away animals at
+    the cost of false positives (a fur coat, a plush toy). Starting point,
+    not a tuned number -- adjust against your own photos."""
+    return float(os.environ.get("LUMINARY_PET_DETECTION_THRESHOLD", "0.6"))
+
+
 # --- Automatic face recognition ("Refresh Faces", recognition.py) --------
 
 

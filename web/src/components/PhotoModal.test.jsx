@@ -295,6 +295,78 @@ describe("PhotoModal", () => {
     expect(within(taggedBox).getByText("Alice")).toBeInTheDocument();
   });
 
+  it("offers only pets in the tag menu of a pet box, and only people for a person box", async () => {
+    client.fetchFaces.mockResolvedValue([
+      { id: "face-1", x1: 100, y1: 100, x2: 300, y2: 300, person_id: null, kind: "person" },
+      { id: "pet-1", x1: 400, y1: 400, x2: 700, y2: 700, person_id: null, kind: "pet", species: "cat" },
+    ]);
+    client.fetchIndividuals.mockResolvedValue([
+      { id: "person-1", name: "Alice", kind: "person", has_representative_thumbnail: false, created_at: "x" },
+      { id: "pet-9", name: "Luna", kind: "pet", has_representative_thumbnail: false, created_at: "x" },
+    ]);
+
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+    pressF();
+
+    await waitFor(() => expect(document.querySelectorAll(".photo-modal-bbox-face")).toHaveLength(2));
+    const [personBox, petBox] = document.querySelectorAll(".photo-modal-bbox-face");
+    expect(petBox).toHaveClass("photo-modal-bbox-pet");
+    expect(personBox).not.toHaveClass("photo-modal-bbox-pet");
+
+    fireEvent.mouseDown(petBox, { button: 2, clientX: 50, clientY: 60 });
+    let menu = await waitForElement(".face-tag-menu");
+    expect(within(menu).getByText("Luna")).toBeInTheDocument();
+    expect(within(menu).queryByText("Alice")).not.toBeInTheDocument();
+    fireEvent.mouseUp(window, { button: 2 });
+
+    fireEvent.mouseDown(personBox, { button: 2, clientX: 50, clientY: 60 });
+    menu = await waitForElement(".face-tag-menu");
+    expect(within(menu).getByText("Alice")).toBeInTheDocument();
+    expect(within(menu).queryByText("Luna")).not.toBeInTheDocument();
+  });
+
+  it("says so in the pet menu when no pets are catalogued", async () => {
+    client.fetchFaces.mockResolvedValue([
+      { id: "pet-1", x1: 400, y1: 400, x2: 700, y2: 700, person_id: null, kind: "pet", species: "dog" },
+    ]);
+    client.fetchIndividuals.mockResolvedValue([
+      { id: "person-1", name: "Alice", kind: "person", has_representative_thumbnail: false, created_at: "x" },
+    ]);
+
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    measureImage();
+    pressF();
+
+    const petBox = await waitForElement(".photo-modal-bbox-face");
+    fireEvent.mouseDown(petBox, { button: 2, clientX: 50, clientY: 60 });
+
+    const menu = await waitForElement(".face-tag-menu");
+    expect(within(menu).getByText("No pets catalogued yet")).toBeInTheDocument();
+  });
+
+  it("adds a pet via the sidebar form's kind selector", async () => {
+    client.fetchFaces.mockResolvedValue([]);
+    client.fetchIndividuals.mockResolvedValue([]);
+    client.createIndividual.mockResolvedValue({
+      id: "pet-2",
+      name: "Rex",
+      kind: "pet",
+      has_representative_thumbnail: false,
+      created_at: "2024-01-01T00:00:00Z",
+    });
+
+    render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+    pressF();
+    await waitFor(() => expect(screen.getByText(/no individuals catalogued yet/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "pet" } });
+    fireEvent.change(screen.getByPlaceholderText("Add a pet…"), { target: { value: "Rex" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(client.createIndividual).toHaveBeenCalledWith("Rex", "pet"));
+  });
+
   it("closes the tag menu without tagging when released over no name", async () => {
     client.fetchFaces.mockResolvedValue([{ id: "face-1", x1: 100, y1: 100, x2: 300, y2: 300, person_id: null }]);
     client.fetchIndividuals.mockResolvedValue([

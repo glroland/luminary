@@ -159,8 +159,11 @@ def _without_id(faces: list[dict]) -> list[dict]:
     and assert the other fields separately/implicitly via this helper,
     always expecting them unset (None): the boxes here are bare x1-y2
     dicts, untagged and with no confidence of their own."""
-    extra = ("id", "person_id", "tag_source", "detection_confidence")
+    extra = ("id", "person_id", "tag_source", "detection_confidence", "kind", "species")
     for face in faces:
+        # A bare box is a human face (the default kind) with no species.
+        assert face["kind"] == "person"
+        assert face["species"] is None
         assert face["person_id"] is None
         assert face["tag_source"] is None
         assert face["detection_confidence"] is None

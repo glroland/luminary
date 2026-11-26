@@ -433,6 +433,8 @@ tunables:
 | Variable                          | Default | Purpose                              |
 |------------------------------------|---------|---------------------------------------|
 | `LUMINARY_FACE_DETECTION_THRESHOLD`| `0.8`   | Confidence MTCNN must clear to report a detected face — lower catches more faces (partial/angled/small, or in a crowded photo) at the cost of more false positives; no single right value across different libraries, tune against your own |
+| `LUMINARY_PET_DETECTION`           | `1`     | Also detect cats and dogs while indexing (`pet_detection.py`, a COCO Faster R-CNN) so they can be tagged like people. `0` skips the extra model pass entirely; human face detection never depends on it |
+| `LUMINARY_PET_DETECTION_THRESHOLD` | `0.6`   | Minimum detector score for a cat/dog box — lower finds more partly-hidden animals at the cost of false positives; no verified-correct value, tune against your own library |
 | `LUMINARY_FACE_MIN_SIZE`           | `150`   | Smallest face, in pixels of MTCNN's internally-resized copy of the image (not the original photo's resolution), it will report — lower catches smaller/more distant faces at the cost of more false positives and slower detection; facenet-pytorch's own MTCNN default (`20`) was confirmed too permissive in practice (spurious small-box detections) |
 | `LUMINARY_FACE_REJECT_THRESHOLD`   | `0.7`   | Cosine similarity to a face you previously untagged (an auto-match you removed) at or above which "Refresh Faces" won't tag a candidate as that same person again; no verified-correct value, tune against the veto lines in the log |
 

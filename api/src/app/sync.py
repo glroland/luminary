@@ -77,8 +77,8 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, enrich, face_detection, geocode, jobs, perceptual, recognition, storage
-from .config import get_max_concurrency
+from . import chat, enrich, face_detection, geocode, jobs, perceptual, pet_detection, recognition, storage
+from .config import get_max_concurrency, get_pet_detection_enabled
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
@@ -351,6 +351,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             vlm_description=None,
             description=None,
             face_detection_done=False,
+            pet_detection_done=False,
             checksum=None,
             phash=None,
             phash_done=False,
@@ -515,12 +516,20 @@ def _run_florence_pipeline(photo_id: str, image, relative_path: str) -> None:
     if boxes is None:
         return  # face detection failed/unconfigured -- retry everything next sync
 
-    storage.replace_faces(photo_id, boxes)
+    # Pets are optional and independent of the human pipeline: None here
+    # means "didn't run" (disabled, or torch/torchvision missing), which
+    # leaves pet_detection_done FALSE so the pets backfill picks the photo
+    # up later, but must never stop the human faces/caption below from
+    # being stored.
+    pets = _detect_pets(image, relative_path)
+
+    storage.replace_faces(photo_id, boxes + (pets or []))
 
     with get_connection() as conn:
         conn.execute(
-            "UPDATE photos SET vlm_description = %s, face_detection_done = TRUE WHERE id = %s",
-            (vlm_description, photo_id),
+            "UPDATE photos SET vlm_description = %s, face_detection_done = TRUE, pet_detection_done = %s "
+            "WHERE id = %s",
+            (vlm_description, pets is not None, photo_id),
         )
         conn.commit()
 
@@ -562,6 +571,24 @@ def _detect_faces(image, relative_path: str) -> Optional[list[dict]]:
         return None
     except Exception:
         logger.warning("Could not detect faces for %r", relative_path, exc_info=True)
+        return None
+
+
+def _detect_pets(image, relative_path: str) -> Optional[list[dict]]:
+    """Best-effort pet-detection step of _run_florence_pipeline. Same
+    precondition as _detect_faces. Returns the cat/dog boxes (possibly
+    empty -- a valid result), or None if pet detection is switched off
+    (LUMINARY_PET_DETECTION=0), isn't installed, or failed -- never raises,
+    so it can't cost a photo its human faces."""
+    if not get_pet_detection_enabled():
+        return None
+    try:
+        return pet_detection.detect_pets(image)
+    except pet_detection.PetDetectionNotConfigured:
+        logger.debug("Pet detection not configured; skipping for %r", relative_path)
+        return None
+    except Exception:
+        logger.warning("Could not detect pets for %r", relative_path, exc_info=True)
         return None
 
 

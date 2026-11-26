@@ -165,6 +165,11 @@ def init_db() -> None:
         # backfill_data() (it needs Pillow, not just SQL).
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS phash BIGINT")
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS phash_done BOOLEAN NOT NULL DEFAULT FALSE")
+        # TRUE once pet detection (pet_detection.py) has successfully run for
+        # this photo. Separate from face_detection_done on purpose: photos
+        # indexed before pet detection existed have that one TRUE, and the
+        # pets backfill must be able to tell them apart from scanned ones.
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS pet_detection_done BOOLEAN NOT NULL DEFAULT FALSE")
 
         # Catalog of named individuals faces can be manually tagged as --
         # see people.py / routers/individuals.py.
@@ -178,6 +183,11 @@ def init_db() -> None:
             )
             """
         )
+        # 'person' | 'pet' -- see db/create_tables.sql. A constant DEFAULT is
+        # metadata-only in Postgres, so existing rows read 'person' with no
+        # row-level backfill (which must never live in init_db -- see
+        # backfill_data()).
+        conn.execute("ALTER TABLE individuals ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person'")
 
         # Catalog of free-form tags whole photos can be tagged with -- see
         # tags.py / routers/tags.py (tag CRUD) and routers/photos.py's
@@ -243,6 +253,10 @@ def init_db() -> None:
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS tag_source TEXT")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS match_confidence DOUBLE PRECISION")
         conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS detection_confidence DOUBLE PRECISION")
+        # 'person' (MTCNN) | 'pet' (pet_detection.py); species is 'cat'/'dog'
+        # for a pet and NULL for a person. See db/create_tables.sql.
+        conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person'")
+        conn.execute("ALTER TABLE faces ADD COLUMN IF NOT EXISTS species TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_photo_id ON faces (photo_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id)")
         # Faces a user untagged after an auto-match (see db/create_tables.sql

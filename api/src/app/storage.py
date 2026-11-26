@@ -851,14 +851,15 @@ def find_duplicate_pairs(mode: str = "exact") -> list[dict]:
 def get_faces(photo_id: str) -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, x1, y1, x2, y2, person_id, tag_source, detection_confidence FROM faces WHERE photo_id = %s",
+            "SELECT id, x1, y1, x2, y2, person_id, tag_source, detection_confidence, kind, species "
+            "FROM faces WHERE photo_id = %s",
             (photo_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
 
-def replace_faces(photo_id: str, boxes: list[dict]) -> None:
-    """Replace every face row for `photo_id` with `boxes` (each an
+def replace_faces(photo_id: str, boxes: list[dict], kinds: Optional[list[str]] = None) -> None:
+    """Replace the face rows for `photo_id` with `boxes` (each an
     {"x1","y1","x2","y2","detection_confidence"} dict in the photo's own
     pixel coordinate space -- same x1/y1/x2/y2 convention as chat.
     ChatReply.boxes, `detection_confidence` as returned by face_detection.
@@ -879,14 +880,26 @@ def replace_faces(photo_id: str, boxes: list[dict]) -> None:
     old rows -- new face rows get fresh ids and start untagged, so a photo
     whose content changes loses its face tags along with the stale boxes.
     That's accepted as part of this already-exists wipe-and-redetect
-    behavior, not something this function tries to preserve across."""
+    behavior, not something this function tries to preserve across.
+
+    `kinds` scopes the replacement: `None` (the default, every existing
+    caller) replaces *all* of the photo's faces, humans and pets alike;
+    `["person"]` or `["pet"]` replaces only rows of those kinds and leaves
+    the rest -- tags included -- alone. That is what lets the Full Face
+    Refresh re-detect humans without wiping pet tags, and the pets backfill
+    add pets without touching human ones. Each box may carry `kind`
+    (default `"person"`) and `species` (pets only: `"cat"`/`"dog"`); a
+    caller that passes `kinds` should only pass boxes of those kinds."""
     with get_connection() as conn:
-        conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
+        if kinds is None:
+            conn.execute("DELETE FROM faces WHERE photo_id = %s", (photo_id,))
+        else:
+            conn.execute("DELETE FROM faces WHERE photo_id = %s AND kind = ANY(%s)", (photo_id, list(kinds)))
         if boxes:
             with conn.cursor() as cursor:
                 cursor.executemany(
-                    "INSERT INTO faces (id, photo_id, x1, y1, x2, y2, detection_confidence) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO faces (id, photo_id, x1, y1, x2, y2, detection_confidence, kind, species) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     [
                         (
                             str(uuid.uuid4()),
@@ -896,6 +909,8 @@ def replace_faces(photo_id: str, boxes: list[dict]) -> None:
                             box["x2"],
                             box["y2"],
                             box.get("detection_confidence"),
+                            box.get("kind", "person"),
+                            box.get("species"),
                         )
                         for box in boxes
                     ],

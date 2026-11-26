@@ -111,7 +111,7 @@ def _photo_facts(photo_id: str) -> Optional[dict]:
         if not photo:
             return None
         individuals = conn.execute(
-            "SELECT DISTINCT i.name FROM faces f JOIN individuals i ON i.id = f.person_id "
+            "SELECT DISTINCT i.name, i.kind FROM faces f JOIN individuals i ON i.id = f.person_id "
             "WHERE f.photo_id = %s ORDER BY i.name",
             (photo_id,),
         ).fetchall()
@@ -119,7 +119,8 @@ def _photo_facts(photo_id: str) -> Optional[dict]:
         "filename": photo["filename"],
         "vlm_description": photo["vlm_description"],
         "location_name": photo["location_name"],
-        "individuals": [row["name"] for row in individuals],
+        "individuals": [row["name"] for row in individuals if row["kind"] != "pet"],
+        "pets": [row["name"] for row in individuals if row["kind"] == "pet"],
     }
 
 
@@ -131,6 +132,8 @@ def _build_prompt(facts: dict) -> str:
         lines.append(f"Location: {facts['location_name']}")
     if facts["individuals"]:
         lines.append(f"People identified in the photo: {', '.join(facts['individuals'])}")
+    if facts.get("pets"):
+        lines.append(f"Pets identified in the photo (animals, not people): {', '.join(facts['pets'])}")
     lines.append(
         "\nWrite a detailed, natural-language description (3-5 sentences) of this photo for a "
         "personal photo library, weaving in whichever of the facts above are useful. Describe the "

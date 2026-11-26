@@ -757,6 +757,32 @@ textarea {
   cursor: pointer;
 }
 
+/* A pet's box (faces.kind = 'pet') -- drawn on the photo, so literal colours
+   like the face boxes' own, the same in either theme. */
+.photo-modal-bbox-pet {
+  border-color: #26c6da;
+  background: rgba(38, 198, 218, 0.1);
+}
+
+.photo-modal-bbox-pet.photo-modal-bbox-face-tagged {
+  border-color: #26c6da;
+  background: rgba(38, 198, 218, 0.18);
+}
+
+.photo-modal-bbox-pet.photo-modal-bbox-face-tagged .photo-modal-bbox-label {
+  background: #26c6da;
+  color: #00363d;
+}
+
+.management-pet-badge {
+  margin-left: 0.5rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
 .photo-modal-bbox-face-tagged {
   border-color: #ff7043;
   background: rgba(255, 112, 67, 0.12);
@@ -1039,6 +1065,15 @@ textarea {
   flex: 1;
   min-width: 0;
   padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.photo-modal-add-person select,
+.management-add-person select {
+  padding: 0.4rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 0.85rem;

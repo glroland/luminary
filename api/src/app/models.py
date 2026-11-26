@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -122,6 +122,11 @@ class FaceBox(BaseModel):
     # something PhotoModal.jsx's box overlay shows). Null for a face
     # detected before this column existed (see database.py's ALTER TABLE).
     detection_confidence: Optional[float] = None
+    # "person" (a human face, MTCNN) | "pet" (a whole cat/dog, pet_detection.
+    # py). `species` is "cat"/"dog" for a pet and null for a person. Only an
+    # individual of the same kind can be tagged to the box.
+    kind: Literal["person", "pet"] = "person"
+    species: Optional[str] = None
 
 
 class FaceList(BaseModel):
@@ -131,6 +136,8 @@ class FaceList(BaseModel):
 class Individual(BaseModel):
     id: str
     name: str
+    # "person" | "pet" -- which kind of detected box can be tagged to them.
+    kind: Literal["person", "pet"] = "person"
     # Whether people.tag_face has stored a representative crop for this
     # person yet -- the actual bytes are fetched separately via
     # GET /api/individuals/{id}/thumbnail, same split as Photo/thumbnail.
@@ -144,6 +151,8 @@ class IndividualList(BaseModel):
 
 class CreateIndividualRequest(BaseModel):
     name: str
+    # Ignored by PATCH (rename) -- an individual's kind is fixed at creation.
+    kind: Literal["person", "pet"] = "person"
 
 
 class TagFaceRequest(BaseModel):

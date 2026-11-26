@@ -73,6 +73,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   }, [previewPhotoId]);
   const [pageError, setPageError] = useState(null);
   const [newName, setNewName] = useState("");
+  const [newKind, setNewKind] = useState("person");
   const [addError, setAddError] = useState(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   // Keyed by individual id; a key's absence means "not fetched yet" for
@@ -243,7 +244,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     event.preventDefault();
     const name = newName.trim();
     if (!name) return;
-    createIndividual(name)
+    (newKind === "pet" ? createIndividual(name, "pet") : createIndividual(name))
       .then((created) => {
         setIndividuals((prev) => sortByName([...(prev ?? []), created]));
         setNewName("");
@@ -524,8 +525,12 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
           type="text"
           value={newName}
           onChange={(event) => setNewName(event.target.value)}
-          placeholder="Add a person…"
+          placeholder={newKind === "pet" ? "Add a pet…" : "Add a person…"}
         />
+        <select aria-label="Kind" value={newKind} onChange={(event) => setNewKind(event.target.value)}>
+          <option value="person">Person</option>
+          <option value="pet">Pet</option>
+        </select>
         <button type="submit" disabled={!newName.trim()}>
           Add
         </button>
@@ -576,7 +581,10 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
                       onChange={(event) => setRenameDraft(event.target.value)}
                     />
                   ) : (
-                    <span className="management-individual-name">{individual.name}</span>
+                    <span className="management-individual-name">
+                      {individual.name}
+                      {individual.kind === "pet" && <span className="management-pet-badge">pet</span>}
+                    </span>
                   )}
 
                   <span className="management-individual-actions">

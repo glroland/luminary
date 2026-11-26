@@ -146,6 +146,7 @@ def test_photo_facts_gathers_distinct_sorted_individual_names(client):
         "vlm_description": "a party",
         "location_name": "Boone, NC",
         "individuals": ["Alice", "Bob"],
+        "pets": [],
     }
 
 

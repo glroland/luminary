@@ -745,6 +745,34 @@ cached) is also per-pod, in-memory state — same caveat.
   "who's in this photo" changing is one of the facts `photos.description`
   is composed from.)
 
+- `pet_detection.py` finds cats and dogs (torchvision's COCO Faster R-CNN
+  MobileNetV3, no new dependency; weights cached by `download_models.py`) and
+  returns the same box dicts as `face_detection.detect_faces` plus
+  `kind: "pet"` / `species`. The box is the **whole animal**, not its face
+  (pets are photographed side-on and from behind). It is stored in the
+  `faces` table with `faces.kind = 'pet'`; `individuals.kind` is `person` or
+  `pet`, and `people.tag_face` raises `KindMismatch` (→ `409`) when they
+  differ. `sync._detect_pets` is best-effort and **must never cost a photo
+  its human faces**: it returns `None` ("didn't run": disabled via
+  `LUMINARY_PET_DETECTION=0`, torch/torchvision/weights missing, or an
+  error), which leaves `photos.pet_detection_done` FALSE so a later backfill
+  can find the photo, while the human faces/caption are stored regardless.
+  `storage.replace_faces(photo_id, boxes, kinds=None)` is **kind-scoped**:
+  `kinds=["person"]` / `["pet"]` replace only those rows (tags included) and
+  leave the rest alone; `kinds=None` still wipes everything (sync's
+  content-change path). `recognition.py` is deliberately **humans only** for
+  now — `_candidate_faces`/`_reference_embeddings` filter `kind = 'person'`
+  (InceptionResnetV1 is a face model; a pet crop embedded by it would be
+  matched against human references), and the full-refresh redetect passes
+  `kinds=["person"]` so it never wipes pet boxes or tags. Don't drop those
+  filters without giving pets their own embedder. Existing libraries aren't
+  re-scanned by sync (their `face_detection_done` is already TRUE); pets
+  appear on new/changed photos until a backfill job (`pet_detection_done IS
+  NOT TRUE`) exists. `enrich.py` lists tagged pets separately ("Pets
+  identified ... (animals, not people)") so the description never calls a
+  dog a person. `conftest.py` sets `LUMINARY_PET_DETECTION=0`; tests opt in
+  and fake `pet_detection.detect_pets`.
+
 - `recognition.py` (`routers/faces.py`'s `POST /api/faces/refresh`,
   `GET /api/faces/refresh/status`) is *automatic* face tagging — "Refresh
   Faces" matches every still-untagged detected face against individuals a

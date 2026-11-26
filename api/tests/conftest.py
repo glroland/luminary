@@ -50,6 +50,11 @@ def client(tmp_path, monkeypatch):
     # chaining itself (test_sync.py) restore/spy on the real call.
     monkeypatch.setattr(sync, "_trigger_face_refresh", lambda: None)
 
+    # Pet detection (pet_detection.py) would load torchvision's real COCO
+    # weights on the first synced photo. Off by default in tests; the ones
+    # that exercise it turn it on and fake pet_detection.detect_pets.
+    monkeypatch.setenv("LUMINARY_PET_DETECTION", "0")
+
     # people.tag_face/untag_face/delete_individual and sync's own Florence
     # pipeline now all call enrich.enrich_description() (see enrich.py),
     # which talks to the openai-compatible endpoint if LUMINARY_OPENAI_*

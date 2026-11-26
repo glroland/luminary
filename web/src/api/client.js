@@ -130,11 +130,13 @@ export async function fetchIndividuals() {
   return data.individuals;
 }
 
-export async function createIndividual(name) {
+// `kind` is "person" (the default) or "pet": a detected face can only be
+// tagged to an individual of its own kind.
+export async function createIndividual(name, kind = "person") {
   return request("/individuals", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, kind }),
   });
 }
 
