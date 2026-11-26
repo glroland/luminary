@@ -376,8 +376,9 @@ cached) is also per-pod, in-memory state — same caveat.
   state, then city; no country → "Location Unknown", always last. Photos
   geocoded before those columns existed need "Refresh Locations".
 
-- `jobs.py` is the **single job slot** shared by the four long-running
-  background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`).
+- `jobs.py` is the **single job slot** shared by the five long-running
+  background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`,
+  `pets.py`).
   Each `start_*()` calls `jobs.try_claim(kind)` first, which raises
   `jobs.JobBusy` (→ `409` via `main.py`) if *any* job holds the slot, then
   runs through `jobs.run_in_thread`. Cancellation is cooperative:
@@ -394,7 +395,7 @@ cached) is also per-pod, in-memory state — same caveat.
   (Refresh Descriptions fixes those). `sync._trigger_face_refresh` runs
   after the sync's own `finish()` released the slot, and tolerates `JobBusy`.
   `GET /api/jobs` (`routers/jobs.py`) returns `{active, cancelling}` plus
-  all four progress snapshots — the one thing the web UI polls. New
+  all five progress snapshots — the one thing the web UI polls. New
   background jobs must claim the slot the same way; `conftest.py` calls
   `jobs.reset()`.
 
@@ -766,9 +767,15 @@ cached) is also per-pod, in-memory state — same caveat.
   matched against human references), and the full-refresh redetect passes
   `kinds=["person"]` so it never wipes pet boxes or tags. Don't drop those
   filters without giving pets their own embedder. Existing libraries aren't
-  re-scanned by sync (their `face_detection_done` is already TRUE); pets
-  appear on new/changed photos until a backfill job (`pet_detection_done IS
-  NOT TRUE`) exists. `enrich.py` lists tagged pets separately ("Pets
+  re-scanned by sync (their `face_detection_done` is already TRUE), so
+  `pets.py` is the **non-destructive backfill** (`POST /api/pets/refresh`,
+  the Manage page's "Detect Pets"): it visits only photos with `NOT
+  pet_detection_done`, calls `replace_faces(..., kinds=["pet"])` and sets the
+  flag, so it never touches human faces or tags, is idempotent (a second run
+  finds nothing), and leaves a photo owed (retried next run) if its original
+  can't be read/decoded or detection errors. Like Full Face Refresh it checks
+  `pet_detection.ensure_configured()` (and `LUMINARY_PET_DETECTION`) *before*
+  any photo and fails the run up front. `enrich.py` lists tagged pets separately ("Pets
   identified ... (animals, not people)") so the description never calls a
   dog a person. `conftest.py` sets `LUMINARY_PET_DETECTION=0`; tests opt in
   and fake `pet_detection.detect_pets`.
@@ -1084,7 +1091,10 @@ cached) is also per-pod, in-memory state — same caveat.
   and "Refresh Locations" (`geocode.py`'s backend, `POST
   /api/locations/refresh` — re-geocodes every photo that already has GPS
   coordinates, since there's no automatic backfill for `location_name`
-  the way there isn't one for `latitude`/`longitude`). All three buttons
+  the way there isn't one for `latitude`/`longitude`), and "Detect Pets"
+  (`pets.py`'s backend, `POST /api/pets/refresh` — the non-destructive pet
+  backfill for photos indexed before pets existed; its progress shows
+  `found`, not `updated`). The buttons
   live together in the "Refresh metadata" section at the top of the page
   and share the same status-polling/progress-bar shape (own
   `*RefreshStatus` state + poll-interval ref per job, reusing

@@ -217,6 +217,12 @@ export async function fetchLocationRefreshStatus() {
   return request("/locations/refresh/status");
 }
 
+// Non-destructive backfill: adds cat/dog boxes to photos indexed before pet
+// detection existed. Human faces and their tags are never touched.
+export async function refreshPets() {
+  return request("/pets/refresh", { method: "POST" });
+}
+
 export async function fetchTags() {
   const data = await request("/tags");
   return data.tags;
@@ -317,7 +323,7 @@ export function originalUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/original`;
 }
 
-// Every background job (sync, face matching, descriptions, locations) in one
+// Every background job (sync, face matching, descriptions, locations, pets) in one
 // response -- `active` names the one that holds the server's single job
 // slot, `cancelling` is true between a cancel request and the job actually
 // stopping. All browsers see the same thing, not just the one that started

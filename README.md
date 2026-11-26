@@ -512,6 +512,16 @@ shape as "Refresh Faces"/"Refresh Descriptions" (own thread, progress
 polling, `idle`/`running`/`completed`/`error`), and subject to the same
 one-request-per-second cap against the public Nominatim instance above.
 
+### Pets
+
+Cats and dogs are detected while indexing (`pet_detection.py`; turn it off
+with `LUMINARY_PET_DETECTION=0`) and tagged like people — add a *pet* in the
+photo viewer or on the Manage page, then right-click a cyan box. Photos
+indexed before this existed aren't re-scanned by sync; the management page's
+**Detect Pets** button (`POST /api/pets/refresh`) backfills them. It only
+adds pet boxes — people and their tags are never touched — and re-running it
+does nothing for photos it has already scanned.
+
 ### Description enrichment
 
 The description shown in the UI (`photos.description`) isn't Florence-2's

@@ -23,6 +23,7 @@ def client(tmp_path, monkeypatch):
 
     from app.enrich import progress as description_progress
     from app.geocode import progress as location_progress
+    from app.pets import progress as pet_progress
     from app.main import app
     from app.recognition import progress as refresh_progress
     from app.sync import progress as sync_progress
@@ -86,6 +87,7 @@ def client(tmp_path, monkeypatch):
     refresh_progress.reset()
     description_progress.reset()
     location_progress.reset()
+    pet_progress.reset()
 
     with TestClient(app) as test_client:
         # There's no per-test throwaway SQLite file anymore -- tests share
@@ -176,3 +178,17 @@ def refresh_locations_and_wait(client, timeout=30.0):
             return status
         time.sleep(0.05)
     raise AssertionError(f"location refresh did not finish in time: {status}")
+
+
+def refresh_pets_and_wait(client, timeout=30.0):
+    """Same polling pattern as sync_and_wait, for pets.py's "Detect Pets"
+    backfill job (POST /api/pets/refresh). Waits for any terminal status."""
+    client.post("/api/pets/refresh")
+    deadline = time.monotonic() + timeout
+    status = {}
+    while time.monotonic() < deadline:
+        status = client.get("/api/pets/refresh/status").json()
+        if status["status"] in ("completed", "error", "cancelled"):
+            return status
+        time.sleep(0.05)
+    raise AssertionError(f"pet backfill did not finish in time: {status}")

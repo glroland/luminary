@@ -287,3 +287,169 @@ def test_recognition_ignores_pet_boxes_and_pet_references(client, tmp_path, monk
     assert [c["id"] for c in recognition._candidate_faces()] == [person_face["id"]]
     monkeypatch.setattr(recognition, "_embed", lambda image: [1.0, 0.0])
     assert recognition._reference_embeddings() == {}
+
+
+# --- the "Detect Pets" backfill job (pets.py) -----------------------------
+
+
+def _index_without_pets(client, tmp_path, monkeypatch, names=("a.jpg",)):
+    """Photos indexed while pet detection was off -- exactly what a library
+    from before pets existed looks like: faces done, pets still owed."""
+    import os
+
+    from app import chat, face_detection
+
+    # Whatever the test had set up (the `pets_ready` fixture enables it,
+    # conftest otherwise leaves it off) is restored after indexing.
+    before = os.environ.get("LUMINARY_PET_DETECTION", "0")
+    monkeypatch.setenv("LUMINARY_PET_DETECTION", "0")
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a photo")
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [dict(FACE)])
+    for name in names:
+        write_image(tmp_path / "photos" / name, size=(20, 20))
+    sync_and_wait(client)
+    monkeypatch.setenv("LUMINARY_PET_DETECTION", before)
+    return {p["filename"]: p["id"] for p in client.get("/api/photos").json()["photos"]}
+
+
+@pytest.fixture
+def pets_ready(monkeypatch):
+    monkeypatch.setenv("LUMINARY_PET_DETECTION", "1")
+    monkeypatch.setattr(pet_detection, "ensure_configured", lambda: None)
+    calls = []
+    monkeypatch.setattr(pet_detection, "detect_pets", lambda image: calls.append(1) or [dict(CAT)])
+    return calls
+
+
+def test_backfill_adds_pets_to_owed_photos_and_leaves_human_faces_and_tags_alone(
+    client, tmp_path, monkeypatch, pets_ready
+):
+    from conftest import refresh_pets_and_wait
+
+    from app import storage
+    from app.database import get_connection
+
+    ids = _index_without_pets(client, tmp_path, monkeypatch)
+    photo_id = ids["a.jpg"]
+    person_face = storage.get_faces(photo_id)[0]
+    alice = client.post("/api/individuals", json={"name": "Alice"}).json()["id"]
+    client.post(f"/api/faces/{person_face['id']}/tag", json={"person_id": alice})
+
+    status = refresh_pets_and_wait(client)
+
+    assert status["status"] == "completed"
+    assert (status["processed"], status["total"], status["found"]) == (1, 1, 1)
+    faces = {f["kind"]: f for f in storage.get_faces(photo_id)}
+    assert faces["pet"]["species"] == "cat"
+    # The human face is the very same row, still tagged.
+    assert faces["person"]["id"] == person_face["id"]
+    assert faces["person"]["person_id"] == alice
+    with get_connection() as conn:
+        done = conn.execute("SELECT pet_detection_done FROM photos WHERE id = %s", (photo_id,)).fetchone()
+    assert done["pet_detection_done"] is True
+
+
+def test_backfill_is_idempotent_and_skips_already_scanned_photos(client, tmp_path, monkeypatch, pets_ready):
+    from conftest import refresh_pets_and_wait
+
+    _index_without_pets(client, tmp_path, monkeypatch, names=("a.jpg", "b.jpg"))
+
+    first = refresh_pets_and_wait(client)
+    second = refresh_pets_and_wait(client)
+
+    assert (first["total"], first["found"]) == (2, 2)
+    assert (second["status"], second["total"], second["found"]) == ("completed", 0, 0)
+    assert len(pets_ready) == 2  # the detector never ran again
+
+
+def test_backfill_does_not_re_scan_photos_sync_already_scanned(client, tmp_path, monkeypatch, pets_ready):
+    from conftest import refresh_pets_and_wait
+
+    from app import chat, face_detection
+
+    monkeypatch.setattr(chat, "caption_image", lambda image: "a photo")
+    monkeypatch.setattr(face_detection, "detect_faces", lambda image: [dict(FACE)])
+    write_image(tmp_path / "photos" / "new.jpg", size=(20, 20))
+    sync_and_wait(client)  # pets enabled -> scanned during sync
+    calls_after_sync = len(pets_ready)
+
+    status = refresh_pets_and_wait(client)
+
+    assert status["total"] == 0
+    assert len(pets_ready) == calls_after_sync
+
+
+def test_backfill_fails_up_front_when_pet_detection_is_disabled(client, tmp_path, monkeypatch):
+    from conftest import refresh_pets_and_wait
+
+    from app.storage import get_faces
+
+    ids = _index_without_pets(client, tmp_path, monkeypatch)  # leaves LUMINARY_PET_DETECTION=0
+
+    status = refresh_pets_and_wait(client)
+
+    assert status["status"] == "error"
+    assert "turned off" in status["error"]
+    assert [f["kind"] for f in get_faces(ids["a.jpg"])] == ["person"]
+
+
+def test_backfill_fails_up_front_when_the_detector_is_not_installed(client, tmp_path, monkeypatch):
+    from conftest import refresh_pets_and_wait
+
+    def not_installed():
+        raise pet_detection.PetDetectionNotConfigured("no torchvision")
+
+    ids = _index_without_pets(client, tmp_path, monkeypatch)
+    monkeypatch.setenv("LUMINARY_PET_DETECTION", "1")
+    monkeypatch.setattr(pet_detection, "ensure_configured", not_installed)
+
+    status = refresh_pets_and_wait(client)
+
+    assert (status["status"], status["error"]) == ("error", "no torchvision")
+    # Nothing was touched, and the job slot was released.
+    assert client.get("/api/jobs").json()["active"] is None
+    from app.database import get_connection
+
+    with get_connection() as conn:
+        row = conn.execute("SELECT pet_detection_done FROM photos WHERE id = %s", (ids["a.jpg"],)).fetchone()
+    assert row["pet_detection_done"] is False
+
+
+def test_backfill_leaves_a_photo_owed_when_its_detection_errors(client, tmp_path, monkeypatch, pets_ready):
+    from conftest import refresh_pets_and_wait
+
+    from app.database import get_connection
+
+    ids = _index_without_pets(client, tmp_path, monkeypatch, names=("good.jpg", "bad.jpg"))
+
+    def flaky(image):
+        flaky.n += 1
+        if flaky.n == 1:
+            raise RuntimeError("boom")
+        return [dict(CAT)]
+
+    flaky.n = 0
+    monkeypatch.setattr(pet_detection, "detect_pets", flaky)
+
+    status = refresh_pets_and_wait(client)
+
+    assert status["status"] == "completed"  # one bad photo doesn't fail the run
+    assert (status["processed"], status["found"]) == (2, 1)
+    with get_connection() as conn:
+        done = [r["pet_detection_done"] for r in conn.execute("SELECT pet_detection_done FROM photos").fetchall()]
+    assert sorted(done) == [False, True]  # the failed one is retried next run
+    assert set(ids) == {"good.jpg", "bad.jpg"}
+
+
+def test_backfill_is_rejected_while_another_job_runs(client):
+    from app import jobs
+
+    jobs.try_claim(jobs.SYNC)
+
+    assert client.post("/api/pets/refresh").status_code == 409
+
+
+def test_jobs_snapshot_includes_the_pets_job(client):
+    body = client.get("/api/jobs").json()
+
+    assert body["pets"] == {"status": "idle", "processed": 0, "total": 0, "found": 0, "error": None}

@@ -10,7 +10,7 @@ from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
-from .routers import about, descriptions, faces, health, individuals, jobs as jobs_router, locations, photos, rejections, sync, tags
+from .routers import about, descriptions, faces, health, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags
 
 configure_logging()
 
@@ -46,7 +46,7 @@ app.add_middleware(
 @app.exception_handler(jobs.JobBusy)
 async def job_busy(request: Request, exc: jobs.JobBusy) -> JSONResponse:
     # Only one background job (sync / face matching / descriptions /
-    # locations) runs at a time, whoever asks -- see jobs.py.
+    # locations / pets) runs at a time, whoever asks -- see jobs.py.
     return JSONResponse(
         status_code=409,
         content={"detail": f"Another job is already running ({exc.active}). Wait for it to finish or cancel it."},
@@ -69,4 +69,5 @@ app.include_router(faces.router, prefix="/api")
 app.include_router(rejections.router, prefix="/api")
 app.include_router(descriptions.router, prefix="/api")
 app.include_router(locations.router, prefix="/api")
+app.include_router(pets.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")

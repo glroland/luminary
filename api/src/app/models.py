@@ -265,10 +265,19 @@ class LocationRefreshStatus(BaseModel):
     error: Optional[str] = None
 
 
+class PetRefreshStatus(BaseModel):
+    # See pets.py's _PetProgress.
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
+    processed: int = 0  # photos scanned so far
+    total: int = 0  # photos still owed a pet scan at the start of this run
+    found: int = 0  # pets (cat/dog boxes) found across them
+    error: Optional[str] = None
+
+
 class JobsStatus(BaseModel):
     """Every background job in one response -- see jobs.py. `active` is the
     one job holding the single claim ("sync" | "faces" | "descriptions" |
-    "locations"), or null when idle; `cancelling` is true once a cancel
+    "locations" | "pets"), or null when idle; `cancelling` is true once a cancel
     was requested and the job hasn't stopped yet."""
 
     active: Optional[str] = None
@@ -277,3 +286,4 @@ class JobsStatus(BaseModel):
     faces: FaceRefreshStatus
     descriptions: DescriptionRefreshStatus
     locations: LocationRefreshStatus
+    pets: PetRefreshStatus

@@ -11,6 +11,7 @@ const IDLE_JOBS = {
   faces: { ...idleState, matched: 0, full: false },
   descriptions: { ...idleState, updated: 0 },
   locations: { ...idleState, updated: 0 },
+  pets: { ...idleState, found: 0 },
 };
 
 describe("App", () => {

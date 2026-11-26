@@ -405,7 +405,7 @@
         "type": "object"
       },
       "JobsStatus": {
-        "description": "Every background job in one response -- see jobs.py. `active` is the\none job holding the single claim (\"sync\" | \"faces\" | \"descriptions\" |\n\"locations\"), or null when idle; `cancelling` is true once a cancel\nwas requested and the job hasn't stopped yet.",
+        "description": "Every background job in one response -- see jobs.py. `active` is the\none job holding the single claim (\"sync\" | \"faces\" | \"descriptions\" |\n\"locations\" | \"pets\"), or null when idle; `cancelling` is true once a cancel\nwas requested and the job hasn't stopped yet.",
         "properties": {
           "active": {
             "anyOf": [
@@ -432,6 +432,9 @@
           "locations": {
             "$ref": "#/components/schemas/LocationRefreshStatus"
           },
+          "pets": {
+            "$ref": "#/components/schemas/PetRefreshStatus"
+          },
           "sync": {
             "$ref": "#/components/schemas/SyncStatus"
           }
@@ -440,7 +443,8 @@
           "sync",
           "faces",
           "descriptions",
-          "locations"
+          "locations",
+          "pets"
         ],
         "title": "JobsStatus",
         "type": "object"
@@ -482,6 +486,45 @@
           "status"
         ],
         "title": "LocationRefreshStatus",
+        "type": "object"
+      },
+      "PetRefreshStatus": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "found": {
+            "default": 0,
+            "title": "Found",
+            "type": "integer"
+          },
+          "processed": {
+            "default": 0,
+            "title": "Processed",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "PetRefreshStatus",
         "type": "object"
       },
       "Photo": {
@@ -1754,6 +1797,42 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LocationRefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Refresh Status"
+      }
+    },
+    "/api/pets/refresh": {
+      "post": {
+        "operationId": "refresh_pets_api_pets_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PetRefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Refresh Pets"
+      }
+    },
+    "/api/pets/refresh/status": {
+      "get": {
+        "operationId": "get_refresh_status_api_pets_refresh_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PetRefreshStatus"
                 }
               }
             },

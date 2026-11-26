@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .. import enrich, geocode, jobs, recognition, sync
+from .. import enrich, geocode, jobs, pets, recognition, sync
 from ..models import JobsStatus
 
 router = APIRouter()
@@ -15,6 +15,7 @@ def _status() -> dict:
         "faces": recognition.progress.snapshot(),
         "descriptions": enrich.progress.snapshot(),
         "locations": geocode.progress.snapshot(),
+        "pets": pets.progress.snapshot(),
     }
 
 

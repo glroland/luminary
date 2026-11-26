@@ -231,6 +231,7 @@ describe("ManagementPage", () => {
       faces: idle({ matched: 0, full: false }),
       descriptions: idle({ updated: 0 }),
       locations: idle({ updated: 0 }),
+      pets: idle({ found: 0 }),
       ...overrides,
     });
     const running = (extra = {}) => ({ status: "running", processed: 4, total: 10, error: null, ...extra });
@@ -275,6 +276,27 @@ describe("ManagementPage", () => {
       });
       expect(cancelMock).toHaveBeenCalled();
       expect(onJobsChange).toHaveBeenCalledWith(after);
+    });
+
+    it("starts the pets backfill from its own button and reports how many pets were found", async () => {
+      const startMock = vi.spyOn(client, "refreshPets").mockResolvedValue({});
+      const onJobsChange = vi.fn();
+      const { rerender } = renderPage(snapshot(), { onJobsChange });
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Detect Pets" }));
+      expect(startMock).toHaveBeenCalled();
+
+      rerender(
+        <ManagementPage
+          jobs={snapshot({ active: "pets", pets: running({ found: 2 }) })}
+          justFinished={null}
+          onBack={() => {}}
+          onNavigateToPhoto={() => {}}
+        />
+      );
+      expect(screen.getByText("Looking for pets… 40%")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Detect Pets" })).not.toBeInTheDocument();
     });
 
     it("shows 'Cancelling' (disabled) until the system is ready, then flips back to the start button", async () => {

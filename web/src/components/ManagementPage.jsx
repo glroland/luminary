@@ -19,6 +19,7 @@ import {
   refreshDescriptions,
   refreshFaces,
   refreshLocations,
+  refreshPets,
   rejectionThumbnailUrl,
   untagFace,
   updateIndividual,
@@ -211,6 +212,10 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
 
   function handleRefreshLocations() {
     startJob(refreshLocations);
+  }
+
+  function handleRefreshPets() {
+    startJob(refreshPets);
   }
 
   // Re-detects every photo's faces against the current detection settings
@@ -473,6 +478,26 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
             Re-geocodes every photo that already has GPS coordinates -- useful after changing the
             geocoding zoom level, or to pick up a named business/street address for photos indexed
             before that detail was added.
+          </p>
+        </div>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            <JobControl
+              kind="pets"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Detect Pets"
+              running={(_state, pct) => `Looking for pets… ${pct}%`}
+              done={(state) => `Done -- ${state.found} found`}
+              failed={(state) => `Pet detection failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleRefreshPets}
+              onCancel={handleCancel}
+            />
+          </div>
+          <p className="management-refresh-description">
+            Finds cats and dogs in photos indexed before pet detection existed, so they can be tagged.
+            Safe to run any time: it only adds pet boxes and never touches people or their tags.
           </p>
         </div>
 
