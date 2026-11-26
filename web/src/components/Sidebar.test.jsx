@@ -149,12 +149,12 @@ describe("Sidebar", () => {
     expect(props.onSelectIndividual).toHaveBeenCalledWith("p1");
   });
 
-  it("lists tags under By Tag, placed between By Individual and By Date", () => {
+  it("lists tags under By Tag, placed between By Folder and By Individual", () => {
     renderSidebar({ open: true });
     const headers = screen
       .getAllByRole("button", { name: /^by /i })
       .map((button) => button.textContent.replace("›", "").trim());
-    expect(headers).toEqual(["By Folder", "By Individual", "By Tag", "By Date"]);
+    expect(headers).toEqual(["By Folder", "By Tag", "By Individual", "By Location", "By Date"]);
     expandSection(/^by tag$/i);
     expect(screen.getByText("Favorites").closest(".directory-tree-item")).toHaveAttribute("data-count", "3");
     expect(screen.getByText("Empty").closest(".directory-tree-item")).not.toHaveAttribute("data-count");

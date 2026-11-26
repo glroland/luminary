@@ -358,6 +358,17 @@ cached) is also per-pod, in-memory state — same caveat.
   subject to the same one-request/second cap against the public Nominatim
   instance as a sync is, since both go through the same `_rate_limit()`.
 
+  `reverse_geocode` returns a `geocode.Place` — a `str` subclass (the
+  `location_name` text) carrying `.country`/`.state`/`.city`;
+  `geocode.location_fields()` turns any result (None, plain str, Place)
+  into the four `photos` columns `location_name`/`location_country`/
+  `_state`/`_city`, which sync, content-change reset and Refresh Locations
+  all write together. The web sidebar's "By Location" tree
+  (`web/src/locations.js`, `LocationTree.jsx`) reads only the structured
+  columns: country at the root, US skipped (state is the root), then
+  state, then city; no country → "Location Unknown", always last. Photos
+  geocoded before those columns existed need "Refresh Locations".
+
 - `jobs.py` is the **single job slot** shared by the four long-running
   background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`).
   Each `start_*()` calls `jobs.try_claim(kind)` first, which raises

@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { individualThumbnailUrl } from "../api/client.js";
 import DateTree from "./DateTree.jsx";
 import DirectoryTree from "./DirectoryTree.jsx";
+import LocationTree from "./LocationTree.jsx";
+import { LOCATION_UNKNOWN, buildLocationTree } from "../locations.js";
 
 // Builds a nested {children: {name: node}} tree of every directory that
 // appears in `photos`' filenames (relative paths, e.g.
@@ -67,6 +69,7 @@ const ICON_PATHS = {
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   person: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0",
   tag: "M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9zM7.5 7.5h.01",
+  pin: "M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
   calendar: "M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM4 10h16M8 3v4M16 3v4",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
   sliders: "M4 7h10M18 7h2M4 17h2M10 17h10M16 4v6M8 14v6",
@@ -144,6 +147,8 @@ export default function Sidebar({
   tags = [],
   selectedTag = null,
   onSelectTag = () => {},
+  selectedLocation = null,
+  onSelectLocation = () => {},
   selectedDate,
   onSelectDate,
   onAllImages,
@@ -159,11 +164,14 @@ export default function Sidebar({
   const [foldersExpanded, setFoldersExpanded] = useState(false);
   const [individualsExpanded, setIndividualsExpanded] = useState(false);
   const [tagsExpanded, setTagsExpanded] = useState(false);
+  const locationTree = useMemo(() => buildLocationTree(photos), [photos]);
+  const [locationsExpanded, setLocationsExpanded] = useState(false);
   const [datesExpanded, setDatesExpanded] = useState(false);
   const noFilter =
     selectedDirectory === null &&
     selectedIndividual === null &&
     selectedTag === null &&
+    selectedLocation === null &&
     selectedDate === null &&
     !searchActive;
 
@@ -233,6 +241,28 @@ export default function Sidebar({
           />
         </Section>
 
+        <Section title="By Tag" icon="tag" expanded={tagsExpanded} onToggle={() => setTagsExpanded((prev) => !prev)}>
+          {tags.length === 0 ? (
+            <p className="sidebar-individuals-empty">No tags created yet.</p>
+          ) : (
+            <ul className="directory-tree">
+              {tags.map((tag) => (
+                <li key={tag.id}>
+                  <div
+                    className={`directory-tree-item${selectedTag === tag.id ? " directory-tree-item-active" : ""}`}
+                    data-count={tag.photo_count > 0 ? tag.photo_count.toLocaleString() : undefined}
+                  >
+                    <span className="directory-tree-toggle-spacer" aria-hidden="true" />
+                    <button type="button" className="directory-tree-label" onClick={() => onSelectTag(tag.id)}>
+                      {tag.name}
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
         <Section
           title="By Individual"
           icon="person"
@@ -268,26 +298,27 @@ export default function Sidebar({
           )}
         </Section>
 
-        <Section title="By Tag" icon="tag" expanded={tagsExpanded} onToggle={() => setTagsExpanded((prev) => !prev)}>
-          {tags.length === 0 ? (
-            <p className="sidebar-individuals-empty">No tags created yet.</p>
-          ) : (
-            <ul className="directory-tree">
-              {tags.map((tag) => (
-                <li key={tag.id}>
-                  <div
-                    className={`directory-tree-item${selectedTag === tag.id ? " directory-tree-item-active" : ""}`}
-                    data-count={tag.photo_count > 0 ? tag.photo_count.toLocaleString() : undefined}
-                  >
-                    <span className="directory-tree-toggle-spacer" aria-hidden="true" />
-                    <button type="button" className="directory-tree-label" onClick={() => onSelectTag(tag.id)}>
-                      {tag.name}
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+        <Section
+          title="By Location"
+          icon="pin"
+          expanded={locationsExpanded}
+          onToggle={() => setLocationsExpanded((prev) => !prev)}
+        >
+          <LocationTree node={locationTree} selectedLocation={selectedLocation} onSelectLocation={onSelectLocation} />
+          {/* Always last: photos with no location_name. */}
+          <ul className="directory-tree">
+            <li>
+              <div
+                className={`directory-tree-item${selectedLocation === LOCATION_UNKNOWN ? " directory-tree-item-active" : ""}`}
+                data-count={locationTree.unknown > 0 ? locationTree.unknown.toLocaleString() : undefined}
+              >
+                <span className="directory-tree-toggle-spacer" aria-hidden="true" />
+                <button type="button" className="directory-tree-label" onClick={() => onSelectLocation(LOCATION_UNKNOWN)}>
+                  Location Unknown
+                </button>
+              </div>
+            </li>
+          </ul>
         </Section>
 
         <Section title="By Date" icon="calendar" expanded={datesExpanded} onToggle={() => setDatesExpanded((prev) => !prev)}>

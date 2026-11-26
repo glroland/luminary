@@ -181,3 +181,26 @@ def test_rate_limit_sleeps_to_enforce_minimum_interval(monkeypatch):
     geocode._rate_limit()  # "now" = 100.2, less than 1s since the previous call -> must sleep
 
     assert sleeps == [100.0 + geocode._MIN_REQUEST_INTERVAL_SECONDS - 100.2]
+
+
+def test_reverse_geocode_returns_structured_parts(monkeypatch):
+    monkeypatch.setattr(geocode, "_rate_limit", lambda: None)
+    payload = {
+        "address": {"city": "Boone", "state": "North Carolina", "country": "USA", "country_code": "us"},
+        "display_name": "unused",
+    }
+    monkeypatch.setattr(geocode.urllib.request, "urlopen", _fake_urlopen(payload, []))
+
+    place = geocode.reverse_geocode(36.2168, -81.6746)
+
+    assert geocode.location_fields(place) == {
+        "location_name": "Boone, North Carolina",
+        "location_country": "United States",
+        "location_state": "North Carolina",
+        "location_city": "Boone",
+    }
+
+
+def test_location_fields_of_plain_string_or_none():
+    assert geocode.location_fields("Boone")["location_country"] is None
+    assert geocode.location_fields(None)["location_name"] is None

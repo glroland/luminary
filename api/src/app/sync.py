@@ -346,7 +346,7 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             created_at=None,
             latitude=None,
             longitude=None,
-            location_name=None,
+            **geocode.location_fields(None),
             thumbnail=None,
             vlm_description=None,
             description=None,
@@ -440,7 +440,9 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     # coordinates above; independent of whether the thumbnail/image-decode
     # step succeeded, since it only needs the coordinates, not the image.
     if needs_exif and fields.get("latitude") is not None and fields.get("longitude") is not None:
-        fields["location_name"] = _describe_location(fields["latitude"], fields["longitude"], relative_path)
+        fields.update(
+            geocode.location_fields(_describe_location(fields["latitude"], fields["longitude"], relative_path))
+        )
 
     fields["content_type"] = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
     fields["size_bytes"] = size

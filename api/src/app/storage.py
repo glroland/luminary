@@ -26,7 +26,7 @@ THUMBNAIL_SIZE = (320, 320)
 # photo's thumbnail bytes get read off disk just to list filenames.
 METADATA_COLUMNS = (
     "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude, "
-    "location_name, vlm_description, description, checksum"
+    "location_name, location_country, location_state, location_city, vlm_description, description, checksum"
 )
 
 # Protocols whose fsspec filesystem accepts plain `username`/`password`

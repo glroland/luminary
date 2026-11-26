@@ -23,3 +23,10 @@ CREATE TABLE IF NOT EXISTS face_rejections (
 );
 CREATE INDEX IF NOT EXISTS idx_face_rejections_person_id ON face_rejections (person_id);
 CREATE INDEX IF NOT EXISTS idx_face_rejections_photo_id ON face_rejections (photo_id);
+
+-- Structured reverse-geocode parts for the sidebar's "By Location" tree.
+-- Existing photos stay NULL (shown as "Location Unknown") until "Refresh
+-- Locations" is run.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_country TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_state TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_city TEXT;

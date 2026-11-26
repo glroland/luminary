@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS photos (
     -- apply to a place description. NULL exactly when latitude/longitude
     -- are (no GPS data), or if the reverse-geocode lookup failed.
     location_name TEXT,
+    -- The same lookup's structured parts (Nominatim's address.country/
+    -- state/city-or-county), for the web sidebar's "By Location" tree.
+    -- country is "United States" for any US result. NULL with
+    -- location_name, or for photos geocoded before these columns existed
+    -- (fixed by "Refresh Locations").
+    location_country TEXT,
+    location_state TEXT,
+    location_city TEXT,
     -- Whether sync.py's caption+face-detection pipeline (_run_florence_
     -- pipeline) -- or recognition.py's full-refresh redetect
     -- (_redetect_photo_faces) -- has successfully run face detection for
@@ -81,6 +89,9 @@ CREATE TABLE IF NOT EXISTS photos (
 -- EXISTS makes this a no-op against a database created after the column
 -- was already part of the CREATE TABLE above.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_country TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_state TEXT;
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_city TEXT;
 -- A photo with no date of its own is undated (NULL), never stamped with
 -- the time it was indexed. No-op once the constraint is gone.
 ALTER TABLE photos ALTER COLUMN created_at DROP NOT NULL;

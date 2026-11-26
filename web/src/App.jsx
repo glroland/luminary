@@ -17,6 +17,8 @@ import {
 } from "./api/client.js";
 import { applyTheme, getStoredTheme } from "./theme.js";
 
+import { matchesLocation } from "./locations.js";
+
 const POLL_INTERVAL_MS = 1000;
 // Placeholder tiles shown while the photo list is first loading.
 const SKELETON_TILE_COUNT = 24;
@@ -123,6 +125,9 @@ export default function App() {
   // "2024" (year), "2024-05" (year-month), or "2024-05-14" (a single day).
   // Mutually exclusive with the other filters above, same convention.
   const [selectedDate, setSelectedDate] = useState(null);
+  // null means no location filter; otherwise a locations.js path key (or
+  // LOCATION_UNKNOWN) chosen in the sidebar's "By Location" tree.
+  const [selectedLocation, setSelectedLocation] = useState(null);
   // The catalogued-individuals list for the sidebar's "Individuals"
   // section; ManagementPage owns the full CRUD lifecycle for these, this
   // is just a read-only copy kept here so Sidebar can render it without
@@ -331,6 +336,7 @@ export default function App() {
     setSelectedIndividual(null);
     setSelectedTag(null);
     setSelectedDate(null);
+    setSelectedLocation(null);
     setSelectedPhoto(null);
     setView("gallery");
     resetGrid();
@@ -400,6 +406,8 @@ export default function App() {
               const dir = directoryOf(photo.filename);
               return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
             })
+          : selectedLocation !== null
+            ? photos.filter((photo) => matchesLocation(photo, selectedLocation))
           : selectedDate !== null
             ? photos.filter((photo) => {
                 const key = dateKeyOf(photo.created_at);
@@ -415,6 +423,7 @@ export default function App() {
     selectedTag,
     tagPhotoIds,
     selectedDirectory,
+    selectedLocation,
     selectedDate,
     sortOrder,
   ]);
@@ -451,6 +460,7 @@ export default function App() {
           setSelectedIndividual(null);
           setSelectedTag(null);
           setSelectedDate(null);
+          setSelectedLocation(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -462,6 +472,7 @@ export default function App() {
           setSelectedTag(null);
           setSelectedDirectory(null);
           setSelectedDate(null);
+          setSelectedLocation(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -473,6 +484,18 @@ export default function App() {
           setSelectedDirectory(null);
           setSelectedIndividual(null);
           setSelectedDate(null);
+          setSelectedLocation(null);
+          setSearchResults(null);
+          setView("gallery");
+          resetGrid();
+        }}
+        selectedLocation={selectedLocation}
+        onSelectLocation={(locationKey) => {
+          setSelectedLocation(locationKey);
+          setSelectedDirectory(null);
+          setSelectedIndividual(null);
+          setSelectedTag(null);
+          setSelectedDate(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -480,6 +503,7 @@ export default function App() {
         selectedDate={selectedDate}
         onSelectDate={(dateKey) => {
           setSelectedDate(dateKey);
+          setSelectedLocation(null);
           setSelectedDirectory(null);
           setSelectedIndividual(null);
           setSelectedTag(null);
@@ -492,6 +516,7 @@ export default function App() {
           setSelectedIndividual(null);
           setSelectedTag(null);
           setSelectedDate(null);
+          setSelectedLocation(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -594,6 +619,7 @@ export default function App() {
               setSelectedIndividual(null);
               setSelectedTag(null);
               setSelectedDate(null);
+              setSelectedLocation(null);
               setSearchResults(null);
               setLastSearchResults(null);
               setIndividuals([]);

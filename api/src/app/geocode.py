@@ -119,6 +119,47 @@ _PLACE_KEYS = (
 _LOCALITY_KEYS = ("city", "town", "village", "hamlet", "suburb")
 
 
+class Place(str):
+    """A `_describe()` result (the display string, stored as
+    `photos.location_name`) that also carries the structured pieces the
+    sidebar's location tree is built from (`photos.location_country`/
+    `_state`/`_city`). A `str` subclass so every caller that only wants the
+    description -- and tests that fake `reverse_geocode` with a plain
+    string -- keep working unchanged; `location_fields()` reads the extras
+    with `getattr`, defaulting to None."""
+
+    country: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+
+
+def location_fields(place: Optional[str]) -> dict:
+    """The four `photos` columns derived from a reverse_geocode() result
+    (None, a plain str, or a Place), always all four keys so a caller can
+    `UPDATE`/`fields.update()` them together -- a lookup that found nothing
+    clears them, same as it clears `location_name`."""
+    return {
+        "location_name": str(place) if place else None,
+        "location_country": getattr(place, "country", None),
+        "location_state": getattr(place, "state", None),
+        "location_city": getattr(place, "city", None),
+    }
+
+
+def _structured(address: dict) -> tuple:
+    """(country, state, city) from Nominatim's address object. The country
+    is normalised to "United States" whenever `country_code` is "us" (the
+    web UI skips that level, so it has to recognise it reliably); the city
+    uses _LOCALITY_KEYS, falling back to `county` exactly as _describe()
+    does. Any of the three may be None."""
+    country = address.get("country") or None
+    if (address.get("country_code") or "").lower() == "us":
+        country = "United States"
+    state = address.get("state") or None
+    city = next((address[key] for key in _LOCALITY_KEYS if address.get(key)), None) or address.get("county") or None
+    return country, state, city
+
+
 def _rate_limit() -> None:
     global _last_request_at
     with _rate_limit_lock:
@@ -206,7 +247,13 @@ def reverse_geocode(latitude: float, longitude: float, timeout: float = 10.0) ->
         logger.debug("Nominatim had no address for (%s, %s): %s", latitude, longitude, payload["error"])
         return None
 
-    return _describe(payload.get("address") or {}, payload.get("display_name"))
+    address = payload.get("address") or {}
+    description = _describe(address, payload.get("display_name"))
+    if description is None:
+        return None
+    place = Place(description)
+    place.country, place.state, place.city = _structured(address)
+    return place
 
 
 class _RefreshProgress:
@@ -298,13 +345,15 @@ def _refresh_one(photo_id: str) -> bool:
         return False
 
     try:
-        location_name = reverse_geocode(photo["latitude"], photo["longitude"])
+        place = reverse_geocode(photo["latitude"], photo["longitude"])
     except Exception:
         logger.warning("Could not re-geocode photo %s", photo_id, exc_info=True)
         return False
 
     with get_connection() as conn:
-        conn.execute("UPDATE photos SET location_name = %s WHERE id = %s", (location_name, photo_id))
+        fields = location_fields(place)
+        set_clause = ", ".join(f"{column} = %s" for column in fields)
+        conn.execute(f"UPDATE photos SET {set_clause} WHERE id = %s", (*fields.values(), photo_id))
         conn.commit()
     return True
 

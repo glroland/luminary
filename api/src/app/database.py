@@ -83,13 +83,18 @@ def init_db() -> None:
                 thumbnail BYTEA,
                 vlm_description TEXT,
                 description TEXT,
-                location_name TEXT
+                location_name TEXT,
+                location_country TEXT,
+                location_state TEXT,
+                location_city TEXT
             )
             """
         )
         # Guards a database created before location_name existed -- see
         # db/create_tables.sql's matching ALTER TABLE.
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS location_name TEXT")
+        for column in ("location_country", "location_state", "location_city"):
+            conn.execute(f"ALTER TABLE photos ADD COLUMN IF NOT EXISTS {column} TEXT")
         # A photo with no date of its own is undated (NULL), never stamped
         # with the time it was indexed. No-op once the constraint is gone.
         conn.execute("ALTER TABLE photos ALTER COLUMN created_at DROP NOT NULL")

@@ -19,6 +19,13 @@ class Photo(BaseModel):
     # sync.py's _describe_location. Null exactly when latitude/longitude
     # are, or if the reverse-geocode lookup failed/wasn't configured.
     location_name: Optional[str] = None
+    # The same lookup's structured parts (Nominatim's country/state/city),
+    # which the web sidebar's "By Location" tree is built from. Null with
+    # location_name, or for a photo geocoded before these columns existed
+    # (until "Refresh Locations" is run).
+    location_country: Optional[str] = None
+    location_state: Optional[str] = None
+    location_city: Optional[str] = None
     # Florence-2's raw <MORE_DETAILED_CAPTION> output, generated during
     # sync (see sync.py's _generate_vlm_description) -- null until a sync
     # has run with Florence-2 available, or if captioning failed for this
