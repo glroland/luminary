@@ -159,6 +159,7 @@ LUMINARY_TEST_DATABASE_ENV = LUMINARY_DATABASE_HOST=$(LUMINARY_DATABASE_HOST) \
         images \
         db db-recreate db-drop db-update db-create \
         helm-lint helm-template \
+        openapi openapi-check \
         clean
 
 help:
@@ -177,6 +178,8 @@ help:
 	@echo "  db-update       Apply db/update.sql's schema changes in place (no drop/rebuild), then clear it"
 	@echo "  db-create       Create one ad-hoc database+role (e.g. prod's), via LUMINARY_CREATE_DB_NAME/_USER/_PASSWORD"
 	@echo "                  (destructive drop+recreate of one: deploy/db-rebuild-prod.sh, prompts interactively)"
+	@echo "  openapi         Regenerate docs/openapi.json from the FastAPI app (commit the result)"
+	@echo "  openapi-check   Fail if docs/openapi.json is stale"
 	@echo "  helm-lint       Lint the Helm chart"
 	@echo "  helm-template   Render the Helm chart"
 	@echo "  clean           Remove local build/test artifacts"
@@ -213,6 +216,12 @@ test-api:
 # (api/eval_search.py). Usage: make eval-search QUERIES=queries.json
 eval-search:
 	$(LUMINARY_DATABASE_ENV) $(MODEL_CACHE_ENV) PYTHONPATH=api/src $(VENV_DIR)/bin/python api/eval_search.py $(QUERIES)
+
+openapi:
+	PYTHONPATH=api/src $(VENV_DIR)/bin/python api/export_openapi.py
+
+openapi-check:
+	PYTHONPATH=api/src $(VENV_DIR)/bin/python api/export_openapi.py --check
 
 test-web:
 	cd web && npm run test

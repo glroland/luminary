@@ -49,6 +49,8 @@ make db          # provisions the Postgres database + role + tables (db/)
 make db-recreate # drops and recreates them
 make db-drop     # drops them
 make db-update   # applies db/update.sql's schema change in place, then clears it (no drop/rebuild)
+make openapi     # regenerates docs/openapi.json from the FastAPI app (commit it)
+make openapi-check # fails if docs/openapi.json is stale
 make helm-lint   # helm lint deploy/helm/luminary
 make helm-template
 make clean       # rm -rf target/ (+ web/node_modules, web/dist)
@@ -75,6 +77,11 @@ to live alongside `package.json` — both are still covered by `make clean`
 explicitly, just not by the `target/` rename.
 
 ## API architecture (`api/src/app/`)
+
+**OpenAPI spec**: `docs/openapi.json` is generated from the FastAPI app by
+`api/export_openapi.py` (never hand-edited). Any change to a route, request/
+response model or the app's title/version must be followed by `make openapi`
+and committing the result; `api/tests/test_openapi.py` fails when it's stale.
 
 Request flow: `main.py` wires CORS + the `health`, `photos`, and `sync`
 routers under `/api`, with lifespan calling `database.init_db()` on startup.
