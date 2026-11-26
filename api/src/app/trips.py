@@ -9,8 +9,8 @@ background job.
 **Reconciliation rule.** Detection may *create* trips and *extend* them with
 photos not in any trip yet; it never moves a photo from one trip to another,
 merges, splits, or recreates a trip the user dismissed. That is what lets a
-user's edits (rename, add/remove photos, merge, split, dismiss -- phase 2)
-survive every later run:
+user's edits (rename, add/remove photos, merge, split, dismiss -- see the
+edit functions below) survive every later run:
 
 - a candidate sharing no photo with a stored trip becomes a new trip, unless
   it overlaps a dismissed trip's dates (a tombstone), in which case it is
@@ -38,6 +38,7 @@ import asyncio
 import logging
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -204,6 +205,7 @@ def _resolve_homes(conn, points: list, settings: td.Settings) -> list:
     replaced with a fresh detection."""
     pinned = conn.execute("SELECT * FROM homes WHERE source = 'manual' OR confirmed").fetchall()
     if pinned:
+        conn.execute("DELETE FROM homes WHERE source = 'auto' AND NOT confirmed")
         return [_row_to_home(row) for row in pinned]
 
     detected = td.detect_homes(points, settings)
@@ -253,10 +255,15 @@ def _reconcile(conn, candidates: list, settings: td.Settings) -> dict:
         _bounds(row["start_at"], row["end_at"])
         for row in conn.execute("SELECT start_at, end_at FROM trips WHERE status = 'dismissed'").fetchall()
     ]
-    membership = {
-        row["photo_id"]: (row["trip_id"], row["membership"])
-        for row in conn.execute("SELECT photo_id, trip_id, membership FROM trip_photos").fetchall()
-    }
+    membership = {}
+    blocked = set()  # photos of dismissed trips: spoken for, never reassigned
+    for row in conn.execute(
+        "SELECT tp.photo_id, tp.trip_id, tp.membership, t.status FROM trip_photos tp JOIN trips t ON t.id = tp.trip_id"
+    ).fetchall():
+        if row["status"] == "active":
+            membership[row["photo_id"]] = (row["trip_id"], row["membership"])
+        else:
+            blocked.add(row["photo_id"])
     exclusions = {
         (row["trip_id"], row["photo_id"])
         for row in conn.execute("SELECT trip_id, photo_id FROM trip_exclusions").fetchall()
@@ -272,6 +279,8 @@ def _reconcile(conn, candidates: list, settings: td.Settings) -> dict:
             for start, end in tombstones
         ):
             continue
+        if blocked.intersection(candidate.member_ids):
+            continue  # part of a dismissed trip: dismissal covers the whole run
         claimed.update(candidate.member_ids)
 
         matched = []
@@ -354,10 +363,14 @@ def _reconcile(conn, candidates: list, settings: td.Settings) -> dict:
     return _refresh_trip_rows(conn, created, settings)
 
 
-def _refresh_trip_rows(conn, created: set, settings: td.Settings) -> dict:
+def _refresh_trip_rows(conn, created: set, settings: td.Settings, only=None, reclassify=frozenset()) -> dict:
     """Recompute every active trip's derived fields from its members, and
-    delete the unedited auto ones that fell below the minimum."""
+    delete the unedited auto ones that fell below the minimum. `only` limits it
+    to those trip ids; `reclassify` recomputes trip/outing even for an edited
+    trip (after a merge or split changed what it holds)."""
     trips = conn.execute("SELECT * FROM trips WHERE status = 'active'").fetchall()
+    if only is not None:
+        trips = [trip for trip in trips if trip["id"] in only]
     members: dict = {}
     rows = conn.execute(
         f"""
@@ -387,7 +400,7 @@ def _refresh_trip_rows(conn, created: set, settings: td.Settings) -> dict:
             ordered = sorted(dated, key=lambda p: (p.ts, p.id))
             fields["start_at"] = ordered[0].ts.isoformat()
             fields["end_at"] = ordered[-1].ts.isoformat()
-            kind = trip["kind"] if trip["edited"] else td.classify_kind(dated)
+            kind = trip["kind"] if trip["edited"] and trip_id not in reclassify else td.classify_kind(dated)
             fields["kind"] = kind
             if trip["name_source"] == "auto":
                 fields["name"] = td.trip_name(dated, kind)
@@ -472,17 +485,18 @@ async def _run_refresh() -> None:
 # ------------------------------------------------------------------ queries
 
 _TRIP_SELECT = """
-    SELECT t.id, t.name, t.kind, t.status, t.source, t.start_at, t.end_at, t.cover_photo_id,
+    SELECT t.id, t.name, t.name_source, t.kind, t.status, t.source, t.start_at, t.end_at, t.cover_photo_id,
            t.edited, COUNT(tp.photo_id) AS photo_count
     FROM trips t LEFT JOIN trip_photos tp ON tp.trip_id = t.id
 """
 _TRIP_GROUP = " GROUP BY t.id"
 
 
-def list_trips() -> list:
+def list_trips(status: str = "active") -> list:
     with get_connection() as conn:
         rows = conn.execute(
-            _TRIP_SELECT + " WHERE t.status = 'active'" + _TRIP_GROUP + " ORDER BY t.start_at DESC NULLS LAST, t.id"
+            _TRIP_SELECT + " WHERE t.status = %s" + _TRIP_GROUP + " ORDER BY t.start_at DESC NULLS LAST, t.id",
+            (status,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -564,3 +578,359 @@ def get_trip_locations(trip_id: str) -> Optional[dict]:
         ),
         "unlocated_count": unlocated,
     }
+
+
+# -------------------------------------------------------------------- edits
+
+
+class TripNotFound(LookupError):
+    """No such trip/home (or not in the state the operation needs)."""
+
+
+class TripInvalid(ValueError):
+    """The request can't be carried out as asked."""
+
+
+@contextmanager
+def _edit():
+    """One transaction under the same advisory lock a rebuild takes, so an
+    edit and a rebuild never interleave."""
+    with get_connection() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+        yield conn
+        conn.commit()
+
+
+def _active_trip(conn, trip_id: str) -> dict:
+    row = conn.execute("SELECT * FROM trips WHERE id = %s AND status = 'active'", (trip_id,)).fetchone()
+    if row is None:
+        raise TripNotFound(trip_id)
+    return row
+
+
+def _touch(conn, trip_id: str, **fields) -> None:
+    fields = {"edited": True, "updated_at": _now(), **fields}
+    set_clause = ", ".join(f"{column} = %s" for column in fields)
+    conn.execute(f"UPDATE trips SET {set_clause} WHERE id = %s", (*fields.values(), trip_id))
+
+
+def update_trip(trip_id: str, name: Optional[str] = None, cover_photo_id: Optional[str] = None, kind: Optional[str] = None) -> dict:
+    """Rename (an empty name goes back to the generated one), choose the
+    cover (an empty id goes back to the automatic one), or promote/demote
+    between trip and day outing."""
+    with _edit() as conn:
+        _active_trip(conn, trip_id)
+        fields = {}
+        if name is not None:
+            name = name.strip()
+            fields.update({"name": name, "name_source": "manual"} if name else {"name_source": "auto"})
+        if cover_photo_id is not None:
+            if cover_photo_id == "":
+                fields["cover_source"] = "auto"
+            else:
+                member = conn.execute(
+                    "SELECT 1 FROM trip_photos WHERE trip_id = %s AND photo_id = %s", (trip_id, cover_photo_id)
+                ).fetchone()
+                if not member:
+                    raise TripInvalid("The cover must be a photo in the trip")
+                fields.update({"cover_photo_id": cover_photo_id, "cover_source": "manual"})
+        if kind is not None:
+            if kind not in ("trip", "outing"):
+                raise TripInvalid("kind must be 'trip' or 'outing'")
+            fields["kind"] = kind
+        if fields:
+            _touch(conn, trip_id, **fields)
+            _refresh_trip_rows(conn, set(), get_settings(), only={trip_id})
+    return get_trip(trip_id)
+
+
+def _assign(conn, trip_id: str, photo_ids: list) -> set:
+    """Put photos into a trip by hand, moving them out of any other active
+    trip (which remembers not to take them back). Unknown ids are ignored.
+    Returns the other trips touched."""
+    if not photo_ids:
+        return set()
+    existing = [row["id"] for row in conn.execute("SELECT id FROM photos WHERE id = ANY(%s)", (photo_ids,)).fetchall()]
+    previous = conn.execute(
+        "SELECT tp.photo_id, tp.trip_id, t.status FROM trip_photos tp JOIN trips t ON t.id = tp.trip_id "
+        "WHERE tp.photo_id = ANY(%s)",
+        (existing,),
+    ).fetchall()
+    affected = set()
+    for row in previous:
+        if row["trip_id"] != trip_id and row["status"] == "active":
+            conn.execute(
+                "INSERT INTO trip_exclusions (trip_id, photo_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (row["trip_id"], row["photo_id"]),
+            )
+            affected.add(row["trip_id"])
+    conn.execute("DELETE FROM trip_exclusions WHERE trip_id = %s AND photo_id = ANY(%s)", (trip_id, existing))
+    with conn.cursor() as cursor:
+        cursor.executemany(
+            "INSERT INTO trip_photos (photo_id, trip_id, membership) VALUES (%s, %s, 'manual') "
+            "ON CONFLICT (photo_id) DO UPDATE SET trip_id = EXCLUDED.trip_id, membership = 'manual'",
+            [(photo_id, trip_id) for photo_id in existing],
+        )
+    for other in affected:
+        _touch(conn, other)
+    return affected
+
+
+def add_photos(trip_id: str, photo_ids: list) -> dict:
+    with _edit() as conn:
+        _active_trip(conn, trip_id)
+        affected = _assign(conn, trip_id, list(photo_ids))
+        _touch(conn, trip_id)
+        _refresh_trip_rows(conn, set(), get_settings(), only={trip_id, *affected}, reclassify={trip_id, *affected})
+    return get_trip(trip_id)
+
+
+def remove_photos(trip_id: str, photo_ids: list) -> dict:
+    """Take photos out of a trip. Detection will not put them back into it."""
+    with _edit() as conn:
+        _active_trip(conn, trip_id)
+        members = [
+            row["photo_id"]
+            for row in conn.execute(
+                "SELECT photo_id FROM trip_photos WHERE trip_id = %s AND photo_id = ANY(%s)", (trip_id, list(photo_ids))
+            ).fetchall()
+        ]
+        conn.execute("DELETE FROM trip_photos WHERE trip_id = %s AND photo_id = ANY(%s)", (trip_id, members))
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                "INSERT INTO trip_exclusions (trip_id, photo_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                [(trip_id, photo_id) for photo_id in members],
+            )
+        _touch(conn, trip_id)
+        _refresh_trip_rows(conn, set(), get_settings(), only={trip_id}, reclassify={trip_id})
+    return get_trip(trip_id)
+
+
+def create_trip(name: str, photo_ids: Optional[list] = None, start_date: Optional[str] = None, end_date: Optional[str] = None) -> dict:
+    """A trip made by hand, from photo ids and/or a date range (the dated
+    photos in it that aren't already in a trip -- any photo, GPS or not)."""
+    name = (name or "").strip()
+    if not name:
+        raise TripInvalid("Name must not be empty")
+    ids = list(photo_ids or [])
+    with _edit() as conn:
+        if start_date:
+            start = td.parse_day(start_date)
+            end = td.parse_day(end_date or start_date)
+            if start is None or end is None or end < start:
+                raise TripInvalid("Dates must be YYYY-MM-DD, and the end can't be before the start")
+            rows = conn.execute(
+                "SELECT id FROM photos WHERE created_at >= %s AND created_at < %s "
+                "AND id NOT IN (SELECT photo_id FROM trip_photos)",
+                (start.isoformat(), (end + timedelta(days=1)).isoformat()),
+            ).fetchall()
+            ids.extend(row["id"] for row in rows)
+        if not ids:
+            raise TripInvalid("No photos to put in the trip")
+
+        trip_id = str(uuid.uuid4())
+        now = _now()
+        conn.execute(
+            "INSERT INTO trips (id, name, name_source, kind, source, edited, created_at, updated_at) "
+            "VALUES (%s, %s, 'manual', 'trip', 'manual', TRUE, %s, %s)",
+            (trip_id, name, now, now),
+        )
+        affected = _assign(conn, trip_id, list(dict.fromkeys(ids)))
+        _refresh_trip_rows(conn, set(), get_settings(), only={trip_id, *affected}, reclassify={trip_id, *affected})
+    return get_trip(trip_id)
+
+
+def merge_trips(trip_ids: list) -> dict:
+    """Merge trips into the one that started first, which keeps its id, name
+    (or the first manual name among them), cover and exclusions."""
+    ids = list(dict.fromkeys(trip_ids))
+    if len(ids) < 2:
+        raise TripInvalid("Pick at least two trips to merge")
+    with _edit() as conn:
+        rows = [_active_trip(conn, trip_id) for trip_id in ids]
+        rows.sort(key=lambda row: (row["start_at"] or "9999", row["id"]))
+        survivor, others = rows[0], rows[1:]
+        other_ids = [row["id"] for row in others]
+
+        conn.execute("UPDATE trip_photos SET trip_id = %s WHERE trip_id = ANY(%s)", (survivor["id"], other_ids))
+        conn.execute(
+            "INSERT INTO trip_exclusions (trip_id, photo_id) SELECT %s, photo_id FROM trip_exclusions "
+            "WHERE trip_id = ANY(%s) ON CONFLICT DO NOTHING",
+            (survivor["id"], other_ids),
+        )
+        conn.execute(
+            "DELETE FROM trip_exclusions WHERE trip_id = %s AND photo_id IN "
+            "(SELECT photo_id FROM trip_photos WHERE trip_id = %s)",
+            (survivor["id"], survivor["id"]),
+        )
+        conn.execute("DELETE FROM trip_exclusions WHERE trip_id = ANY(%s)", (other_ids,))
+        conn.execute("DELETE FROM trips WHERE id = ANY(%s)", (other_ids,))
+
+        fields = {}
+        if survivor["name_source"] != "manual":
+            named = next((row for row in others if row["name_source"] == "manual"), None)
+            if named:
+                fields.update({"name": named["name"], "name_source": "manual"})
+        _touch(conn, survivor["id"], **fields)
+        _refresh_trip_rows(conn, set(), get_settings(), only={survivor["id"]}, reclassify={survivor["id"]})
+    return get_trip(survivor["id"])
+
+
+def split_trip(trip_id: str, at: str) -> list:
+    """Split a trip at a date/time: photos from then on move to a new trip.
+    Undated members stay. Returns both trips (original first)."""
+    when = td.parse_timestamp(at)
+    if when is None:
+        raise TripInvalid("'at' must be an ISO date or date-time")
+    with _edit() as conn:
+        trip = _active_trip(conn, trip_id)
+        members = conn.execute(
+            "SELECT p.id, p.created_at FROM trip_photos tp JOIN photos p ON p.id = tp.photo_id WHERE tp.trip_id = %s",
+            (trip_id,),
+        ).fetchall()
+        later = [m["id"] for m in members if (ts := td.parse_timestamp(m["created_at"])) is not None and ts >= when]
+        if not later or len(later) == len(members):
+            raise TripInvalid("Both halves of a split need at least one photo")
+
+        new_id = str(uuid.uuid4())
+        now = _now()
+        conn.execute(
+            "INSERT INTO trips (id, name, name_source, kind, source, edited, created_at, updated_at) "
+            "VALUES (%s, %s, 'auto', 'trip', %s, TRUE, %s, %s)",
+            (new_id, trip["name"], trip["source"], now, now),
+        )
+        conn.execute("UPDATE trip_photos SET trip_id = %s WHERE photo_id = ANY(%s)", (new_id, later))
+        _touch(conn, trip_id)
+        _refresh_trip_rows(conn, set(), get_settings(), only={trip_id, new_id}, reclassify={trip_id, new_id})
+    return [get_trip(trip_id), get_trip(new_id)]
+
+
+def dismiss_trip(trip_id: str) -> None:
+    """Hide a trip and stop detection recreating it. It keeps its photos
+    and dates, so restoring is just flipping it back."""
+    with _edit() as conn:
+        _active_trip(conn, trip_id)
+        _touch(conn, trip_id, status="dismissed")
+
+
+def restore_trip(trip_id: str) -> dict:
+    with _edit() as conn:
+        row = conn.execute("SELECT status FROM trips WHERE id = %s", (trip_id,)).fetchone()
+        if row is None or row["status"] != "dismissed":
+            raise TripNotFound(trip_id)
+        _touch(conn, trip_id, status="active")
+        _refresh_trip_rows(conn, set(), get_settings(), only={trip_id})
+    return get_trip(trip_id)
+
+
+# -------------------------------------------------------------------- homes
+
+_HOME_COLUMNS = "id, name, latitude, longitude, radius_km, start_date, end_date, country, state, city, source, confirmed"
+
+
+def _day_or_none(value: Optional[str], label: str) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    day = td.parse_day(value)
+    if day is None:
+        raise TripInvalid(f"{label} must be a date like 2019-05-01")
+    return day.isoformat()
+
+
+def _check_home(fields: dict) -> None:
+    lat, lon = fields.get("latitude"), fields.get("longitude")
+    if lat is not None and not -90 <= lat <= 90:
+        raise TripInvalid("latitude must be between -90 and 90")
+    if lon is not None and not -180 <= lon <= 180:
+        raise TripInvalid("longitude must be between -180 and 180")
+    if fields.get("radius_km") is not None and fields["radius_km"] <= 0:
+        raise TripInvalid("radius_km must be greater than zero")
+    if fields.get("start_date") and fields.get("end_date") and fields["end_date"] < fields["start_date"]:
+        raise TripInvalid("A home's end date can't be before its start date")
+
+
+def list_homes() -> list:
+    with get_connection() as conn:
+        rows = conn.execute(f"SELECT {_HOME_COLUMNS} FROM homes ORDER BY start_date NULLS FIRST, id").fetchall()
+        return [dict(row) for row in rows]
+
+
+def _get_home(conn, home_id: str) -> dict:
+    row = conn.execute(f"SELECT {_HOME_COLUMNS} FROM homes WHERE id = %s", (home_id,)).fetchone()
+    if row is None:
+        raise TripNotFound(home_id)
+    return dict(row)
+
+
+def _pin_auto_homes(conn) -> None:
+    """Trusting one detected home means trusting the set: a move gives
+    several dated homes, and keeping only one would lose the others' ranges."""
+    conn.execute("UPDATE homes SET confirmed = TRUE WHERE source = 'auto'")
+
+
+def create_home(fields: dict) -> dict:
+    fields = {**fields}
+    for key in ("start_date", "end_date"):
+        fields[key] = _day_or_none(fields.get(key), key.replace("_", " "))
+    _check_home(fields)
+    home_id = str(uuid.uuid4())
+    with _edit() as conn:
+        conn.execute(
+            "INSERT INTO homes (id, name, latitude, longitude, radius_km, start_date, end_date, source, confirmed) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'manual', TRUE)",
+            (
+                home_id,
+                (fields.get("name") or "").strip() or "Home",
+                fields["latitude"],
+                fields["longitude"],
+                fields.get("radius_km"),
+                fields["start_date"],
+                fields["end_date"],
+            ),
+        )
+        return _get_home(conn, home_id)
+
+
+def update_home(home_id: str, fields: dict) -> dict:
+    fields = {**fields}
+    for key in ("start_date", "end_date"):
+        if key in fields:
+            fields[key] = _day_or_none(fields[key], key.replace("_", " "))
+    if "name" in fields:
+        fields["name"] = (fields["name"] or "").strip() or "Home"
+    with _edit() as conn:
+        current = _get_home(conn, home_id)
+        _check_home({**current, **fields})
+        if fields:
+            set_clause = ", ".join(f"{column} = %s" for column in fields)
+            conn.execute(f"UPDATE homes SET {set_clause}, confirmed = TRUE WHERE id = %s", (*fields.values(), home_id))
+        if current["source"] == "auto":
+            _pin_auto_homes(conn)
+        return _get_home(conn, home_id)
+
+
+def confirm_home(home_id: str) -> dict:
+    with _edit() as conn:
+        _get_home(conn, home_id)
+        conn.execute("UPDATE homes SET confirmed = TRUE WHERE id = %s", (home_id,))
+        _pin_auto_homes(conn)
+        return _get_home(conn, home_id)
+
+
+def delete_home(home_id: str) -> None:
+    """Remove a home. With none left pinned, the next rebuild detects one
+    again."""
+    with _edit() as conn:
+        _get_home(conn, home_id)
+        conn.execute("DELETE FROM homes WHERE id = %s", (home_id,))
+
+
+def rebuild_after_home_change() -> bool:
+    """Homes decide what's "away", so a change rebuilds trips. False if
+    another job holds the slot (the user has to run Rebuild Trips later)."""
+    try:
+        start_refresh()
+        return True
+    except jobs.JobBusy:
+        logger.info("Home changed but another job is running; trips not rebuilt yet")
+        return False

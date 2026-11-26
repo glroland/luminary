@@ -402,9 +402,27 @@ cached) is also per-pod, in-memory state — same caveat.
   starting it as a job after sync would make the chained face matching find
   the slot busy. Adding a table that references photos means adding its
   cleanup to `storage.delete_photo`/`purge_all` and `sync._delete_missing`.
-  Not built yet: the edit endpoints (rename, add/remove photos, merge, split,
-  dismiss/restore) and the homes endpoints/UI; the tables and `edited`/
-  `source`/`membership` columns for them already exist.
+  **Editing** (`trips.py`'s "edits" section, `routers/trips.py`,
+  `routers/homes.py`): every edit runs in `_edit()` — one transaction under the
+  same advisory lock — and marks the trip `edited`, which is what stops
+  detection deleting it. Adding photos by hand *moves* them (PK on
+  `trip_photos.photo_id`) and leaves an exclusion on the trip they left;
+  removing records an exclusion; merge keeps the trip that started first
+  (adopting the first manual name); split moves photos from a date on to a new
+  trip; both recompute trip/outing via `_refresh_trip_rows(reclassify=...)`
+  (an edited trip's kind is otherwise the user's). **Dismissing keeps the
+  trip's `trip_photos`** and flips `status`, so restore is just flipping it
+  back; `_reconcile` treats those photos as `blocked` (never reassigned) and
+  skips any candidate touching them. Don't delete a dismissed trip's members:
+  detection would then recreate the trip. `TripNotFound`/`TripInvalid` are
+  mapped to 404/422 in `main.py`. **Homes**: entering one, or editing/
+  confirming a detected one, pins it (`source='manual' OR confirmed`) and
+  detection then uses only pinned homes (`_resolve_homes` also drops stale
+  unconfirmed auto rows). Confirming or editing a detected home confirms *all*
+  detected homes — a move gives several dated ones that only make sense
+  together; creating a manual home does not (it replaces them). Every home
+  change calls `rebuild_after_home_change()`, which returns false (surfaced as
+  `rebuild_started`) when another job holds the slot.
 
 - `jobs.py` is the **single job slot** shared by the six long-running
   background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`,
@@ -1122,7 +1140,17 @@ cached) is also per-pod, in-memory state — same caveat.
   a stop sets `selectedStop` and narrows the gallery to that stop's
   `photo_ids`; highlighting a stop toggles a class rather than rebuilding the
   map (which would reset the user's pan/zoom). In jsdom tests, stub
-  `L.polyline` (no SVG there).
+  `L.polyline` (no SVG there). `TripHeader`'s Rename/Merge/Split/Dismiss
+  panels call `App.jsx`'s handlers, which return promises: a rejection's
+  message shows in the panel, which stays open. `PhotoGrid`'s right-click menu
+  gains "Add to trip…" (any view; moves the photos), and inside a trip
+  "Remove from this trip" and, for one photo, "Use as the trip's cover" —
+  same promise/error contract as the tag items. `TripsManagement.jsx` is the
+  Manage page's Trips section: the "Is this home?" prompt (while any home is
+  unconfirmed), home edit/add/remove forms (coordinates; no map picker yet), a
+  make-a-trip-by-date-range form, and dismissed trips with Restore. It reloads
+  when a trips job ends, because detection replaces unconfirmed homes.
+
 - `SyncStatus.jsx` itself is unchanged by the above move: it renders a
   plain button when idle, or (while a backend sync is running/just
   finished) a small progress bar polled from `GET /api/sync/status` every

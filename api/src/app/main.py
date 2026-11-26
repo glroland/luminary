@@ -10,7 +10,8 @@ from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
-from .routers import about, descriptions, faces, health, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
+from . import trips as trips_module
+from .routers import about, descriptions, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
 
 configure_logging()
 
@@ -53,6 +54,16 @@ async def job_busy(request: Request, exc: jobs.JobBusy) -> JSONResponse:
     )
 
 
+@app.exception_handler(trips_module.TripNotFound)
+async def trip_not_found(request: Request, exc: trips_module.TripNotFound) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": "Trip or home not found"})
+
+
+@app.exception_handler(trips_module.TripInvalid)
+async def trip_invalid(request: Request, exc: trips_module.TripInvalid) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
 @app.exception_handler(Exception)
 async def log_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -72,3 +83,4 @@ app.include_router(locations.router, prefix="/api")
 app.include_router(pets.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
 app.include_router(trips.router, prefix="/api")
+app.include_router(homes.router, prefix="/api")

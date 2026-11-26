@@ -12,6 +12,8 @@ describe("ManagementPage", () => {
     // defaulted to empty here so tests that don't care about tags aren't
     // affected by it; tests that do override this themselves.
     vi.spyOn(client, "fetchTags").mockResolvedValue([]);
+    vi.spyOn(client, "fetchHomes").mockResolvedValue([]);
+    vi.spyOn(client, "fetchDismissedTrips").mockResolvedValue([]);
     // Expanding an individual also fetches its unmatched auto-tags.
     vi.spyOn(client, "fetchIndividualRejections").mockResolvedValue([]);
   });

@@ -27,6 +27,7 @@ import {
   updateTag,
 } from "../api/client.js";
 import JobControl from "./JobControl.jsx";
+import TripsManagement from "./TripsManagement.jsx";
 
 const REFRESH_DONE_DISPLAY_MS = 2000;
 // How long the pointer rests on an auto-matched face before the source-photo
@@ -42,7 +43,7 @@ const SOURCE_PREVIEW_DELAY_MS =
     ? configuredDelay
     : DEFAULT_SOURCE_PREVIEW_DELAY_MS;
 
-export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, onNavigateToPhoto, onPurged }) {
+export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, onNavigateToPhoto, onPurged, onTripsChanged }) {
   const [individuals, setIndividuals] = useState(null);
   // Photo a hovered auto-matched face came from, shown in a popup after the
   // pointer rests on the face for SOURCE_PREVIEW_DELAY_MS.
@@ -829,6 +830,9 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
           })}
         </ul>
       )}
+
+      <h2>Trips</h2>
+      <TripsManagement jobs={jobs} onTripsChanged={onTripsChanged} />
 
       <div className="management-danger-zone">
         <h3>Danger zone</h3>

@@ -13,12 +13,18 @@ import {
   fetchIndividuals,
   fetchPhotos,
   fetchJobs,
+  addTripPhotos,
+  dismissTrip,
   fetchTagPhotoIds,
   fetchTags,
   fetchTripLocations,
   fetchTripPhotoIds,
   fetchTrips,
+  mergeTrips,
+  removeTripPhotos,
+  splitTrip,
   startSync,
+  updateTrip,
 } from "./api/client.js";
 import { applyTheme, getStoredTheme } from "./theme.js";
 
@@ -386,6 +392,49 @@ export default function App() {
     };
   }, [selectedTrip, tripsVersion]);
 
+  // Trip edits. Each one reloads the trip list, which also re-fetches the
+  // selected trip's photos and map. They reject on failure so the control
+  // that asked (the header's panel, the grid's menu) can show why.
+  async function handleRenameTrip(name) {
+    await updateTrip(selectedTrip, { name });
+    loadTrips();
+  }
+
+  async function handleMergeTrip(otherId) {
+    const survivor = await mergeTrips([selectedTrip, otherId]);
+    setSelectedTrip(survivor.id);
+    loadTrips();
+    resetGrid();
+  }
+
+  async function handleSplitTrip(at) {
+    await splitTrip(selectedTrip, at);
+    loadTrips();
+    resetGrid();
+  }
+
+  async function handleDismissTrip() {
+    await dismissTrip(selectedTrip);
+    setSelectedTrip(null);
+    loadTrips();
+    resetGrid();
+  }
+
+  async function handleAddToTrip(tripId, photoIds) {
+    await addTripPhotos(tripId, photoIds);
+    loadTrips();
+  }
+
+  async function handleRemoveFromTrip(photoIds) {
+    await removeTripPhotos(selectedTrip, photoIds);
+    loadTrips();
+  }
+
+  async function handleSetTripCover(photoId) {
+    await updateTrip(selectedTrip, { cover_photo_id: photoId });
+    loadTrips();
+  }
+
   function handleToggleOutings(value) {
     setShowOutings(value);
     try {
@@ -751,6 +800,7 @@ export default function App() {
               loadTrips();
             }}
             onNavigateToPhoto={handleNavigateToPhoto}
+            onTripsChanged={loadTrips}
             onPurged={() => {
               setSelectedDirectory(null);
               setSelectedIndividual(null);
@@ -779,6 +829,11 @@ export default function App() {
             {selectedTrip !== null && searchResults === null && trips.some((trip) => trip.id === selectedTrip) && (
               <TripHeader
                 trip={trips.find((trip) => trip.id === selectedTrip)}
+                otherTrips={trips.filter((trip) => trip.id !== selectedTrip)}
+                onRename={handleRenameTrip}
+                onMerge={handleMergeTrip}
+                onSplit={handleSplitTrip}
+                onDismiss={handleDismissTrip}
                 locations={tripLocations}
                 selectedStop={selectedStop}
                 onSelectStop={(index) => {
@@ -795,6 +850,11 @@ export default function App() {
             sidebarOpen={sidebarOpen}
             keysEnabled={!selectedPhoto}
             onSelect={handleSelectPhoto}
+            trips={trips}
+            currentTripId={selectedTrip}
+            onAddToTrip={handleAddToTrip}
+            onRemoveFromTrip={handleRemoveFromTrip}
+            onSetTripCover={handleSetTripCover}
             emptyMessage={
               searchResults === null
                 ? "No photos yet."

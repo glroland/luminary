@@ -289,6 +289,7 @@ class TripRefreshStatus(BaseModel):
 class Trip(BaseModel):
     id: str
     name: str
+    name_source: str = "auto"  # "manual" once a user has renamed it
     kind: str  # "trip" (2+ calendar days) | "outing" (one day)
     status: str  # "active" | "dismissed"
     source: str  # "auto" | "manual"
@@ -301,6 +302,79 @@ class Trip(BaseModel):
 
 class TripList(BaseModel):
     trips: list[Trip]
+
+
+class TripUpdate(BaseModel):
+    # Only the fields sent are changed. An empty `name` goes back to the
+    # generated name; an empty `cover_photo_id` back to the automatic cover.
+    name: Optional[str] = None
+    cover_photo_id: Optional[str] = None
+    kind: Optional[str] = None  # "trip" | "outing"
+
+
+class TripCreate(BaseModel):
+    name: str
+    photo_ids: list[str] = []
+    # A range picks up every dated photo in it that isn't in a trip already.
+    start_date: Optional[str] = None  # YYYY-MM-DD
+    end_date: Optional[str] = None  # defaults to start_date
+
+
+class TripPhotosRequest(BaseModel):
+    photo_ids: list[str]
+
+
+class TripMergeRequest(BaseModel):
+    trip_ids: list[str]
+
+
+class TripSplitRequest(BaseModel):
+    at: str  # ISO date or date-time: photos from then on move to a new trip
+
+
+class Home(BaseModel):
+    id: str
+    name: Optional[str] = None
+    latitude: float
+    longitude: float
+    radius_km: Optional[float] = None  # null = LUMINARY_TRIP_HOME_RADIUS_KM
+    start_date: Optional[str] = None  # YYYY-MM-DD; null = unbounded
+    end_date: Optional[str] = None
+    country: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    source: str  # "auto" | "manual"
+    confirmed: bool
+
+
+class HomeList(BaseModel):
+    homes: list[Home]
+
+
+class HomeCreate(BaseModel):
+    name: Optional[str] = None
+    latitude: float
+    longitude: float
+    radius_km: Optional[float] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+class HomeUpdate(BaseModel):
+    # Only the fields sent are changed; null clears radius/dates.
+    name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    radius_km: Optional[float] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+class HomeChange(BaseModel):
+    # `rebuild_started` is false when another job held the slot -- the user
+    # then has to run Rebuild Trips for the change to take effect.
+    home: Optional[Home] = None
+    rebuild_started: bool
 
 
 class TripPhotoIds(BaseModel):

@@ -544,6 +544,24 @@ Click a stop to narrow the gallery to it. Times are treated as the wall clock
 where the photo was taken — no time zone is worked out, since every threshold
 is in days.
 
+**Editing.** Detection is a starting point; what you change is kept. In a
+trip's header: **Rename** (or go back to the generated name), **Merge with…**
+another trip (the earlier one keeps its place), **Split…** at a date, and
+**Dismiss** (hidden, and never detected again until restored from the Manage
+page). In the gallery, right-click photos to **Add to trip…** (any photo, with
+or without a date or GPS; it moves them out of another trip), and inside a trip
+**Remove from this trip** (detection won't put them back) or **Use as the
+trip's cover**. The Manage page's **Trips** section also makes a trip from a
+date range. A rebuild only ever adds new trips and extends existing ones with
+photos that are in no trip: it never moves a photo between trips, merges,
+splits, or brings back what you dismissed.
+
+**Home.** The Manage page shows the detected home(s) with an "Is this home?"
+prompt until confirmed. Confirm it, edit it (coordinates, radius, and the dates
+you lived there — add a second one when you move), or enter your own; once
+you have, only those are used. Removing the last one lets detection take over
+again. Changing a home rebuilds trips.
+
 Trips are rebuilt after every sync and Refresh Locations, and on demand with
 the management page's **Rebuild Trips** button (`POST /api/trips/refresh`,
 polled via `GET /api/trips/refresh/status`). Names use the place names from

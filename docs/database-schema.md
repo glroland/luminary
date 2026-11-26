@@ -324,6 +324,18 @@ stops qualifying) or `manual` (never released by detection).
 Primary key `(trip_id, photo_id)`: a photo a user removed from a trip, which
 detection will not put back into that trip.
 
+### Editing
+
+Edits (`trips.py`) run in one transaction under the rebuild's advisory lock
+and set `trips.edited`. Adding photos by hand upserts `trip_photos` with
+`membership = 'manual'` (moving them from another trip and leaving a
+`trip_exclusions` row there); removing deletes the row and records an
+exclusion. **Dismissing keeps the trip's `trip_photos` rows** and sets
+`status = 'dismissed'`: those photos are then never reassigned and any
+detected run touching them is skipped, and restoring just flips `status` back.
+Merge keeps the trip with the earliest `start_at`; split moves the photos at or
+after a date to a new trip.
+
 ### Reconciliation
 
 A rebuild runs in one transaction under a Postgres advisory lock. Detection

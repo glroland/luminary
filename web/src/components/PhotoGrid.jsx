@@ -93,6 +93,14 @@ export default function PhotoGrid({
   onToggleSidebar = null,
   sidebarOpen = false,
   keysEnabled = true,
+  // Trips (all optional). `trips` is every trip a photo can be added to;
+  // `currentTripId` is the trip being browsed, if any. Each handler returns
+  // a promise: a rejection's message is shown in the menu.
+  trips = [],
+  currentTripId = null,
+  onAddToTrip = null,
+  onRemoveFromTrip = null,
+  onSetTripCover = null,
 }) {
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
   const galleryRef = useRef(null);
@@ -210,6 +218,7 @@ export default function PhotoGrid({
   const [tagsByPhoto, setTagsByPhoto] = useState({});
   const [tagActionError, setTagActionError] = useState(null);
   const [tagBusy, setTagBusy] = useState(false);
+  const [tripPickerOpen, setTripPickerOpen] = useState(false);
 
   useEffect(() => {
     if (!tagMenu) return;
@@ -322,6 +331,7 @@ export default function PhotoGrid({
       if (selectionRef.current.ids.size > 0) setSelection({ ids: new Set(), anchor: null, focus: null });
     }
     setTagMenu({ photoIds, x: event.clientX, y: event.clientY });
+    setTripPickerOpen(false);
     setTagActionError(null);
     setTagsByPhoto({});
     if (catalogTags === null) {
@@ -374,6 +384,17 @@ export default function PhotoGrid({
     return <p className="empty-state">{emptyMessage}</p>;
   }
 
+  // Runs a trip action for the menu's photos, then closes the menu.
+  async function runTripAction(action) {
+    try {
+      await action();
+      setTagMenu(null);
+    } catch (err) {
+      setTagActionError(err.message);
+    }
+  }
+
+  const addTargets = trips.filter((trip) => trip.id !== currentTripId);
   const photoTagsLoaded = tagMenu && tagMenu.photoIds.every((id) => id in tagsByPhoto);
 
   function renderCards(start, end) {
@@ -453,6 +474,43 @@ export default function PhotoGrid({
                 </div>
               );
             })
+          )}
+          {(currentTripId !== null || (onAddToTrip && addTargets.length > 0)) && (
+            <div className="tag-menu-separator" role="separator" />
+          )}
+          {currentTripId !== null && onRemoveFromTrip && (
+            <div className="tag-menu-item" onClick={() => runTripAction(() => onRemoveFromTrip(tagMenu.photoIds))}>
+              Remove from this trip
+            </div>
+          )}
+          {currentTripId !== null && onSetTripCover && tagMenu.photoIds.length === 1 && (
+            <div className="tag-menu-item" onClick={() => runTripAction(() => onSetTripCover(tagMenu.photoIds[0]))}>
+              Use as the trip&apos;s cover
+            </div>
+          )}
+          {onAddToTrip && addTargets.length > 0 && (
+            <>
+              <div
+                className="tag-menu-item"
+                aria-expanded={tripPickerOpen}
+                onClick={() => setTripPickerOpen((prev) => !prev)}
+              >
+                Add to trip…
+              </div>
+              {tripPickerOpen && (
+                <div className="tag-menu-trips">
+                  {addTargets.map((trip) => (
+                    <div
+                      key={trip.id}
+                      className="tag-menu-item tag-menu-trip"
+                      onClick={() => runTripAction(() => onAddToTrip(trip.id, tagMenu.photoIds))}
+                    >
+                      {trip.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
           {tagActionError && <div className="tag-menu-item tag-menu-error">{tagActionError}</div>}
         </div>

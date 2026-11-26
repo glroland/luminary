@@ -6,11 +6,53 @@ import TripMap from "./TripMap.jsx";
 // collapsible map of where it went, and -- while one of the map's stops is
 // selected -- a note and a way back to the whole trip. `locations` is null
 // while it loads.
-export default function TripHeader({ trip, locations, selectedStop, onSelectStop }) {
+//
+// The action buttons edit the trip (all of which detection then respects):
+// rename (or go back to the generated name), merge into another trip, split
+// at a date, or dismiss. `onRename(name)`, `onMerge(otherTripId)`,
+// `onSplit(isoDate)` and `onDismiss()` return promises; a rejection's
+// message is shown here and the panel stays open.
+export default function TripHeader({
+  trip,
+  locations,
+  selectedStop,
+  onSelectStop,
+  otherTrips = [],
+  onRename,
+  onMerge,
+  onSplit,
+  onDismiss,
+}) {
   const [mapOpen, setMapOpen] = useState(true);
+  const [panel, setPanel] = useState(null); // "rename" | "merge" | "split" | null
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const stop = selectedStop !== null ? locations?.stops[selectedStop] : null;
   const range = formatTripRange(trip);
   const kind = trip.kind === "outing" ? "Day outing" : null;
+  const editable = Boolean(onRename);
+
+  function open(next, initial = "") {
+    setPanel(panel === next ? null : next);
+    setDraft(initial);
+    setError(null);
+  }
+
+  async function run(action) {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      setPanel(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const day = (value) => (value ? value.slice(0, 10) : undefined);
 
   return (
     <section className="trip-header" aria-label={`Trip: ${trip.name}`}>
@@ -27,6 +69,117 @@ export default function TripHeader({ trip, locations, selectedStop, onSelectStop
           {mapOpen ? "Hide map" : "Show map"}
         </button>
       </div>
+
+      {editable && (
+        <div className="trip-actions">
+          <button type="button" className="trip-map-toggle" onClick={() => open("rename", trip.name)} aria-expanded={panel === "rename"}>
+            Rename
+          </button>
+          <button type="button" className="trip-map-toggle" onClick={() => open("merge", otherTrips[0]?.id ?? "")} aria-expanded={panel === "merge"} disabled={otherTrips.length === 0}>
+            Merge with…
+          </button>
+          <button type="button" className="trip-map-toggle" onClick={() => open("split")} aria-expanded={panel === "split"} disabled={trip.photo_count < 2}>
+            Split…
+          </button>
+          <button
+            type="button"
+            className="trip-map-toggle trip-dismiss"
+            onClick={() => {
+              if (window.confirm(`Dismiss “${trip.name}”? It disappears from the trip list and won't be detected again. You can restore it from the Manage page.`)) {
+                run(onDismiss);
+              }
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {panel === "rename" && (
+        <form
+          className="trip-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            run(() => onRename(draft));
+          }}
+        >
+          <input aria-label="Trip name" value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus />
+          <button type="submit" disabled={busy || !draft.trim()}>
+            Save
+          </button>
+          {trip.name_source === "manual" && (
+            <button type="button" disabled={busy} onClick={() => run(() => onRename(""))}>
+              Use the generated name
+            </button>
+          )}
+          <button type="button" onClick={() => setPanel(null)}>
+            Cancel
+          </button>
+        </form>
+      )}
+
+      {panel === "merge" && (
+        <form
+          className="trip-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            run(() => onMerge(draft));
+          }}
+        >
+          <label>
+            Merge this trip with
+            <select aria-label="Trip to merge with" value={draft} onChange={(event) => setDraft(event.target.value)}>
+              {otherTrips.map((other) => (
+                <option key={other.id} value={other.id}>
+                  {other.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={busy || !draft}>
+            Merge
+          </button>
+          <button type="button" onClick={() => setPanel(null)}>
+            Cancel
+          </button>
+          <span className="trip-panel-hint">The earlier trip keeps its place; a name you chose is kept.</span>
+        </form>
+      )}
+
+      {panel === "split" && (
+        <form
+          className="trip-panel"
+          onSubmit={(event) => {
+            event.preventDefault();
+            run(() => onSplit(draft));
+          }}
+        >
+          <label>
+            Photos from
+            <input
+              aria-label="Split from date"
+              type="date"
+              value={draft}
+              min={day(trip.start_at)}
+              max={day(trip.end_at)}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </label>
+          <span className="trip-panel-hint">on move to a new trip.</span>
+          <button type="submit" disabled={busy || !draft}>
+            Split
+          </button>
+          <button type="button" onClick={() => setPanel(null)}>
+            Cancel
+          </button>
+        </form>
+      )}
+
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
 
       {mapOpen &&
         (locations ? (

@@ -2577,3 +2577,210 @@ textarea {
   object-fit: cover;
   border-radius: 3px;
 }
+
+/* --- Trip editing (TripHeader.jsx actions, PhotoGrid menu, TripsManagement.jsx) --- */
+
+.trip-actions,
+.trip-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.trip-map-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.trip-dismiss {
+  color: var(--danger);
+}
+
+.trip-panel input,
+.trip-panel select {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.trip-panel input[type="text"],
+.trip-panel input:not([type]) {
+  min-width: 16rem;
+}
+
+.trip-panel label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.trip-panel button {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.8rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.trip-panel button[type="button"] {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.trip-panel button:disabled {
+  background: var(--accent-disabled);
+  cursor: not-allowed;
+}
+
+.trip-panel-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.tag-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: var(--border);
+}
+
+.tag-menu-trips {
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.tag-menu-trip {
+  padding-left: 1.6rem;
+}
+
+.trips-management h3 {
+  margin: 1.25rem 0 0.4rem;
+  font-size: 1rem;
+}
+
+.trips-notice {
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.trips-home-prompt {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--selected);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.trips-home-prompt ul {
+  margin: 0.4rem 0 0.6rem;
+  padding-left: 1.2rem;
+}
+
+.trips-home-prompt button,
+.trips-home-form button[type="submit"] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 6px;
+  padding: 0.35rem 0.9rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.trips-home-form button:disabled {
+  background: var(--accent-disabled);
+  cursor: not-allowed;
+}
+
+.trips-home-prompt-hint {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.trips-homes {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.trips-home {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.trips-home-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+}
+
+.trips-home-name {
+  font-weight: 600;
+}
+
+.trips-home-badge {
+  font-size: 0.7rem;
+  color: var(--accent-text);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+}
+
+.trips-home-detail {
+  flex-basis: 100%;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.trips-home-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+}
+
+.trips-home-form input {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+
+.trips-home-form label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.trips-add summary {
+  cursor: pointer;
+  color: var(--accent-text);
+  font-size: 0.9rem;
+}

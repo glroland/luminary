@@ -517,5 +517,66 @@ describe("App", () => {
       await waitFor(() => expect(screen.getByAltText("3.jpg")).toBeInTheDocument());
       expect(screen.queryByRole("heading", { name: TRIP.name })).not.toBeInTheDocument();
     });
+
+    describe("editing", () => {
+      it("renames the selected trip and reloads the list", async () => {
+        mockTrip();
+        const update = vi.spyOn(client, "updateTrip").mockResolvedValue({ ...TRIP, name: "Mountains" });
+        await openTrip();
+        await screen.findByRole("heading", { name: TRIP.name });
+        client.fetchTrips.mockResolvedValue([{ ...TRIP, name: "Mountains" }]);
+
+        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+        fireEvent.change(screen.getByLabelText("Trip name"), { target: { value: "Mountains" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        await waitFor(() => expect(update).toHaveBeenCalledWith("t1", { name: "Mountains" }));
+        expect(await screen.findByRole("heading", { name: "Mountains" })).toBeInTheDocument();
+      });
+
+      it("merges into another trip and shows the survivor", async () => {
+        mockTrip();
+        const other = { ...TRIP, id: "t2", name: "Florida, Dec 2019", start_at: "2019-12-01T09:00:00" };
+        client.fetchTrips.mockResolvedValue([TRIP, other]);
+        const merge = vi.spyOn(client, "mergeTrips").mockResolvedValue(TRIP);
+        await openTrip();
+        await screen.findByRole("heading", { name: TRIP.name });
+
+        fireEvent.click(screen.getByRole("button", { name: /merge with/i }));
+        fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+
+        await waitFor(() => expect(merge).toHaveBeenCalledWith(["t1", "t2"]));
+        expect(await screen.findByRole("heading", { name: TRIP.name })).toBeInTheDocument();
+      });
+
+      it("dismisses the trip and goes back to the whole gallery", async () => {
+        mockTrip();
+        const dismiss = vi.spyOn(client, "dismissTrip").mockResolvedValue();
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        await openTrip();
+        await screen.findByRole("heading", { name: TRIP.name });
+        client.fetchTrips.mockResolvedValue([]);
+
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+        await waitFor(() => expect(dismiss).toHaveBeenCalledWith("t1"));
+        await waitFor(() => expect(screen.queryByRole("heading", { name: TRIP.name })).not.toBeInTheDocument());
+        expect(screen.getByAltText("3.jpg")).toBeInTheDocument();
+      });
+
+      it("adds a photo to a trip from the gallery's right-click menu", async () => {
+        mockTrip();
+        vi.spyOn(client, "fetchPhotoTags").mockResolvedValue([]);
+        const add = vi.spyOn(client, "addTripPhotos").mockResolvedValue(TRIP);
+        render(<App />);
+        await waitFor(() => expect(screen.getByAltText("3.jpg")).toBeInTheDocument());
+
+        fireEvent.contextMenu(screen.getByAltText("3.jpg").closest(".photo-card"), { clientX: 5, clientY: 5 });
+        fireEvent.click(await screen.findByText(/add to trip/i));
+        fireEvent.click(screen.getByText(TRIP.name));
+
+        await waitFor(() => expect(add).toHaveBeenCalledWith("t1", ["3"]));
+      });
+    });
   });
 });

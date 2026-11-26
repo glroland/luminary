@@ -123,6 +123,98 @@ describe("PhotoGrid", () => {
     });
   });
 
+  describe("trip actions in the right-click menu", () => {
+    const TRIPS = [
+      { id: "t1", name: "Italy, May 2019" },
+      { id: "t2", name: "Florida, Dec 2019" },
+    ];
+
+    it("offers no trip entries without trips or handlers", async () => {
+      render(<PhotoGrid photos={PHOTOS} onSelect={() => {}} />);
+      rightClick(screen.getByAltText("beach.jpg").closest(".photo-card"));
+      await screen.findByText("Vacation");
+      expect(screen.queryByText(/add to trip/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/remove from this trip/i)).not.toBeInTheDocument();
+    });
+
+    it("adds the right-clicked photo to a chosen trip", async () => {
+      const onAddToTrip = vi.fn().mockResolvedValue();
+      render(<PhotoGrid photos={PHOTOS} onSelect={() => {}} trips={TRIPS} onAddToTrip={onAddToTrip} />);
+      rightClick(screen.getByAltText("beach.jpg").closest(".photo-card"));
+
+      fireEvent.click(await screen.findByText(/add to trip/i));
+      fireEvent.click(screen.getByText("Florida, Dec 2019"));
+
+      await waitFor(() => expect(onAddToTrip).toHaveBeenCalledWith("t2", ["1"]));
+      await waitFor(() => expect(document.querySelector(".tag-menu")).not.toBeInTheDocument());
+    });
+
+    it("adds a whole selection at once", async () => {
+      const onAddToTrip = vi.fn().mockResolvedValue();
+      render(<PhotoGrid photos={PHOTOS} onSelect={() => {}} trips={TRIPS} onAddToTrip={onAddToTrip} />);
+      fireEvent.click(screen.getByAltText("beach.jpg"), { ctrlKey: true });
+      fireEvent.click(screen.getByAltText("mountain.jpg"), { ctrlKey: true });
+      rightClick(screen.getByAltText("beach.jpg").closest(".photo-card"));
+
+      fireEvent.click(await screen.findByText(/add to trip/i));
+      fireEvent.click(screen.getByText("Italy, May 2019"));
+
+      await waitFor(() => expect(onAddToTrip).toHaveBeenCalledWith("t1", ["1", "2"]));
+    });
+
+    it("inside a trip, removes photos from it and sets a cover, and doesn't offer that trip to add to", async () => {
+      const onRemoveFromTrip = vi.fn().mockResolvedValue();
+      const onSetTripCover = vi.fn().mockResolvedValue();
+      render(
+        <PhotoGrid
+          photos={PHOTOS}
+          onSelect={() => {}}
+          trips={TRIPS}
+          currentTripId="t1"
+          onAddToTrip={vi.fn()}
+          onRemoveFromTrip={onRemoveFromTrip}
+          onSetTripCover={onSetTripCover}
+        />,
+      );
+      rightClick(screen.getByAltText("beach.jpg").closest(".photo-card"));
+
+      fireEvent.click(await screen.findByText(/use as the trip.s cover/i));
+      await waitFor(() => expect(onSetTripCover).toHaveBeenCalledWith("1"));
+
+      rightClick(screen.getByAltText("mountain.jpg").closest(".photo-card"));
+      fireEvent.click(await screen.findByText(/add to trip/i));
+      expect(screen.queryByText("Italy, May 2019")).not.toBeInTheDocument();
+      expect(screen.getByText("Florida, Dec 2019")).toBeInTheDocument();
+
+      rightClick(screen.getByAltText("mountain.jpg").closest(".photo-card"));
+      fireEvent.click(await screen.findByText(/remove from this trip/i));
+      await waitFor(() => expect(onRemoveFromTrip).toHaveBeenCalledWith(["2"]));
+    });
+
+    it("only offers a cover for a single photo", async () => {
+      render(
+        <PhotoGrid photos={PHOTOS} onSelect={() => {}} currentTripId="t1" onRemoveFromTrip={vi.fn()} onSetTripCover={vi.fn()} />,
+      );
+      fireEvent.click(screen.getByAltText("beach.jpg"), { ctrlKey: true });
+      fireEvent.click(screen.getByAltText("mountain.jpg"), { ctrlKey: true });
+      rightClick(screen.getByAltText("beach.jpg").closest(".photo-card"));
+      await screen.findByText(/remove from this trip/i);
+      expect(screen.queryByText(/use as the trip.s cover/i)).not.toBeInTheDocument();
+    });
+
+    it("shows why an action failed and leaves the menu open", async () => {
+      const onAddToTrip = vi.fn().mockRejectedValue(new Error("Trip or home not found"));
+      render(<PhotoGrid photos={PHOTOS} onSelect={() => {}} trips={TRIPS} onAddToTrip={onAddToTrip} />);
+      rightClick(screen.getByAltText("beach.jpg").closest(".photo-card"));
+
+      fireEvent.click(await screen.findByText(/add to trip/i));
+      fireEvent.click(screen.getByText("Italy, May 2019"));
+
+      expect(await screen.findByText("Trip or home not found")).toBeInTheDocument();
+      expect(document.querySelector(".tag-menu")).toBeInTheDocument();
+    });
+  });
+
   it("shows the empty message when there are no photos", () => {
     render(<PhotoGrid photos={[]} onSelect={() => {}} emptyMessage="Nothing here." />);
     expect(screen.getByText("Nothing here.")).toBeInTheDocument();

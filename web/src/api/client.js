@@ -228,6 +228,79 @@ export async function fetchTrips() {
   return data.trips;
 }
 
+// Trips a user dismissed: hidden, and never recreated by detection.
+export async function fetchDismissedTrips() {
+  const data = await request("/trips?status=dismissed");
+  return data.trips;
+}
+
+function json(method, body) {
+  return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+// `fields`: any of {name, cover_photo_id, kind}. An empty name or cover goes
+// back to the generated/automatic one.
+export async function updateTrip(tripId, fields) {
+  return request(`/trips/${tripId}`, json("PATCH", fields));
+}
+
+// A trip made by hand, from photo ids and/or a date range (YYYY-MM-DD).
+export async function createTrip({ name, photoIds = [], startDate = null, endDate = null }) {
+  return request("/trips", json("POST", { name, photo_ids: photoIds, start_date: startDate, end_date: endDate }));
+}
+
+export async function addTripPhotos(tripId, photoIds) {
+  return request(`/trips/${tripId}/photos/add`, json("POST", { photo_ids: photoIds }));
+}
+
+export async function removeTripPhotos(tripId, photoIds) {
+  return request(`/trips/${tripId}/photos/remove`, json("POST", { photo_ids: photoIds }));
+}
+
+// Resolves to the surviving trip (whichever started first).
+export async function mergeTrips(tripIds) {
+  return request("/trips/merge", json("POST", { trip_ids: tripIds }));
+}
+
+// Photos from `at` (ISO date or date-time) on move to a new trip. Resolves
+// to [original, new].
+export async function splitTrip(tripId, at) {
+  const data = await request(`/trips/${tripId}/split`, json("POST", { at }));
+  return data.trips;
+}
+
+export async function dismissTrip(tripId) {
+  await request(`/trips/${tripId}/dismiss`, { method: "POST" });
+}
+
+export async function restoreTrip(tripId) {
+  return request(`/trips/${tripId}/restore`, { method: "POST" });
+}
+
+// Home locations trip detection compares photos with. Every change resolves
+// to {home, rebuild_started}: false means another job was running and trips
+// must be rebuilt by hand for it to take effect.
+export async function fetchHomes() {
+  const data = await request("/homes");
+  return data.homes;
+}
+
+export async function createHome(fields) {
+  return request("/homes", json("POST", fields));
+}
+
+export async function updateHome(homeId, fields) {
+  return request(`/homes/${homeId}`, json("PATCH", fields));
+}
+
+export async function confirmHome(homeId) {
+  return request(`/homes/${homeId}/confirm`, { method: "POST" });
+}
+
+export async function deleteHome(homeId) {
+  return request(`/homes/${homeId}`, { method: "DELETE" });
+}
+
 // Ids of every photo in the trip, oldest first.
 export async function fetchTripPhotoIds(tripId) {
   const data = await request(`/trips/${tripId}/photos`);
