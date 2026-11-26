@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AboutDialog from "./components/AboutDialog.jsx";
 import ChatWidget from "./components/ChatWidget.jsx";
 import Logo from "./components/Logo.jsx";
 import ManagementPage from "./components/ManagementPage.jsx";
@@ -172,6 +173,7 @@ export default function App() {
   // was opened some other way (ManagementPage's "go to photo").
   const [modalOrigin, setModalOrigin] = useState(null);
   const [theme, setTheme] = useState(getStoredTheme);
+  const [aboutOpen, setAboutOpen] = useState(false);
   // Gallery sort order (date/filename/folder, see SortControl.jsx). Not
   // applied while a search is active -- see visiblePhotos below.
   const [sortOrder, setSortOrder] = useState(SORT_OPTIONS[0].value);
@@ -594,8 +596,18 @@ export default function App() {
             >
               <span aria-hidden="true">{theme === "dark" ? "\u2600" : "\u263E"}</span>
             </button>
+            <button
+              type="button"
+              className="theme-toggle about-button"
+              onClick={() => setAboutOpen(true)}
+              aria-label="About Luminary"
+              title="About Luminary"
+            >
+              <span aria-hidden="true">i</span>
+            </button>
           </div>
         </header>
+        {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
         {error && (
           <p className="error" role="alert">
             {error}

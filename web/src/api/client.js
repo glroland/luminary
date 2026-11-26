@@ -39,6 +39,10 @@ export async function startSync() {
   return request("/sync", { method: "POST" });
 }
 
+export async function fetchAbout() {
+  return request("/about");
+}
+
 export async function fetchSyncStatus() {
   return request("/sync/status");
 }

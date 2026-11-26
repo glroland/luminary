@@ -10,7 +10,7 @@ from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
-from .routers import descriptions, faces, health, individuals, jobs as jobs_router, locations, photos, rejections, sync, tags
+from .routers import about, descriptions, faces, health, individuals, jobs as jobs_router, locations, photos, rejections, sync, tags
 
 configure_logging()
 
@@ -60,6 +60,7 @@ async def log_unhandled_exception(request: Request, exc: Exception) -> JSONRespo
 
 
 app.include_router(health.router, prefix="/api")
+app.include_router(about.router, prefix="/api")
 app.include_router(photos.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 app.include_router(jobs_router.router, prefix="/api")

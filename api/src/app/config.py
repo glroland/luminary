@@ -60,6 +60,14 @@ def get_database_password() -> Optional[str]:
     return os.environ.get("LUMINARY_DATABASE_PASSWORD") or None
 
 
+def get_version() -> Optional[str]:
+    """The Jenkins build number (``$BUILD_NUMBER``) the container image was
+    built from, baked in via ``ARG``/``ENV LUMINARY_VERSION`` in
+    ``api/Containerfile``. ``None`` when not set -- i.e. running from
+    source (``make run-api``), which the About dialog calls development mode."""
+    return os.environ.get("LUMINARY_VERSION", "").strip() or None
+
+
 def get_cors_origins() -> list[str]:
     raw = os.environ.get("LUMINARY_CORS_ORIGINS", "*")
     return [origin.strip() for origin in raw.split(",") if origin.strip()]

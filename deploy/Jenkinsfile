@@ -27,7 +27,7 @@ pipeline
       {
          steps
          {
-            sh 'cd api ; docker build --no-cache . --file Containerfile --tag luminary-api:$BUILD_NUMBER'
+            sh 'cd api ; docker build --no-cache . --file Containerfile --build-arg LUMINARY_VERSION=$BUILD_NUMBER --tag luminary-api:$BUILD_NUMBER'
             sh 'cd api ; docker save luminary-api:$BUILD_NUMBER > luminary-api-dockerimage.tar'
             step(followSymlinks: false, artifacts: 'api/luminary-api-dockerimage.tar', $class: 'ArtifactArchiver')
             sh 'cd api ; docker rmi luminary-api:$BUILD_NUMBER'

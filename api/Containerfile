@@ -57,6 +57,12 @@ ENV HF_HUB_OFFLINE=1 \
     LUMINARY_EMBEDDING_MODEL=${LUMINARY_EMBEDDING_MODEL} \
     LUMINARY_RERANKER_MODEL=${LUMINARY_RERANKER_MODEL}
 
+# The Jenkins build number, passed by deploy/Jenkinsfile as
+# `--build-arg LUMINARY_VERSION=$BUILD_NUMBER`. Left empty for a plain local
+# `docker build`, which the About dialog then reports as development mode.
+ARG LUMINARY_VERSION=
+ENV LUMINARY_VERSION=${LUMINARY_VERSION}
+
 ENV PYTHONPATH=/app/src \
     LUMINARY_DATA_DIR=/data/photos \
     LUMINARY_DATABASE_PATH=/data/photos.db \
