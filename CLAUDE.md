@@ -761,12 +761,29 @@ cached) is also per-pod, in-memory state — same caveat.
   `storage.replace_faces(photo_id, boxes, kinds=None)` is **kind-scoped**:
   `kinds=["person"]` / `["pet"]` replace only those rows (tags included) and
   leave the rest alone; `kinds=None` still wipes everything (sync's
-  content-change path). `recognition.py` is deliberately **humans only** for
-  now — `_candidate_faces`/`_reference_embeddings` filter `kind = 'person'`
-  (InceptionResnetV1 is a face model; a pet crop embedded by it would be
-  matched against human references), and the full-refresh redetect passes
-  `kinds=["person"]` so it never wipes pet boxes or tags. Don't drop those
-  filters without giving pets their own embedder. Existing libraries aren't
+  content-change path). `recognition.py` matches **each kind with its own embedder and
+  thresholds**, never across kinds: `_run_refresh` builds a plan per kind
+  (`KINDS`; `_reference_embeddings`/`_candidate_faces`/`_rejection_embeddings`
+  all take a `kind`, rejections via a join to `individuals.kind` since
+  `face_rejections` has no kind column) and `_match_kind` runs the pass.
+  Humans use InceptionResnetV1; pets use DINOv2 (`pet_embedding.py`, via
+  `transformers` — no new package; CLS + mean patch tokens, L2-normalized,
+  crop squashed to 224x224, not centre-cropped). `_embed_for(kind, image)`
+  is the dispatch; `_embed` itself stays the face embedder so existing
+  fakes of it keep working. Keep the two vector spaces apart: a pet crop
+  embedded by the face model (or vice versa) would silently match the wrong
+  references. Thresholds are separate settings
+  (`LUMINARY_PET_MATCH_THRESHOLD` default 0.8, `LUMINARY_PET_REJECT_THRESHOLD`
+  0.92) on a **different scale**: DINOv2 cosines run high (two unrelated
+  synthetic images already scored 0.79), so the defaults start strict —
+  too loose writes wrong tags, too strict only matches nothing, and the
+  closest-unmatched log line names the variable to tune. Neither default is
+  validated on real pet photos. A missing/unloadable pet model
+  (`PetRecognitionNotConfigured`) skips pets for that run and never fails
+  the human matching. The full-refresh redetect passes `kinds=["person"]`
+  so it never wipes pet boxes or tags; `people.untag_face` records the
+  threshold of the face's own kind on a rejection. A photo with both a
+  human and a pet candidate is read once per pass. Existing libraries aren't
   re-scanned by sync (their `face_detection_done` is already TRUE), so
   `pets.py` is the **non-destructive backfill** (`POST /api/pets/refresh`,
   the Manage page's "Detect Pets"): it visits only photos with `NOT

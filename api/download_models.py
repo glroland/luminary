@@ -4,7 +4,7 @@ Run by api/Containerfile (image build) and `make install-models` (local
 dev), so both populate the cache from the exact same list. Mirrors
 chat.py's _load_florence(), embeddings.py's _load_embedder(),
 recognition.py's _load_embedder() (model id, trust_remote_code,
-pretrained="vggface2") and pet_detection.py's _load_detector(). Where the files land is decided by the caller via
+pretrained="vggface2") pet_detection.py's _load_detector() and pet_embedding.py's _load_model(). Where the files land is decided by the caller via
 HF_HOME / TORCH_HOME, not here. Needs network access.
 """
 
@@ -31,6 +31,10 @@ def main() -> None:
     )
 
     fasterrcnn_mobilenet_v3_large_fpn(weights=FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT).eval()
+    # pet_embedding.py's DINOv2 (tells one pet from another).
+    from transformers import AutoModel
+
+    AutoModel.from_pretrained(os.environ.get("LUMINARY_PET_EMBEDDING_MODEL", "facebook/dinov2-small"))
     SentenceTransformer(embedding, device="cpu")
     if reranker:
         CrossEncoder(reranker, device="cpu")

@@ -138,8 +138,14 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import enrich, face_detection, jobs, people, storage
-from .config import get_face_match_threshold, get_face_reject_threshold, get_max_concurrency
+from . import enrich, face_detection, jobs, people, pet_embedding, storage
+from .config import (
+    get_face_match_threshold,
+    get_face_reject_threshold,
+    get_max_concurrency,
+    get_pet_match_threshold,
+    get_pet_reject_threshold,
+)
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -201,6 +207,34 @@ def _embed(image: Image.Image) -> list[float]:
     return embedding.tolist()
 
 
+# The two kinds recognition matches, each with its own embedder and its own
+# thresholds (and so its own env vars -- named in the logs so an operator
+# knows which one to tune). Humans are matched first.
+KINDS = ("person", "pet")
+
+
+def _embed_for(kind: str, image: Image.Image) -> list[float]:
+    """Embed a crop with the embedder for `kind`: InceptionResnetV1 for a
+    human face, DINOv2 (pet_embedding.py) for a pet. The two vectors live in
+    different spaces and must never be compared with each other -- every
+    reference/candidate/rejection below is therefore fetched per kind."""
+    if kind == "pet":
+        return pet_embedding.embed(image)
+    return _embed(image)
+
+
+def _match_threshold(kind: str) -> float:
+    return get_pet_match_threshold() if kind == "pet" else get_face_match_threshold()
+
+
+def _reject_threshold(kind: str) -> float:
+    return get_pet_reject_threshold() if kind == "pet" else get_face_reject_threshold()
+
+
+def _threshold_variable(kind: str) -> str:
+    return "LUMINARY_PET_MATCH_THRESHOLD" if kind == "pet" else "LUMINARY_FACE_MATCH_THRESHOLD"
+
+
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = sum(x * x for x in a) ** 0.5
@@ -236,7 +270,7 @@ def _backfill_missing_reference_thumbnails() -> None:
     is set to."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, photo_id, x1, y1, x2, y2 FROM faces "
+            "SELECT id, photo_id, x1, y1, x2, y2, kind FROM faces "
             "WHERE tag_source = 'manual' AND person_id IS NOT NULL AND thumbnail IS NULL"
         ).fetchall()
     if not rows:
@@ -274,7 +308,7 @@ def _backfill_missing_reference_thumbnails() -> None:
         logger.info("Backfilled missing thumbnails for %d pre-existing manually tagged face(s)", backfilled)
 
 
-def _reference_embeddings() -> dict[str, list[float]]:
+def _reference_embeddings(kind: str = "person") -> dict[str, list[float]]:
     """One mean-pooled embedding per individual, from their manually
     tagged faces' already-stored thumbnails only (see this module's
     docstring for why never auto-matched ones). Individuals with no
@@ -284,7 +318,8 @@ def _reference_embeddings() -> dict[str, list[float]]:
         rows = conn.execute(
             "SELECT person_id, thumbnail FROM faces "
             "WHERE tag_source = 'manual' AND person_id IS NOT NULL AND thumbnail IS NOT NULL "
-            "AND kind = 'person'"
+            "AND kind = %s",
+            (kind,),
         ).fetchall()
 
     by_person: dict[str, list[list[float]]] = {}
@@ -294,20 +329,24 @@ def _reference_embeddings() -> dict[str, list[float]]:
         except Exception:
             logger.warning("Could not decode a manually tagged face's thumbnail; skipping it", exc_info=True)
             continue
-        by_person.setdefault(row["person_id"], []).append(_embed(image))
+        by_person.setdefault(row["person_id"], []).append(_embed_for(kind, image))
 
     return {person_id: _mean_embedding(embeddings) for person_id, embeddings in by_person.items()}
 
 
-def _rejection_embeddings() -> dict[str, list[dict]]:
+def _rejection_embeddings(kind: str = "person") -> dict[str, list[dict]]:
     """person_id -> that person's rejected faces (people.untag_face's
     face_rejections), each {"id", "photo_id", box, "embedding"}. Unlike
     references these stay separate embeddings, not a mean: averaging would
     blur distinct lookalikes together. Embedded from the stored crop at
     refresh time, same as _reference_embeddings."""
     with get_connection() as conn:
+        # face_rejections has no kind of its own: it is the kind of the
+        # individual the face was rejected *for*.
         rows = conn.execute(
-            "SELECT id, person_id, photo_id, x1, y1, x2, y2, thumbnail FROM face_rejections"
+            "SELECT r.id, r.person_id, r.photo_id, r.x1, r.y1, r.x2, r.y2, r.thumbnail "
+            "FROM face_rejections r JOIN individuals i ON i.id = r.person_id WHERE i.kind = %s",
+            (kind,),
         ).fetchall()
 
     by_person: dict[str, list[dict]] = {}
@@ -318,7 +357,7 @@ def _rejection_embeddings() -> dict[str, list[dict]]:
             logger.warning("Could not decode a rejected face's thumbnail; skipping it", exc_info=True)
             continue
         entry = {key: row[key] for key in ("id", "photo_id", "x1", "y1", "x2", "y2")}
-        entry["embedding"] = _embed(image)
+        entry["embedding"] = _embed_for(kind, image)
         by_person.setdefault(row["person_id"], []).append(entry)
     return by_person
 
@@ -428,16 +467,18 @@ def _redetect_photo_faces(photo: dict) -> Optional[int]:
     return len(boxes)
 
 
-def _candidate_faces() -> list[dict]:
+def _candidate_faces(kind: str = "person") -> list[dict]:
     """Every currently-untagged detected face, library-wide -- what this
     run will try to match. See storage.replace_faces for why a photo whose
     content changes produces fresh untagged candidates here too (its old
     tags, manual or auto, don't survive re-detection)."""
     with get_connection() as conn:
-        # Humans only: this module's embedder is a *face* model, and a pet
-        # box embedded by it would be matched against human references.
+        # One kind at a time: a pet box embedded by the face model (or a
+        # face by the pet model) would be matched against the wrong
+        # references. `kind` rides along so the crop gets a pet's margin.
         rows = conn.execute(
-            "SELECT id, photo_id, x1, y1, x2, y2 FROM faces WHERE person_id IS NULL AND kind = 'person'"
+            "SELECT id, photo_id, x1, y1, x2, y2, kind FROM faces WHERE person_id IS NULL AND kind = %s",
+            (kind,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -460,6 +501,7 @@ def _process_photo_faces(
     individual_names: dict[str, str],
     rejections: Optional[dict[str, list[dict]]] = None,
     reject_threshold: float = 0.7,
+    kind: str = "person",
 ) -> tuple[int, Optional[tuple[float, str, str, str]]]:
     """Runs on the executor thread: reads `photo_id`'s original once (even
     if it has several candidate faces), then embeds+matches each face in
@@ -502,7 +544,7 @@ def _process_photo_faces(
         except Exception:
             logger.warning("Could not decode a cropped candidate face; skipping it", exc_info=True)
             continue
-        embedding = _embed(image)
+        embedding = _embed_for(kind, image)
 
         ranked = sorted(
             ((person_id, _cosine_similarity(embedding, reference)) for person_id, reference in references.items()),
@@ -772,11 +814,23 @@ async def _run_refresh(full: bool = False) -> None:
 
     try:
         await loop.run_in_executor(_executor, _backfill_missing_reference_thumbnails)
-        references = await loop.run_in_executor(_executor, _reference_embeddings)
-        candidates = await loop.run_in_executor(_executor, _candidate_faces)
         individual_names = await loop.run_in_executor(_executor, _individual_names)
-        rejections = await loop.run_in_executor(_executor, _rejection_embeddings)
-        progress.set_total(len(candidates))
+
+        # One plan per kind: its references, its untagged candidates and its
+        # rejections, all embedded by that kind's own model.
+        plans: dict[str, tuple[dict, list[dict], dict]] = {}
+        for kind in KINDS:
+            try:
+                references = await loop.run_in_executor(_executor, _reference_embeddings, kind)
+                candidates = await loop.run_in_executor(_executor, _candidate_faces, kind)
+                rejections = await loop.run_in_executor(_executor, _rejection_embeddings, kind)
+            except pet_embedding.PetRecognitionNotConfigured as exc:
+                # Pets are optional: a missing pet model costs the pets
+                # this run, never the human matching.
+                logger.warning("Refresh faces: skipping pets: %s", exc)
+                continue
+            plans[kind] = (references, candidates, rejections)
+        progress.set_total(sum(len(candidates) for _, candidates, _ in plans.values()))
     except FaceRecognitionNotConfigured as exc:
         progress.fail(str(exc))
         return
@@ -785,81 +839,108 @@ async def _run_refresh(full: bool = False) -> None:
         progress.fail(str(exc))
         return
 
-    if not references:
-        # total is already set above (e.g. a full refresh may have just
-        # redetected plenty of faces) even though there's nothing yet to
-        # match them against -- matched=0 here is a real, accurate result,
-        # not "returned before doing anything".
-        logger.info("Refresh faces: no individuals have a manually tagged face yet -- nothing to match against")
-        progress.finish(matched=0)
-        return
-
     try:
-        by_photo: dict[str, list[dict]] = {}
-        for face in candidates:
-            by_photo.setdefault(face["photo_id"], []).append(face)
-
-        threshold = get_face_match_threshold()
-        reject_threshold = get_face_reject_threshold()
         total_matched = 0
-        global_best_unmatched: Optional[tuple[float, str, str, str]] = None
-        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+        total_candidates = 0
+        for kind, (references, candidates, rejections) in plans.items():
+            total_candidates += len(candidates)
+            if not references:
+                # total is already set above (e.g. a full refresh may have
+                # just redetected plenty of faces) even though there's
+                # nothing yet to match them against -- matched=0 here is a
+                # real, accurate result, not "returned before doing anything".
+                if kind == "pet":
+                    logger.info("Refresh faces: no pets have a manually tagged box yet -- nothing to match against")
+                else:
+                    logger.info(
+                        "Refresh faces: no individuals have a manually tagged face yet -- nothing to match against"
+                    )
+                continue
 
-        async def handle(photo_id: str, faces: list[dict]) -> None:
-            nonlocal total_matched, global_best_unmatched
-            async with semaphore:
-                if jobs.cancelled():
-                    return
-                matched, best_unmatched = await loop.run_in_executor(
-                    _executor, _process_photo_faces,
-                    photo_id,
-                    faces,
-                    references,
-                    threshold,
-                    individual_names,
-                    rejections,
-                    reject_threshold,
-                )
+            matched = await _match_kind(loop, kind, references, candidates, rejections, individual_names)
             total_matched += matched
-            is_new_best = global_best_unmatched is None or (
-                best_unmatched is not None and best_unmatched[0] > global_best_unmatched[0]
-            )
-            if best_unmatched is not None and is_new_best:
-                global_best_unmatched = best_unmatched
-            progress.record(len(faces))
-
-        await asyncio.gather(*(handle(photo_id, faces) for photo_id, faces in by_photo.items()))
-
-        if jobs.cancelled():
-            logger.info("Refresh faces cancelled: %d matched before stopping", total_matched)
-            progress.cancel()
-            return
+            if jobs.cancelled():
+                logger.info("Refresh faces cancelled: %d matched before stopping", total_matched)
+                progress.cancel()
+                return
 
         progress.finish(total_matched)
-        logger.info("Refresh faces completed: %d matched of %d candidate face(s)", total_matched, len(candidates))
-        # The single most actionable diagnostic when a run matches
-        # nothing: whether the closest candidate was "close but just under
-        # threshold" (tune LUMINARY_FACE_MATCH_THRESHOLD down) or nowhere
-        # close (a real non-match, or something else is wrong) -- logged
-        # at INFO, same level as the completion line above, so it's visible
-        # without needing to flip LUMINARY_LOG_LEVEL to DEBUG for the
-        # per-face scores logged inside _process_photo_faces. Names the
-        # photo filename and individual *name*, not just UUIDs -- an
-        # operator debugging "why didn't this match" needs to actually go
-        # look at the photo and the person, not resolve two ids by hand
-        # first.
-        if total_matched == 0 and global_best_unmatched is not None:
-            score, person_id, face_id, photo_filename = global_best_unmatched
-            individual_name = individual_names.get(person_id, person_id)
-            logger.info(
-                "Refresh faces: closest unmatched candidate (face %s in %s) scored %.4f against individual "
-                "%s (threshold %.4f) -- if that's really the same person, lower LUMINARY_FACE_MATCH_THRESHOLD",
-                face_id,
-                photo_filename,
-                score,
-                individual_name,
-                threshold,
-            )
+        logger.info("Refresh faces completed: %d matched of %d candidate face(s)", total_matched, total_candidates)
     except Exception as exc:
         logger.exception("Refresh faces failed")
         progress.fail(str(exc))
+
+
+async def _match_kind(
+    loop: asyncio.AbstractEventLoop,
+    kind: str,
+    references: dict[str, list[float]],
+    candidates: list[dict],
+    rejections: dict[str, list[dict]],
+    individual_names: dict[str, str],
+) -> int:
+    """One kind's matching pass: every untagged candidate of that `kind`
+    against that kind's references, in per-photo batches on the executor.
+    Returns how many got auto-tagged. A photo with both a person and a pet
+    candidate is read once per pass -- accepted, to keep the two models and
+    thresholds from ever meeting in one code path."""
+    by_photo: dict[str, list[dict]] = {}
+    for face in candidates:
+        by_photo.setdefault(face["photo_id"], []).append(face)
+
+    threshold = _match_threshold(kind)
+    reject_threshold = _reject_threshold(kind)
+    total_matched = 0
+    global_best_unmatched: Optional[tuple[float, str, str, str]] = None
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+
+    async def handle(photo_id: str, faces: list[dict]) -> None:
+        nonlocal total_matched, global_best_unmatched
+        async with semaphore:
+            if jobs.cancelled():
+                return
+            matched, best_unmatched = await loop.run_in_executor(
+                _executor,
+                _process_photo_faces,
+                photo_id,
+                faces,
+                references,
+                threshold,
+                individual_names,
+                rejections,
+                reject_threshold,
+                kind,
+            )
+        total_matched += matched
+        is_new_best = global_best_unmatched is None or (
+            best_unmatched is not None and best_unmatched[0] > global_best_unmatched[0]
+        )
+        if best_unmatched is not None and is_new_best:
+            global_best_unmatched = best_unmatched
+        progress.record(len(faces))
+
+    await asyncio.gather(*(handle(photo_id, faces) for photo_id, faces in by_photo.items()))
+
+    # The single most actionable diagnostic when a run matches nothing:
+    # whether the closest candidate was "close but just under threshold"
+    # (tune the threshold down) or nowhere close (a real non-match, or
+    # something else is wrong) -- logged at INFO, same level as the
+    # completion line, so it's visible without flipping LUMINARY_LOG_LEVEL
+    # to DEBUG for the per-face scores logged inside _process_photo_faces.
+    # Names the photo filename and individual *name*, not just UUIDs -- an
+    # operator debugging "why didn't this match" needs to actually go look
+    # at the photo and the individual, not resolve two ids by hand first.
+    if total_matched == 0 and global_best_unmatched is not None and not jobs.cancelled():
+        score, person_id, face_id, photo_filename = global_best_unmatched
+        individual_name = individual_names.get(person_id, person_id)
+        logger.info(
+            "Refresh faces: closest unmatched candidate (face %s in %s) scored %.4f against individual "
+            "%s (threshold %.4f) -- if that's really the same one, lower %s",
+            face_id,
+            photo_filename,
+            score,
+            individual_name,
+            threshold,
+            _threshold_variable(kind),
+        )
+    return total_matched

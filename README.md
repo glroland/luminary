@@ -436,6 +436,9 @@ tunables:
 | `LUMINARY_PET_DETECTION`           | `1`     | Also detect cats and dogs while indexing (`pet_detection.py`, a COCO Faster R-CNN) so they can be tagged like people. `0` skips the extra model pass entirely; human face detection never depends on it |
 | `LUMINARY_PET_DETECTION_THRESHOLD` | `0.6`   | Minimum detector score for a cat/dog box — lower finds more partly-hidden animals at the cost of false positives; no verified-correct value, tune against your own library |
 | `LUMINARY_FACE_MIN_SIZE`           | `150`   | Smallest face, in pixels of MTCNN's internally-resized copy of the image (not the original photo's resolution), it will report — lower catches smaller/more distant faces at the cost of more false positives and slower detection; facenet-pytorch's own MTCNN default (`20`) was confirmed too permissive in practice (spurious small-box detections) |
+| `LUMINARY_PET_EMBEDDING_MODEL`     | `facebook/dinov2-small` | Image-embedding model that tells one pet from another (DINOv2 via `transformers`, ~90 MB; must be in the container's model cache) |
+| `LUMINARY_PET_MATCH_THRESHOLD`     | `0.8`   | Cosine similarity at or above which a pet box is auto-tagged as a pet you tagged by hand. A different scale from the face one — DINOv2 scores run high (two unrelated test images already scored 0.79), so it starts strict; a too-loose value writes wrong tags, a too-strict one only matches nothing, and the log names the closest unmatched score to tune from. Not a verified value |
+| `LUMINARY_PET_REJECT_THRESHOLD`    | `0.92`  | Pet counterpart of the face reject threshold below: similarity to a pet box you unmatched at or above which it won't be tagged as that pet again |
 | `LUMINARY_FACE_REJECT_THRESHOLD`   | `0.7`   | Cosine similarity to a face you previously untagged (an auto-match you removed) at or above which "Refresh Faces" won't tag a candidate as that same person again; no verified-correct value, tune against the veto lines in the log |
 
 For local testing, just set them in your shell before running `make
@@ -521,6 +524,13 @@ indexed before this existed aren't re-scanned by sync; the management page's
 **Detect Pets** button (`POST /api/pets/refresh`) backfills them. It only
 adds pet boxes — people and their tags are never touched — and re-running it
 does nothing for photos it has already scanned.
+
+Once you've tagged a pet by hand, the same post-sync matching that handles
+people (and the Manage page's face refresh) auto-tags other boxes of that
+pet, marked "auto" like people, and unmatching one is remembered the same
+way. Pets are matched with their own model (DINOv2) and their own
+thresholds (`LUMINARY_PET_MATCH_THRESHOLD`), never against people. If the
+pet model can't load, pets are skipped and people are still matched.
 
 ### Description enrichment
 

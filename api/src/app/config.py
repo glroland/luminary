@@ -319,6 +319,47 @@ def get_pet_detection_threshold() -> float:
     return float(os.environ.get("LUMINARY_PET_DETECTION_THRESHOLD", "0.6"))
 
 
+# --- Automatic pet recognition (pet_embedding.py, recognition.py) --------
+
+
+def get_pet_embedding_model() -> str:
+    """Hugging Face id of the image-embedding model that tells one
+    individual pet from another (pet_embedding.py). DINOv2 is
+    self-supervised and strong at instance-level retrieval -- which tabby
+    this is, not just that it is a cat -- unlike a face model (human
+    identities only) or CLIP (semantic: "a cat", not "Luna"). The small
+    variant is ~90 MB; a larger DINOv2 id works too but is slower. Must be
+    in the container's Hugging Face cache (api/Containerfile) when
+    LUMINARY_USE_MODEL_CACHE is on."""
+    return os.environ.get("LUMINARY_PET_EMBEDDING_MODEL", "facebook/dinov2-small")
+
+
+def get_pet_match_threshold() -> float:
+    """Pet counterpart of LUMINARY_FACE_MATCH_THRESHOLD: the minimum
+    cosine similarity between a pet box's embedding and an individual's
+    reference embedding for recognition.py to auto-tag it. A *different
+    scale* from the face threshold -- DINOv2 embeddings of two photos of the
+    same animal and of two different animals of one species overlap far
+    more than face embeddings do, so a pet threshold needs to be higher.
+    DINOv2 cosine similarities run high: in a smoke test two clearly
+    different synthetic images already scored 0.79 against each other, so
+    this starts deliberately strict (0.8) -- a threshold that is too loose
+    writes *wrong* tags, one that is too strict only matches nothing, and
+    the log then names the closest unmatched candidate's actual score.
+    Lower it from that number against your own pets; it is not a verified
+    value."""
+    return float(os.environ.get("LUMINARY_PET_MATCH_THRESHOLD", "0.8"))
+
+
+def get_pet_reject_threshold() -> float:
+    """Pet counterpart of LUMINARY_FACE_REJECT_THRESHOLD: cosine similarity
+    to a pet box a user previously unmatched at or above which
+    recognition.py refuses to auto-tag the candidate as that individual
+    again. Higher than the face one for the same reason the match threshold
+    is; same caveat, no verified-correct value."""
+    return float(os.environ.get("LUMINARY_PET_REJECT_THRESHOLD", "0.92"))
+
+
 # --- Automatic face recognition ("Refresh Faces", recognition.py) --------
 
 

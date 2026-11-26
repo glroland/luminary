@@ -52,7 +52,7 @@ from typing import Optional
 from PIL import Image, ImageOps
 
 from . import embeddings, enrich, storage
-from .config import get_face_match_threshold
+from .config import get_face_match_threshold, get_pet_match_threshold
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -232,6 +232,12 @@ def untag_face(face_id: str) -> bool:
     new one. `RETURNING photo_id` gives the photo without a second
     query."""
     with get_connection() as conn:
+        # The match threshold in force when the (wrong) auto-match was made
+        # is the one for the face's own kind -- pets use a different scale.
+        kind_row = conn.execute("SELECT kind FROM faces WHERE id = %s", (face_id,)).fetchone()
+        match_threshold = (
+            get_pet_match_threshold() if kind_row and kind_row["kind"] == "pet" else get_face_match_threshold()
+        )
         # An *auto* tag being removed means recognition.py got it wrong:
         # keep the crop and score as a face_rejections row (recognition.py
         # uses it as a negative example) before the UPDATE below discards
@@ -243,7 +249,7 @@ def untag_face(face_id: str) -> bool:
             "SELECT %s, person_id, photo_id, x1, y1, x2, y2, thumbnail, match_confidence, %s "
             "FROM faces WHERE id = %s AND tag_source = 'auto' AND person_id IS NOT NULL "
             "AND thumbnail IS NOT NULL",
-            (str(uuid.uuid4()), get_face_match_threshold(), face_id),
+            (str(uuid.uuid4()), match_threshold, face_id),
         )
         cursor = conn.execute(
             "UPDATE faces SET person_id = NULL, thumbnail = NULL, tag_source = NULL, match_confidence = NULL "
