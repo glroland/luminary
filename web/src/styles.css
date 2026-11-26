@@ -2370,3 +2370,77 @@ textarea {
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+
+.map-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.map-dialog {
+  width: 96vw;
+  height: 94vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.map-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.map-dialog-hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.map-dialog-spacer {
+  flex: 1;
+}
+
+.map-dialog-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.map-dialog-map {
+  flex: 1;
+  min-height: 0;
+}
+
+.map-bubble {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: rgba(59, 130, 246, 0.55);
+  border: 2px solid #1d4ed8;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+}
+
+.map-bubble:hover {
+  background: rgba(59, 130, 246, 0.75);
+}
+
+.map-bubble-selected {
+  background: rgba(245, 158, 11, 0.75);
+  border-color: #b45309;
+}

@@ -3,6 +3,7 @@ import { individualThumbnailUrl } from "../api/client.js";
 import DateTree from "./DateTree.jsx";
 import DirectoryTree from "./DirectoryTree.jsx";
 import LocationTree from "./LocationTree.jsx";
+import LocationMapDialog from "./LocationMapDialog.jsx";
 import { LOCATION_UNKNOWN, buildLocationTree } from "../locations.js";
 
 // Builds a nested {children: {name: node}} tree of every directory that
@@ -166,6 +167,7 @@ export default function Sidebar({
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const locationTree = useMemo(() => buildLocationTree(photos), [photos]);
   const [locationsExpanded, setLocationsExpanded] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const [datesExpanded, setDatesExpanded] = useState(false);
   const noFilter =
     selectedDirectory === null &&
@@ -304,6 +306,12 @@ export default function Sidebar({
           expanded={locationsExpanded}
           onToggle={() => setLocationsExpanded((prev) => !prev)}
         >
+          <div className="directory-tree-item">
+            <span className="directory-tree-toggle-spacer" aria-hidden="true" />
+            <button type="button" className="directory-tree-label" onClick={() => setMapOpen(true)}>
+              {selectedLocation instanceof Set ? `Map selection (${selectedLocation.size})` : "Choose on map…"}
+            </button>
+          </div>
           <LocationTree node={locationTree} selectedLocation={selectedLocation} onSelectLocation={onSelectLocation} />
           {/* Always last: photos with no location_name. */}
           <ul className="directory-tree">
@@ -320,6 +328,18 @@ export default function Sidebar({
             </li>
           </ul>
         </Section>
+
+        {mapOpen && (
+          <LocationMapDialog
+            photos={photos}
+            initialSelection={selectedLocation instanceof Set ? selectedLocation : null}
+            onClose={() => setMapOpen(false)}
+            onApply={(ids) => {
+              setMapOpen(false);
+              onSelectLocation(ids);
+            }}
+          />
+        )}
 
         <Section title="By Date" icon="calendar" expanded={datesExpanded} onToggle={() => setDatesExpanded((prev) => !prev)}>
           <DateTree node={dateTree} path={null} selectedDate={selectedDate} onSelectDate={onSelectDate} />

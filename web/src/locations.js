@@ -24,6 +24,7 @@ export function locationKeyOf(photo) {
 }
 
 export function matchesLocation(photo, selected) {
+  if (selected instanceof Set) return selected.has(photo.id);
   const key = locationKeyOf(photo);
   if (selected === LOCATION_UNKNOWN) return key === null;
   return key !== null && (key === selected || key.startsWith(selected + LOCATION_SEPARATOR));
@@ -46,4 +47,48 @@ export function buildLocationTree(photos) {
     }
   }
   return root;
+}
+
+// --- Map picker -----------------------------------------------------------
+
+// A selection made on the map is a Set of photo ids (a string key is a
+// tree selection); matchesLocation accepts either.
+export function hasCoordinates(photo) {
+  return photo.latitude != null && photo.longitude != null;
+}
+
+// Groups located photos into bubbles. `project(lat, lng)` returns pixel
+// coordinates at the map's current zoom, so photos closer than `cellSize`
+// pixels merge into one bubble and split apart again as the user zooms in.
+export function clusterPhotos(photos, project, cellSize = 60) {
+  const cells = new Map();
+  for (const photo of photos) {
+    if (!hasCoordinates(photo)) continue;
+    const { x, y } = project(photo.latitude, photo.longitude);
+    const key = `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
+    let cell = cells.get(key);
+    if (!cell) {
+      cell = { key, ids: [], latSum: 0, lngSum: 0 };
+      cells.set(key, cell);
+    }
+    cell.ids.push(photo.id);
+    cell.latSum += photo.latitude;
+    cell.lngSum += photo.longitude;
+  }
+  return [...cells.values()].map((cell) => ({
+    key: cell.key,
+    ids: cell.ids,
+    count: cell.ids.length,
+    latitude: cell.latSum / cell.ids.length,
+    longitude: cell.lngSum / cell.ids.length,
+  }));
+}
+
+// Bubble diameter in px: area grows with the photo count, so a busy
+// location is visibly larger than a quiet one.
+export function bubbleSize(count, maxCount) {
+  const MIN = 26;
+  const MAX = 96;
+  if (maxCount <= 1) return MIN;
+  return Math.round(MIN + (MAX - MIN) * Math.sqrt((count - 1) / (maxCount - 1)));
 }

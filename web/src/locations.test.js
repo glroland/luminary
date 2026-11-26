@@ -28,3 +28,30 @@ describe("locations", () => {
     expect(matchesLocation({}, LOCATION_UNKNOWN)).toBe(true);
   });
 });
+
+import { bubbleSize, clusterPhotos, matchesLocation as matches } from "./locations.js";
+
+describe("map picker helpers", () => {
+  const project = (lat, lng) => ({ x: lng * 10, y: lat * 10 });
+  const photos = [
+    { id: 1, latitude: 1, longitude: 1 },
+    { id: 2, latitude: 1.1, longitude: 1.1 },
+    { id: 3, latitude: 50, longitude: 50 },
+    { id: 4, latitude: null, longitude: null },
+  ];
+
+  it("clusters nearby photos and skips unlocated ones", () => {
+    const clusters = clusterPhotos(photos, project);
+    expect(clusters.map((c) => c.count).sort()).toEqual([1, 2]);
+  });
+
+  it("makes busier bubbles larger", () => {
+    expect(bubbleSize(100, 100)).toBeGreaterThan(bubbleSize(5, 100));
+    expect(bubbleSize(1, 1)).toBe(bubbleSize(1, 50));
+  });
+
+  it("matches a map selection by id", () => {
+    expect(matches({ id: 2 }, new Set([2]))).toBe(true);
+    expect(matches({ id: 3 }, new Set([2]))).toBe(false);
+  });
+});
