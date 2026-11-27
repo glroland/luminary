@@ -50,7 +50,7 @@ def test_small_heic_is_reencoded_for_chat():
 def test_thumbnail_etag_revalidation(client, tmp_path):
     from conftest import sync_and_wait, write_image
 
-    write_image(tmp_path / "a.jpg")
+    write_image(tmp_path / "photos" / "a.jpg")
     sync_and_wait(client)
     photo = client.get("/api/photos").json()["photos"][0]
     url = f"/api/photos/{photo['id']}/thumbnail"
