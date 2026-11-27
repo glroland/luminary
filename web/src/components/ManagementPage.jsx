@@ -7,6 +7,7 @@ import {
   deleteRejection,
   deleteTag,
   downloadDuplicatesCsv,
+  downloadFinishedDuplicatesCsv,
   downloadTagCsv,
   faceThumbnailUrl,
   fetchIndividualFaces,
@@ -20,6 +21,7 @@ import {
   refreshFaces,
   refreshLocations,
   refreshTrips,
+  refreshDuplicates,
   refreshPets,
   rejectionThumbnailUrl,
   untagFace,
@@ -101,13 +103,13 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   const previousActiveRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
 
-  // "Identify Duplicates" -- a synchronous CSV download (storage.
-  // find_duplicate_photos via GET /api/photos/duplicates/csv), not a
-  // background job like the three refreshes above, so there's no status
-  // to poll: just an in-flight flag (to disable the button/show progress
-  // text while the request is out) and an error slot.
+  // "Identify Duplicates": "exact" is a quick synchronous CSV download
+  // (GET /api/photos/duplicates/csv) -- an in-flight flag and an error slot.
+  // "similar"/"all" are too slow for one request, so they are a background
+  // job (duplicates.py) driven by the shared `jobs` snapshot like the
+  // refreshes above; the finished CSV is then downloaded separately.
   const [duplicatesLoading, setDuplicatesLoading] = useState(false);
-  const [duplicatesMode, setDuplicatesMode] = useState("all");
+  const [duplicatesMode, setDuplicatesMode] = useState("exact");
   const [duplicatesError, setDuplicatesError] = useState(null);
 
   // Tag catalog (tags.py/routers/tags.py) -- a separate full-CRUD list
@@ -245,11 +247,21 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   }
 
   function handleIdentifyDuplicates() {
+    setDuplicatesError(null);
+    if (duplicatesMode !== "exact") {
+      startJob(() => refreshDuplicates(duplicatesMode));
+      return;
+    }
     setDuplicatesLoading(true);
     setDuplicatesError(null);
-    downloadDuplicatesCsv(duplicatesMode)
+    downloadDuplicatesCsv("exact")
       .catch((err) => setDuplicatesError(err.message))
       .finally(() => setDuplicatesLoading(false));
+  }
+
+  function handleDownloadDuplicates() {
+    setDuplicatesError(null);
+    downloadFinishedDuplicatesCsv().catch((err) => setDuplicatesError(err.message));
   }
 
   function handleAdd(event) {
@@ -521,30 +533,40 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
+            <JobControl
+              kind="duplicates"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel={duplicatesLoading ? "Preparing CSV…" : "Identify Duplicates"}
+              running={(_state, pct) => `Comparing photos… ${pct}%`}
+              done={(state) => `Done -- ${state.found} duplicate${state.found === 1 ? "" : "s"} found`}
+              failed={(state) => `Duplicate search failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={duplicatesLoading ? undefined : handleIdentifyDuplicates}
+              onCancel={handleCancel}
+            />
             <select
               aria-label="Duplicate type"
               value={duplicatesMode}
               onChange={(event) => setDuplicatesMode(event.target.value)}
-              disabled={duplicatesLoading}
+              disabled={duplicatesLoading || jobs?.active === "duplicates"}
             >
-              <option value="all">All duplicates</option>
               <option value="exact">Exact copies only</option>
+              <option value="all">All duplicates</option>
               <option value="similar">Resized / re-encoded only</option>
             </select>
-            <button
-              type="button"
-              className="refresh-button"
-              onClick={handleIdentifyDuplicates}
-              disabled={duplicatesLoading}
-            >
-              {duplicatesLoading ? "Preparing CSV…" : "Identify Duplicates"}
-            </button>
+            {jobs?.duplicates?.status === "completed" && jobs.active !== "duplicates" && (
+              <button type="button" className="refresh-button" onClick={handleDownloadDuplicates}>
+                Download CSV ({jobs.duplicates.found})
+              </button>
+            )}
           </div>
           <p className="management-refresh-description">
             Downloads a CSV of duplicate photos: byte-identical files, plus the same picture
             resized, re-encoded or saved in another format. One row per duplicate file, with the
-            original (the highest-resolution copy) in the first column, then how it matches. Run the
-            sync above first if any photos have not been indexed yet.
+            original (the highest-resolution copy) in the first column, then how it matches. Exact copies
+            download straight away; the other types take a few minutes on a large library, so they run in the
+            background (with Cancel) and the CSV is offered when they finish. Run the sync above first if any
+            photos have not been indexed yet.
           </p>
         </div>
       </div>

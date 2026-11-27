@@ -5,7 +5,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import fsspec
 import psycopg
@@ -754,8 +754,15 @@ def _same_aspect(a: dict, b: dict) -> bool:
     return abs(ratio_a - ratio_b) / ratio_a <= 0.02
 
 
+class DuplicateSearchCancelled(Exception):
+    """`should_stop` returned true part-way through find_similar_photos."""
+
+
 def find_similar_photos(
-    max_distance: Optional[int] = None, min_correlation: Optional[float] = None
+    max_distance: Optional[int] = None,
+    min_correlation: Optional[float] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> list[dict]:
     """Duplicates that are not necessarily byte-identical: the same picture
     resized, re-encoded or saved in another format (docs/duplicate-
@@ -771,7 +778,12 @@ def find_similar_photos(
     reported as exact duplicates via their checksum.
 
     Returns dicts with original/duplicate filenames, `match_type`
-    (exact/reformat/resize/reencode), `distance` and both pixel sizes."""
+    (exact/reformat/resize/reencode), `distance` and both pixel sizes.
+
+    The two optional callbacks are for duplicates.py's background job:
+    `on_progress(processed, total)` is called as the final (slow) walk
+    advances, and a true `should_stop()` aborts it with
+    DuplicateSearchCancelled."""
     if max_distance is None:
         max_distance = config.get_duplicate_max_distance()
     if min_correlation is None:
@@ -812,6 +824,10 @@ def find_similar_photos(
     claimed: set[int] = set()
     results: list[dict] = []
     for i, row in enumerate(rows):
+        if should_stop is not None and should_stop():
+            raise DuplicateSearchCancelled()
+        if on_progress is not None:
+            on_progress(i, len(rows))
         if i in claimed or i not in neighbours:
             continue
         matches = [(j, d) for j, d in sorted(neighbours[i].items()) if j not in claimed]
@@ -851,13 +867,17 @@ def find_similar_photos(
     return results
 
 
-def find_duplicate_pairs(mode: str = "exact") -> list[dict]:
+def find_duplicate_pairs(
+    mode: str = "exact",
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
+) -> list[dict]:
     """`exact`: byte-identical only (find_duplicate_photos, the original
     behaviour). `similar`: only resized/re-encoded/reformatted matches.
     `all`: both."""
     if mode == "exact":
         return find_duplicate_photos()
-    pairs = find_similar_photos()
+    pairs = find_similar_photos(on_progress=on_progress, should_stop=should_stop)
     return pairs if mode == "all" else [p for p in pairs if p["match_type"] != "exact"]
 
 

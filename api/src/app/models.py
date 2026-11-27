@@ -274,6 +274,16 @@ class PetRefreshStatus(BaseModel):
     error: Optional[str] = None
 
 
+class DuplicateRefreshStatus(BaseModel):
+    # See duplicates.py's _DuplicateProgress.
+    status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
+    processed: int = 0  # photos walked so far (0 while hashes are still being compared)
+    total: int = 0
+    found: int = 0  # duplicate files in the finished result
+    mode: Optional[str] = None  # "similar" | "all" -- what the run (and its result) is for
+    error: Optional[str] = None
+
+
 class TripRefreshStatus(BaseModel):
     # See trips.py's _TripProgress.
     status: str  # "idle" | "running" | "completed" | "error" | "cancelled"
@@ -410,7 +420,7 @@ class TripLocations(BaseModel):
 class JobsStatus(BaseModel):
     """Every background job in one response -- see jobs.py. `active` is the
     one job holding the single claim ("sync" | "faces" | "descriptions" |
-    "locations" | "pets" | "trips"), or null when idle; `cancelling` is true once a cancel
+    "locations" | "pets" | "trips" | "duplicates"), or null when idle; `cancelling` is true once a cancel
     was requested and the job hasn't stopped yet."""
 
     active: Optional[str] = None
@@ -421,3 +431,4 @@ class JobsStatus(BaseModel):
     locations: LocationRefreshStatus
     pets: PetRefreshStatus
     trips: TripRefreshStatus
+    duplicates: DuplicateRefreshStatus

@@ -444,9 +444,20 @@ cached) is also per-pod, in-memory state — same caveat.
   change calls `rebuild_after_home_change()`, which returns false (surfaced as
   `rebuild_started`) when another job holds the slot.
 
-- `jobs.py` is the **single job slot** shared by the six long-running
+- `duplicates.py` (`routers/duplicates.py`) is the background job behind the
+  Manage page's "Identify Duplicates" for the *similar* and *all* types: the
+  hash comparison plus thumbnail verification (`storage.find_similar_photos`)
+  takes minutes on a big library and used to time out as one HTTP request.
+  `POST /api/duplicates/refresh?mode=similar|all` starts it (job slot, cancel,
+  progress via `GET /api/jobs` — `processed` stays 0 until the hash-comparison
+  phase ends), and the finished rows are held **in memory** (latest run only,
+  lost on restart → `GET /api/duplicates/csv` is then `404`). *Exact* copies
+  stay a synchronous `GET /api/photos/duplicates/csv?mode=exact` — a single
+  indexed `GROUP BY`, fast enough. Read-only, Postgres only.
+
+- `jobs.py` is the **single job slot** shared by the seven long-running
   background jobs (`sync.py`, `recognition.py`, `enrich.py`, `geocode.py`,
-  `pets.py`, `trips.py`).
+  `pets.py`, `trips.py`, `duplicates.py`).
   Each `start_*()` calls `jobs.try_claim(kind)` first, which raises
   `jobs.JobBusy` (→ `409` via `main.py`) if *any* job holds the slot, then
   runs through `jobs.run_in_thread`. Cancellation is cooperative:
@@ -463,7 +474,7 @@ cached) is also per-pod, in-memory state — same caveat.
   (Refresh Descriptions fixes those). `sync._trigger_face_refresh` runs
   after the sync's own `finish()` released the slot, and tolerates `JobBusy`.
   `GET /api/jobs` (`routers/jobs.py`) returns `{active, cancelling}` plus
-  all six progress snapshots — the one thing the web UI polls. New
+  all seven progress snapshots — the one thing the web UI polls. New
   background jobs must claim the slot the same way; `conftest.py` calls
   `jobs.reset()`.
 

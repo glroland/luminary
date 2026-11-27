@@ -11,7 +11,7 @@ from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
 from . import trips as trips_module
-from .routers import about, backend, descriptions, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
+from .routers import about, backend, descriptions, duplicates, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
 
 configure_logging()
 
@@ -86,6 +86,7 @@ app.include_router(rejections.router, prefix="/api")
 app.include_router(descriptions.router, prefix="/api")
 app.include_router(locations.router, prefix="/api")
 app.include_router(pets.router, prefix="/api")
+app.include_router(duplicates.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
 app.include_router(trips.router, prefix="/api")
 app.include_router(homes.router, prefix="/api")

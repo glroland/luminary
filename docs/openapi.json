@@ -277,6 +277,56 @@
         "title": "DescriptionRefreshStatus",
         "type": "object"
       },
+      "DuplicateRefreshStatus": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "found": {
+            "default": 0,
+            "title": "Found",
+            "type": "integer"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "processed": {
+            "default": 0,
+            "title": "Processed",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "DuplicateRefreshStatus",
+        "type": "object"
+      },
       "FaceBox": {
         "properties": {
           "detection_confidence": {
@@ -773,7 +823,7 @@
         "type": "object"
       },
       "JobsStatus": {
-        "description": "Every background job in one response -- see jobs.py. `active` is the\none job holding the single claim (\"sync\" | \"faces\" | \"descriptions\" |\n\"locations\" | \"pets\" | \"trips\"), or null when idle; `cancelling` is true once a cancel\nwas requested and the job hasn't stopped yet.",
+        "description": "Every background job in one response -- see jobs.py. `active` is the\none job holding the single claim (\"sync\" | \"faces\" | \"descriptions\" |\n\"locations\" | \"pets\" | \"trips\" | \"duplicates\"), or null when idle; `cancelling` is true once a cancel\nwas requested and the job hasn't stopped yet.",
         "properties": {
           "active": {
             "anyOf": [
@@ -793,6 +843,9 @@
           },
           "descriptions": {
             "$ref": "#/components/schemas/DescriptionRefreshStatus"
+          },
+          "duplicates": {
+            "$ref": "#/components/schemas/DuplicateRefreshStatus"
           },
           "faces": {
             "$ref": "#/components/schemas/FaceRefreshStatus"
@@ -816,7 +869,8 @@
           "descriptions",
           "locations",
           "pets",
-          "trips"
+          "trips",
+          "duplicates"
         ],
         "title": "JobsStatus",
         "type": "object"
@@ -2093,6 +2147,82 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DescriptionRefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Refresh Status"
+      }
+    },
+    "/api/duplicates/csv": {
+      "get": {
+        "description": "The CSV from the latest completed search (same columns as\nGET /api/photos/duplicates/csv for `similar`/`all`). 404 when no run has\ncompleted since the API started.",
+        "operationId": "get_duplicates_csv_api_duplicates_csv_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Duplicates Csv"
+      }
+    },
+    "/api/duplicates/refresh": {
+      "post": {
+        "operationId": "refresh_duplicates_api_duplicates_refresh_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "pattern": "^(similar|all)$",
+              "title": "Mode",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateRefreshStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Duplicates"
+      }
+    },
+    "/api/duplicates/refresh/status": {
+      "get": {
+        "operationId": "get_refresh_status_api_duplicates_refresh_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateRefreshStatus"
                 }
               }
             },

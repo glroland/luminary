@@ -401,6 +401,18 @@ export async function downloadDuplicatesCsv(mode = "all") {
   await downloadCsv(`/photos/duplicates/csv?mode=${encodeURIComponent(mode)}`, "duplicate_photos.csv");
 }
 
+// "similar"/"all" duplicate searches are a background job (too slow for one
+// request on a big library): start it, watch `jobs.duplicates` from
+// fetchJobs(), then download the finished CSV. "exact" stays the quick
+// downloadDuplicatesCsv above.
+export async function refreshDuplicates(mode = "all") {
+  return request(`/duplicates/refresh?mode=${encodeURIComponent(mode)}`, { method: "POST" });
+}
+
+export async function downloadFinishedDuplicatesCsv() {
+  await downloadCsv("/duplicates/csv", "duplicate_photos.csv");
+}
+
 // The per-tag "List" button on the management page: every path+filename
 // with this tag attached. The download is named after the tag (reduced to
 // filename-safe characters) so several tags' lists don't all land as the
@@ -426,7 +438,7 @@ export function originalUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/original`;
 }
 
-// Every background job (sync, face matching, descriptions, locations, pets, trips) in one
+// Every background job (sync, face matching, descriptions, locations, pets, trips, duplicates) in one
 // response -- `active` names the one that holds the server's single job
 // slot, `cancelling` is true between a cancel request and the job actually
 // stopping. All browsers see the same thing, not just the one that started

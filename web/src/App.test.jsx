@@ -14,6 +14,7 @@ const IDLE_JOBS = {
   locations: { ...idleState, updated: 0 },
   pets: { ...idleState, found: 0 },
   trips: { ...idleState, created: 0, updated: 0, removed: 0, homes: 0 },
+  duplicates: { ...idleState, found: 0, mode: null },
 };
 
 describe("App", () => {

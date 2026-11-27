@@ -2,8 +2,8 @@
 
 The six long-running jobs -- photo sync (`sync.py`), face matching
 (`recognition.py`), description refresh (`enrich.py`), location refresh
-(`geocode.py`), the pets backfill (`pets.py`) and the trips rebuild
-(`trips.py`) -- each keep their own progress object, but they all
+(`geocode.py`), the pets backfill (`pets.py`) the trips rebuild
+(`trips.py`) and the duplicate search (`duplicates.py`) -- each keep their own progress object, but they all
 contend for the single claim held here. A second `POST` while any of them
 is running raises `JobBusy` (mapped to `409` in `main.py`), whichever
 browser sent it. `GET /api/jobs` (`routers/jobs.py`) reports which job holds
@@ -35,6 +35,7 @@ DESCRIPTIONS = "descriptions"
 LOCATIONS = "locations"
 PETS = "pets"
 TRIPS = "trips"
+DUPLICATES = "duplicates"
 
 
 class JobBusy(Exception):

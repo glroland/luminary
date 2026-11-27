@@ -235,6 +235,7 @@ describe("ManagementPage", () => {
       locations: idle({ updated: 0 }),
       pets: idle({ found: 0 }),
       trips: idle({ created: 0, updated: 0, removed: 0, homes: 0 }),
+      duplicates: idle({ found: 0, mode: null }),
       ...overrides,
     });
     const running = (extra = {}) => ({ status: "running", processed: 4, total: 10, error: null, ...extra });
@@ -300,6 +301,35 @@ describe("ManagementPage", () => {
       );
       expect(screen.getByText("Looking for pets… 40%")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Scan for Pets" })).not.toBeInTheDocument();
+    });
+
+    it("runs similar/all duplicate searches as a background job, then offers the finished CSV", async () => {
+      const startMock = vi.spyOn(client, "refreshDuplicates").mockResolvedValue({});
+      const exactMock = vi.spyOn(client, "downloadDuplicatesCsv").mockResolvedValue();
+      const finishedMock = vi.spyOn(client, "downloadFinishedDuplicatesCsv").mockResolvedValue();
+      const { rerender } = renderPage(snapshot());
+      await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
+
+      fireEvent.change(screen.getByLabelText("Duplicate type"), { target: { value: "similar" } });
+      fireEvent.click(screen.getByRole("button", { name: "Identify Duplicates" }));
+      expect(startMock).toHaveBeenCalledWith("similar");
+      expect(exactMock).not.toHaveBeenCalled();
+
+      const rerenderWith = (jobs) =>
+        rerender(<ManagementPage jobs={jobs} onBack={() => {}} onNavigateToPhoto={() => {}} />);
+      rerenderWith(snapshot({ active: "duplicates", duplicates: running({ found: 0, mode: "similar" }) }));
+      expect(screen.getByText("Comparing photos… 40%")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+      expect(screen.getByLabelText("Duplicate type")).toBeDisabled();
+      expect(screen.queryByRole("button", { name: /download csv/i })).not.toBeInTheDocument();
+
+      rerenderWith(
+        snapshot({
+          duplicates: { status: "completed", processed: 10, total: 10, found: 3, mode: "similar", error: null },
+        })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Download CSV (3)" }));
+      expect(finishedMock).toHaveBeenCalled();
     });
 
     it("shows 'Cancelling' (disabled) until the system is ready, then flips back to the start button", async () => {
@@ -536,23 +566,25 @@ describe("ManagementPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /identify duplicates/i }));
 
-    expect(downloadMock).toHaveBeenCalledWith("all");
+    expect(downloadMock).toHaveBeenCalledWith("exact");
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /identify duplicates/i })).not.toBeDisabled()
     );
   });
 
-  it("passes the chosen duplicate type to the download", async () => {
+  it("starts the background search, not a download, for the 'all' type", async () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
     const downloadMock = vi.spyOn(client, "downloadDuplicatesCsv").mockResolvedValue();
+    const startMock = vi.spyOn(client, "refreshDuplicates").mockResolvedValue({});
 
     render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
     await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText("Duplicate type"), { target: { value: "exact" } });
+    fireEvent.change(screen.getByLabelText("Duplicate type"), { target: { value: "all" } });
     fireEvent.click(screen.getByRole("button", { name: /identify duplicates/i }));
 
-    expect(downloadMock).toHaveBeenCalledWith("exact");
+    expect(startMock).toHaveBeenCalledWith("all");
+    expect(downloadMock).not.toHaveBeenCalled();
   });
 
   it("shows an error if the duplicates CSV download fails", async () => {

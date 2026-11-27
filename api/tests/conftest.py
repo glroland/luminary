@@ -36,6 +36,7 @@ def client(tmp_path, monkeypatch):
 
     from app.enrich import progress as description_progress
     from app.geocode import progress as location_progress
+    from app.duplicates import progress as duplicate_progress
     from app.pets import progress as pet_progress
     from app.main import app
     from app.recognition import progress as refresh_progress
@@ -105,6 +106,7 @@ def client(tmp_path, monkeypatch):
     description_progress.reset()
     location_progress.reset()
     pet_progress.reset()
+    duplicate_progress.reset()
     trip_progress.reset()
 
     with TestClient(app) as test_client:
