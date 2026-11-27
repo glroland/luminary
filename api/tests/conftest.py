@@ -10,6 +10,19 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _fresh_backend_connection(monkeypatch):
+    """Every test starts with no cached photos-backend connection, and
+    never does real DNS/TCP probing for an smb:// URI (backend_connection.py)."""
+    from app import backend_connection
+
+    backend_connection.reset()
+    monkeypatch.setattr(backend_connection, "_probe_host", lambda host, port: None)
+    yield
+    backend_connection.stop()
+    backend_connection.reset()
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("LUMINARY_PHOTOS_URI", str(tmp_path / "photos"))
@@ -80,6 +93,9 @@ def client(tmp_path, monkeypatch):
     from app import main as main_module
 
     monkeypatch.setattr(main_module, "start_backfill", lambda: None)
+    # No background connect/keepalive thread per test; tests drive
+    # backend_connection directly (test_backend_connection.py).
+    monkeypatch.setattr(main_module.backend_connection, "start", lambda: None)
 
     from app import jobs as jobs_module
 

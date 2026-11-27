@@ -65,6 +65,56 @@
         "title": "AboutResponse",
         "type": "object"
       },
+      "BackendStatus": {
+        "properties": {
+          "elapsed_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed Seconds"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "steps",
+          "error",
+          "elapsed_seconds"
+        ],
+        "title": "BackendStatus",
+        "type": "object"
+      },
       "ChatMessage": {
         "properties": {
           "role": {
@@ -116,6 +166,41 @@
           "message"
         ],
         "title": "ChatRequest",
+        "type": "object"
+      },
+      "ConnectionStep": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "status",
+          "seconds"
+        ],
+        "title": "ConnectionStep",
         "type": "object"
       },
       "CreateIndividualRequest": {
@@ -1923,6 +2008,25 @@
           }
         },
         "summary": "About"
+      }
+    },
+    "/api/backend/status": {
+      "get": {
+        "description": "Where the connection to the photos backend stands. Read-only: it\nreports, it never starts a connection (see backend_connection.py).",
+        "operationId": "get_backend_status_api_backend_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Backend Status"
       }
     },
     "/api/chat": {

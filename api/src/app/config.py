@@ -31,6 +31,16 @@ def get_photos_password() -> Optional[str]:
     return os.environ.get("LUMINARY_PHOTOS_PASSWORD") or None
 
 
+def get_photos_keepalive_seconds() -> float:
+    """How often the SMB session to the photos backend is `stat`ed to keep
+    it from idling out (and to notice it dropped). 0 disables the check; a
+    failed initial connection is still retried."""
+    try:
+        return max(0.0, float(os.environ.get("LUMINARY_PHOTOS_KEEPALIVE_SECONDS", "60")))
+    except ValueError:
+        return 60.0
+
+
 def get_database_host() -> str:
     """Postgres host holding photo metadata + thumbnails. Unlike
     LUMINARY_PHOTOS_URI, this is always Postgres, always remote to this

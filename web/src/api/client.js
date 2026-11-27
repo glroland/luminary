@@ -414,6 +414,14 @@ export function thumbnailUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/thumbnail`;
 }
 
+// Where the API's connection to the photos backend stands: {status
+// ("idle" | "connecting" | "ready" | "error"), message, steps: [{name,
+// label, status, seconds}], error, elapsed_seconds}. Polled by the photo
+// modal while an original is still loading.
+export async function fetchBackendStatus() {
+  return request("/backend/status");
+}
+
 export function originalUrl(photoId) {
   return `${API_BASE}/photos/${photoId}/original`;
 }

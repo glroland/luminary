@@ -9,6 +9,7 @@ vi.mock("./PhotoMap.jsx", () => ({ default: () => <div data-testid="photo-map" /
 const CHAT_BOXES = [{ label: "eye", x1: 100, y1: 200, x2: 300, y2: 400 }];
 vi.mock("../api/client.js", async (importOriginal) => ({
   ...(await importOriginal()),
+  fetchBackendStatus: vi.fn(),
   fetchFaces: vi.fn(),
   fetchIndividuals: vi.fn(),
   createIndividual: vi.fn(),
@@ -57,6 +58,7 @@ describe("PhotoModal", () => {
     // PhotoModal.jsx's "People in this photo" panel), not just when "f"
     // is pressed -- default them for tests that don't care about faces/
     // individuals; tests that do override these themselves.
+    client.fetchBackendStatus.mockResolvedValue({ status: "ready", message: "Connected", steps: [], error: null, elapsed_seconds: null });
     client.fetchFaces.mockResolvedValue([]);
     client.fetchIndividuals.mockResolvedValue([]);
     client.fetchPhotoTags.mockResolvedValue([]);
@@ -768,6 +770,58 @@ describe("PhotoModal", () => {
 
       fireEvent.keyDown(window, { key: "Escape" });
       expect(onClose).toHaveBeenCalled();
+    });
+  });
+
+  describe("photo server connection status", () => {
+    const CONNECTING = {
+      status: "connecting",
+      message: "Signing in…",
+      steps: [
+        { name: "resolve", label: "Looking up the photo server", status: "done", seconds: 0.1 },
+        { name: "authenticate", label: "Signing in", status: "running", seconds: null },
+      ],
+      error: null,
+      elapsed_seconds: 3.2,
+    };
+
+    it("shows nothing when the backend is ready", async () => {
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("shows the connection steps while the original is loading, then hides them", async () => {
+      client.fetchBackendStatus.mockResolvedValue(CONNECTING);
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+
+      const status = await screen.findByRole("status");
+      expect(within(status).getByText("Signing in…")).toBeInTheDocument();
+      expect(within(status).getByText(/Looking up the photo server/)).toBeInTheDocument();
+      expect(within(status).getByText("3s")).toBeInTheDocument();
+
+      fireEvent.load(screen.getByAltText("beach.jpg"));
+      await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    });
+
+    it("shows why the connection failed", async () => {
+      client.fetchBackendStatus.mockResolvedValue({
+        ...CONNECTING,
+        status: "error",
+        message: "Could not reach the photo server",
+        error: "timed out",
+      });
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+
+      expect(await screen.findByText("Could not reach the photo server")).toBeInTheDocument();
+      expect(screen.getByText("timed out")).toBeInTheDocument();
+    });
+
+    it("ignores a status request that fails", async () => {
+      client.fetchBackendStatus.mockRejectedValue(new Error("nope"));
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
   });
 });

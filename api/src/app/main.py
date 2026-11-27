@@ -5,13 +5,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import jobs
+from . import backend_connection, jobs
 from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
 from . import trips as trips_module
-from .routers import about, descriptions, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
+from .routers import about, backend, descriptions, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
 
 configure_logging()
 
@@ -26,10 +26,14 @@ async def lifespan(app: FastAPI):
     # the liveness probe. See database.backfill_data().
     init_db()
     start_backfill()
+    # Connects to the photos backend (and keeps SMB alive) on a background
+    # thread -- see backend_connection.py.
+    backend_connection.start()
     # Connects on a background thread, and only logs if MLflow can't be
     # reached -- tracing never holds up or fails startup. See tracing.py.
     configure_tracing()
     yield
+    backend_connection.stop()
     logger.info("Shutting down Luminary API")
 
 
@@ -72,6 +76,7 @@ async def log_unhandled_exception(request: Request, exc: Exception) -> JSONRespo
 
 app.include_router(health.router, prefix="/api")
 app.include_router(about.router, prefix="/api")
+app.include_router(backend.router, prefix="/api")
 app.include_router(photos.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 app.include_router(jobs_router.router, prefix="/api")

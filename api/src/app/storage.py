@@ -12,9 +12,8 @@ import psycopg
 from PIL import Image, ImageOps
 from PIL.ExifTags import IFD
 
-from . import config, embeddings, perceptual
+from . import backend_connection, config, embeddings, perceptual
 from . import rerank as rerank_module
-from .config import get_photos_password, get_photos_uri, get_photos_username
 from .database import get_connection
 
 logger = logging.getLogger(__name__)
@@ -29,38 +28,32 @@ METADATA_COLUMNS = (
     "location_name, location_country, location_state, location_city, vlm_description, description, checksum"
 )
 
-# Protocols whose fsspec filesystem accepts plain `username`/`password`
-# kwargs. Other backends authenticate differently (S3 via boto3's standard
-# credential chain -- env vars/IAM role -- needs no code here at all; HTTP
-# has no generic equivalent) so credentials are only forwarded for these.
-_USERNAME_PASSWORD_PROTOCOLS = {"smb"}
-
-
 def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
-    """Resolve the configured photos URI to an fsspec filesystem and root
-    path. Read-only: the app never writes to, creates in, or deletes from
-    this backend -- it's treated as someone else's existing photo library
-    (originals live directly under the root; there's no app-managed
-    subdirectory). Photos only enter the Postgres index via sync.py scanning
-    what's already there.
+    """The photos backend's fsspec filesystem and root path. Read-only: the
+    app never writes to, creates in, or deletes from this backend -- it's
+    treated as someone else's existing photo library (originals live
+    directly under the root; there's no app-managed subdirectory). Photos
+    only enter the Postgres index via sync.py scanning what's already there.
 
-    Credentials (LUMINARY_PHOTOS_USERNAME/_PASSWORD) are passed to fsspec
-    as storage_options, not embedded in the URI -- keeps the URI itself
-    safe to log/default in a Makefile/commit."""
-    uri = get_photos_uri()
-    protocol, _ = fsspec.core.split_protocol(uri)
+    The connection itself (credentials passed as storage_options rather
+    than embedded in the URI, one cached instance, keepalive, observable
+    progress) lives in backend_connection.py."""
+    return backend_connection.get_fs_and_root()
 
-    credentials = {}
-    if protocol in _USERNAME_PASSWORD_PROTOCOLS:
-        username = get_photos_username()
-        password = get_photos_password()
-        if username is not None:
-            credentials["username"] = username
-        if password is not None:
-            credentials["password"] = password
 
-    fs, root = fsspec.core.url_to_fs(uri, **credentials)
-    return fs, root.rstrip("/") or "/"
+def _with_reconnect(fn):
+    """Run `fn(fs, root)` against the backend, retrying transient SMB errors
+    and, if the connection itself has died (an idle session the server
+    dropped), reconnecting once and trying again."""
+    fs, root = _fs_and_root()
+    try:
+        return retry_transient(fn, fs, root)
+    except Exception as exc:
+        if not backend_connection.is_connection_error(exc):
+            raise
+        logger.warning("Photos backend connection failed (%s); reconnecting", exc)
+        fs, root = backend_connection.reconnect(fs)
+        return retry_transient(fn, fs, root)
 
 
 # SMB flow control: every in-flight request spends "credits" the server
@@ -564,24 +557,26 @@ def search_photos_by_tag(
 def stream_original(metadata: dict):
     """Return a byte-chunk iterator for the original described by `metadata`
     (as returned by get_photo), or None if the file is missing."""
-    fs, root = _fs_and_root()
-    path = f"{root}/{metadata['filename']}"
-    return _iter_file(fs, path) if fs.exists(path) else None
+
+    def open_stream(fs, root):
+        path = f"{root}/{metadata['filename']}"
+        return _iter_file(fs, path) if fs.exists(path) else None
+
+    return _with_reconnect(open_stream)
 
 
 def read_original_bytes(metadata: dict) -> Optional[bytes]:
     """Return the full original file as bytes (for photo chat, which needs
     the whole image rather than a streamed response), or None if missing."""
-    fs, root = _fs_and_root()
-    path = f"{root}/{metadata['filename']}"
 
-    def read() -> Optional[bytes]:
+    def read(fs, root) -> Optional[bytes]:
+        path = f"{root}/{metadata['filename']}"
         if not fs.exists(path):
             return None
         with fs.open(path, "rb") as f:
             return f.read()
 
-    return retry_transient(read)
+    return _with_reconnect(read)
 
 
 # Formats sync indexes that browsers other than Safari can't render in an

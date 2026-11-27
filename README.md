@@ -131,6 +131,7 @@ Configuration (environment variables):
 | `LUMINARY_PHOTOS_URI`      | `/data/photos`      | The photo library to index (read-only) |
 | `LUMINARY_PHOTOS_USERNAME` | *(none)*            | Backend auth — see below               |
 | `LUMINARY_PHOTOS_PASSWORD` | *(none)*            | Backend auth — see below               |
+| `LUMINARY_PHOTOS_KEEPALIVE_SECONDS` | `60` | SMB only: how often the session is checked/kept alive (`0` = off) |
 | `LUMINARY_DATABASE_HOST`   | `localhost`         | Postgres host — see "Database" below  |
 | `LUMINARY_DATABASE_PORT`   | `5432`              | Postgres port                          |
 | `LUMINARY_DATABASE_NAME`   | `luminary`          | Postgres database name                |

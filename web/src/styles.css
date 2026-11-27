@@ -638,6 +638,105 @@ textarea {
   animation: photo-in 0.25s ease;
 }
 
+/* Shown over the empty image pane only while the API is (re)connecting to
+   the photo server -- see PhotoModal.jsx. Never in a normal open. */
+.photo-modal-backend-status {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  color: var(--text);
+  text-align: center;
+  pointer-events: none;
+}
+
+.photo-modal-backend-status-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.photo-modal-backend-status-elapsed,
+.photo-modal-backend-steps {
+  color: var(--text-muted);
+}
+
+.photo-modal-backend-status-elapsed {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.photo-modal-backend-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.photo-modal-backend-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+}
+
+.photo-modal-backend-step-mark {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  flex: none;
+}
+
+.photo-modal-backend-steps li[data-step-status="running"] .photo-modal-backend-step-mark {
+  border-color: var(--accent);
+  border-top-color: transparent;
+  animation: backend-step-spin 0.8s linear infinite;
+}
+
+.photo-modal-backend-steps li[data-step-status="done"] .photo-modal-backend-step-mark {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.photo-modal-backend-steps li[data-step-status="failed"] {
+  color: var(--danger);
+}
+
+.photo-modal-backend-steps li[data-step-status="failed"] .photo-modal-backend-step-mark {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.photo-modal-backend-status[data-state="error"] .photo-modal-backend-status-title,
+.photo-modal-backend-status-error {
+  color: var(--danger);
+}
+
+.photo-modal-backend-status-error {
+  margin: 0;
+  max-width: 28rem;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+@keyframes backend-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .photo-modal-backend-steps li[data-step-status="running"] .photo-modal-backend-step-mark {
+    animation: none;
+  }
+}
+
 /* Replays per photo (the img is keyed by photo id), so stepping through
    with the arrow keys cross-fades instead of hard-cutting. */
 @keyframes photo-in {

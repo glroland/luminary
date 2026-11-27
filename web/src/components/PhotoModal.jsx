@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   createIndividual,
+  fetchBackendStatus,
   fetchFaces,
   fetchIndividuals,
   fetchPhotoTags,
@@ -196,6 +197,41 @@ export default function PhotoModal({
       return next;
     });
   }
+
+  // The original streams off the photos backend, which may first have to
+  // (re)connect -- the <img> can't report that, so while it hasn't loaded
+  // the backend's connection status is polled and shown over the empty pane.
+  // Nothing is shown once it's ready, so a normal open never sees it.
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [backendStatus, setBackendStatus] = useState(null);
+
+  useEffect(() => {
+    setImageLoaded(false);
+    setBackendStatus(null);
+  }, [photo?.id]);
+
+  useEffect(() => {
+    if (!photo?.id || imageLoaded) return undefined;
+    let cancelled = false;
+    let timer;
+    async function poll() {
+      try {
+        const status = await fetchBackendStatus();
+        if (!cancelled) setBackendStatus(status);
+      } catch {
+        // Status is a nicety; the image itself reports real failures.
+      }
+      if (!cancelled) timer = setTimeout(poll, 1000);
+    }
+    poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [photo?.id, imageLoaded]);
+
+  const showBackendStatus =
+    !imageLoaded && (backendStatus?.status === "connecting" || backendStatus?.status === "error");
 
   function updateImgRect() {
     // No need to worry about hover-zoom's transform here at all -- see
@@ -574,7 +610,11 @@ export default function PhotoModal({
               ref={imgRef}
               src={originalUrl(photo.id)}
               alt={photo.filename}
-              onLoad={updateImgRect}
+              onLoad={() => {
+                setImageLoaded(true);
+                updateImgRect();
+              }}
+              onError={() => setImageLoaded(true)}
               onMouseMove={handleImageMouseMove}
               onMouseLeave={handleImageMouseLeave}
               className={zoomOrigin ? "photo-modal-image-zoomed" : undefined}
@@ -584,6 +624,32 @@ export default function PhotoModal({
                   : undefined
               }
             />
+            {showBackendStatus && (
+              <div
+                className="photo-modal-backend-status"
+                role="status"
+                data-state={backendStatus.status}
+              >
+                <p className="photo-modal-backend-status-title">{backendStatus.message}</p>
+                {backendStatus.status === "connecting" && backendStatus.elapsed_seconds != null && (
+                  <p className="photo-modal-backend-status-elapsed">
+                    {Math.round(backendStatus.elapsed_seconds)}s
+                  </p>
+                )}
+                <ul className="photo-modal-backend-steps">
+                  {backendStatus.steps.map((step) => (
+                    <li key={step.name} data-step-status={step.status}>
+                      <span className="photo-modal-backend-step-mark" aria-hidden="true" />
+                      {step.label}
+                      {step.seconds != null && step.status !== "running" && ` (${step.seconds}s)`}
+                    </li>
+                  ))}
+                </ul>
+                {backendStatus.status === "error" && backendStatus.error && (
+                  <p className="photo-modal-backend-status-error">{backendStatus.error}</p>
+                )}
+              </div>
+            )}
             {canShowBoxes &&
               boxes.map((box, index) => (
                 <div key={index} className="photo-modal-bbox" style={boxStyle(box, photo, imgRect)}>

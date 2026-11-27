@@ -176,6 +176,26 @@ Postgres) lives in `storage.py`/`sync.py`:
   below) — `init_db()`'s `CREATE TABLE IF NOT EXISTS` only covers a
   brand-new database; a schema change needs a manual `ALTER TABLE` added to
   both `init_db()` and `db/create_tables.sql` together.
+- `backend_connection.py` owns the connection to the photos backend;
+  `storage._fs_and_root()` just returns its cached `(fs, root)`. fsspec's SMB
+  filesystem connects inside its constructor (DNS, TCP, auth, with retries),
+  which made the first photo opened after a start or an idle drop stall with
+  a black pane. So: `main.py`'s lifespan calls `backend_connection.start()`,
+  which connects on a **background thread** (never inline: a slow server must
+  not outlast the liveness probe, same lesson as `backfill_data()`) and, for
+  SMB, `stat`s the root every `LUMINARY_PHOTOS_KEEPALIVE_SECONDS` (60; 0 =
+  off) to keep the session from idling out and to rebuild it when it has
+  dropped. One connect at a time (`_connect_lock`); the cache is keyed on
+  URI+credentials so tests that change the env get a fresh connection.
+  `storage._with_reconnect` retries a read once after `reconnect()` when
+  `is_connection_error` (never for a missing file). Each attempt records its
+  steps (resolve, connect, authenticate, verify — the first two are an
+  explicit DNS/TCP probe, SMB only) and timings; `GET /api/backend/status`
+  (`routers/backend.py`) reports them and never starts a connection itself.
+  `PhotoModal.jsx` polls it while the original hasn't loaded and overlays the
+  steps only when status is `connecting`/`error` — nothing in a normal open.
+  `conftest.py` resets the state per test, stubs the probe and doesn't start
+  the thread; `test_backend_connection.py` drives it directly.
 - `database.py` opens a fresh `psycopg` connection per operation (no
   pooling), row factory set to `psycopg.rows.dict_row` so query results
   come back as plain dicts (matching `storage.py`/`sync.py`'s `dict(row)`
