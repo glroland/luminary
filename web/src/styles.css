@@ -2888,3 +2888,12 @@ textarea {
   color: var(--accent-text);
   font-size: 0.9rem;
 }
+
+/* Long-press opens the tag menu on touch devices: keep iOS from showing its
+   own image callout / text selection instead. */
+.photo-card-media,
+.photo-card-media img {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

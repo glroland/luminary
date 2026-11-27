@@ -1,9 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { thumbnailUrl } from "../api/client.js";
 
 // Keep in step with .photo-card-tooltip's width/offset in styles.css.
 const TOOLTIP_WIDTH_PX = 280;
 const TOOLTIP_GAP_PX = 10;
+
+// Touch has no right-click, so a press held this long (without moving) opens
+// the same menu onContextMenu does.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
 
 function formatDate(createdAt) {
   const date = new Date(createdAt);
@@ -33,6 +38,46 @@ export default function PhotoCard({ photo, onSelect, onContextMenu, selected = f
   const [loaded, setLoaded] = useState(false);
   const date = formatDate(photo.created_at);
   const hasScore = typeof photo.search_score === "number";
+  const pressRef = useRef({ timer: null, x: 0, y: 0 });
+
+  useEffect(() => () => clearTimeout(pressRef.current.timer), []);
+
+  function cancelLongPress() {
+    clearTimeout(pressRef.current.timer);
+    pressRef.current.timer = null;
+  }
+
+  function handlePointerDown(event) {
+    if (!onContextMenu || event.pointerType === "mouse") return;
+    cancelLongPress();
+    const { clientX, clientY } = event;
+    pressRef.current.x = clientX;
+    pressRef.current.y = clientY;
+    pressRef.current.timer = setTimeout(() => {
+      pressRef.current.timer = null;
+      // Releasing a long press can still produce a click; swallow it so it
+      // neither opens the photo nor immediately closes the menu.
+      const swallow = (clickEvent) => {
+        clickEvent.stopPropagation();
+        clickEvent.preventDefault();
+        cleanup();
+      };
+      const cleanup = () => {
+        clearTimeout(expiry);
+        window.removeEventListener("click", swallow, true);
+      };
+      const expiry = setTimeout(cleanup, 600);
+      window.addEventListener("click", swallow, true);
+      onContextMenu({ preventDefault() {}, clientX, clientY });
+    }, LONG_PRESS_MS);
+  }
+
+  function handlePointerMove(event) {
+    if (!pressRef.current.timer) return;
+    if (Math.hypot(event.clientX - pressRef.current.x, event.clientY - pressRef.current.y) > LONG_PRESS_SLOP_PX) {
+      cancelLongPress();
+    }
+  }
 
   function handleClick(event) {
     // The tile's centre, in viewport px: where PhotoModal's open animation
@@ -60,6 +105,11 @@ export default function PhotoCard({ photo, onSelect, onContextMenu, selected = f
       data-photo-id={photo.id}
       aria-selected={selected}
       onContextMenu={onContextMenu}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={cancelLongPress}
+      onPointerCancel={cancelLongPress}
+      onPointerLeave={cancelLongPress}
       onMouseEnter={handleMouseEnter}
     >
       <div className="photo-card-media" onClick={handleClick}>
