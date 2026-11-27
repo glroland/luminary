@@ -199,10 +199,10 @@ def refresh_locations_and_wait(client, timeout=30.0):
     raise AssertionError(f"location refresh did not finish in time: {status}")
 
 
-def refresh_pets_and_wait(client, timeout=30.0):
+def refresh_pets_and_wait(client, timeout=30.0, rescan=False):
     """Same polling pattern as sync_and_wait, for pets.py's "Detect Pets"
     backfill job (POST /api/pets/refresh). Waits for any terminal status."""
-    client.post("/api/pets/refresh")
+    client.post("/api/pets/refresh", params={"rescan": "true"} if rescan else None)
     deadline = time.monotonic() + timeout
     status = {}
     while time.monotonic() < deadline:

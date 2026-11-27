@@ -2800,6 +2800,18 @@
     "/api/pets/refresh": {
       "post": {
         "operationId": "refresh_pets_api_pets_refresh_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "rescan",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Rescan",
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2810,6 +2822,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "Refresh Pets"

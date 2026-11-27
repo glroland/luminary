@@ -221,7 +221,11 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   }
 
   function handleRefreshPets() {
-    startJob(refreshPets);
+    startJob(() => refreshPets(false));
+  }
+
+  function handleRescanPets() {
+    startJob(() => refreshPets(true));
   }
 
   // Re-detects every photo's faces against the current detection settings
@@ -529,6 +533,27 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
           <p className="management-refresh-description">
             Finds cats and dogs in photos indexed before pet detection existed, so they can be tagged.
             Safe to run any time: it only adds pet boxes and never touches people or their tags.
+          </p>
+        </div>
+
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">
+            <JobControl
+              kind="pets"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Rescan All Photos for Pets"
+              running={(_state, pct) => `Rescanning for pets… ${pct}%`}
+              done={(state) => `Done -- ${state.found} found`}
+              failed={(state) => `Pet rescan failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleRescanPets}
+              onCancel={handleCancel}
+            />
+          </div>
+          <p className="management-refresh-description">
+            Looks for pets in every photo again, including ones already scanned. Use it if Detect Pets
+            found nothing. People and their tags are untouched, but existing pet boxes are replaced,
+            so pet tags are lost.
           </p>
         </div>
 

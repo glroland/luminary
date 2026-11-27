@@ -362,6 +362,16 @@ def test_backfill_is_idempotent_and_skips_already_scanned_photos(client, tmp_pat
     assert len(pets_ready) == 2  # the detector never ran again
 
 
+def test_rescan_visits_photos_already_marked_done(client, tmp_path, monkeypatch, pets_ready):
+    from conftest import refresh_pets_and_wait
+
+    _index_without_pets(client, tmp_path, monkeypatch)
+    assert refresh_pets_and_wait(client)["total"] == 1
+    assert refresh_pets_and_wait(client)["total"] == 0
+    status = refresh_pets_and_wait(client, rescan=True)
+    assert (status["status"], status["total"], status["found"]) == ("completed", 1, 1)
+
+
 def test_backfill_does_not_re_scan_photos_sync_already_scanned(client, tmp_path, monkeypatch, pets_ready):
     from conftest import refresh_pets_and_wait
 

@@ -314,8 +314,8 @@ export async function fetchTripLocations(tripId) {
 
 // Non-destructive backfill: adds cat/dog boxes to photos indexed before pet
 // detection existed. Human faces and their tags are never touched.
-export async function refreshPets() {
-  return request("/pets/refresh", { method: "POST" });
+export async function refreshPets(rescan = false) {
+  return request(`/pets/refresh${rescan ? "?rescan=true" : ""}`, { method: "POST" });
 }
 
 export async function fetchTags() {

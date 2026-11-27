@@ -95,9 +95,10 @@ progress = _PetProgress()
 _thread: Optional[threading.Thread] = None
 
 
-def _photos_to_scan() -> list[dict]:
+def _photos_to_scan(rescan: bool = False) -> list[dict]:
+    where = "" if rescan else " WHERE NOT pet_detection_done"
     with get_connection() as conn:
-        rows = conn.execute("SELECT id, filename FROM photos WHERE NOT pet_detection_done").fetchall()
+        rows = conn.execute(f"SELECT id, filename FROM photos{where}").fetchall()
         return [dict(row) for row in rows]
 
 
@@ -141,18 +142,23 @@ def _scan_photo(photo: dict) -> int:
     return len(boxes)
 
 
-def start_refresh() -> dict:
+def start_refresh(rescan: bool = False) -> dict:
     """Kick off the pets backfill in its own thread/event loop. Claims the
-    single job slot (raises jobs.JobBusy -> 409 if any job is running)."""
+    single job slot (raises jobs.JobBusy -> 409 if any job is running).
+
+    `rescan=True` visits *every* photo, not just those still owed a scan --
+    for when the detector/threshold changed or photos were wrongly marked
+    done. Only pet boxes are replaced, so people and their tags survive,
+    but pet boxes (and any pet tags on them) are re-created with new ids."""
     global _thread
     jobs.try_claim(jobs.PETS)
     progress.try_start()
-    logger.info("Starting pet detection backfill")
-    _thread = jobs.run_in_thread(jobs.PETS, _run_refresh)
+    logger.info("Starting pet detection backfill (rescan=%s)", rescan)
+    _thread = jobs.run_in_thread(jobs.PETS, lambda: _run_refresh(rescan))
     return progress.snapshot()
 
 
-async def _run_refresh() -> None:
+async def _run_refresh(rescan: bool = False) -> None:
     loop = asyncio.get_running_loop()
     try:
         if not get_pet_detection_enabled():
@@ -167,7 +173,7 @@ async def _run_refresh() -> None:
             progress.fail(str(exc))
             return
 
-        photos = await loop.run_in_executor(_executor, _photos_to_scan)
+        photos = await loop.run_in_executor(_executor, _photos_to_scan, rescan)
         progress.set_total(len(photos))
 
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
