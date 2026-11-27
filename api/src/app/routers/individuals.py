@@ -4,7 +4,7 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import people
-from ..models import CreateIndividualRequest, Individual, IndividualList, RejectedFaceList, TaggedFaceList
+from ..models import CreateIndividualRequest, Individual, IndividualList, RejectedFaceList, TaggedFaceList, TaggedPhotoIds
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,12 @@ router = APIRouter()
 @router.get("/individuals", response_model=IndividualList)
 def get_individuals() -> dict:
     return {"individuals": people.list_individuals()}
+
+
+@router.get("/individuals/unmatched/photos", response_model=TaggedPhotoIds)
+def get_unmatched_photo_ids() -> dict:
+    """Photos with detected (human) faces but none matched to an individual."""
+    return {"photo_ids": people.list_unmatched_photo_ids()}
 
 
 @router.post("/individuals", response_model=Individual, status_code=201)

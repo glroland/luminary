@@ -5,11 +5,13 @@ import Logo from "./components/Logo.jsx";
 import ManagementPage from "./components/ManagementPage.jsx";
 import PhotoGrid from "./components/PhotoGrid.jsx";
 import PhotoModal from "./components/PhotoModal.jsx";
+import { UNMATCHED_INDIVIDUAL } from "./unmatched.js";
 import Sidebar from "./components/Sidebar.jsx";
 import SortControl, { SORT_OPTIONS } from "./components/SortControl.jsx";
 import TripHeader from "./components/TripHeader.jsx";
 import {
   fetchIndividualFaces,
+  fetchUnmatchedPhotoIds,
   fetchIndividuals,
   fetchPhotos,
   fetchJobs,
@@ -331,9 +333,13 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    fetchIndividualFaces(selectedIndividual)
-      .then((faces) => {
-        if (!cancelled) setIndividualPhotoIds(new Set(faces.map((face) => face.photo_id)));
+    const ids =
+      selectedIndividual === UNMATCHED_INDIVIDUAL
+        ? fetchUnmatchedPhotoIds()
+        : fetchIndividualFaces(selectedIndividual).then((faces) => faces.map((face) => face.photo_id));
+    ids
+      .then((list) => {
+        if (!cancelled) setIndividualPhotoIds(new Set(list));
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);

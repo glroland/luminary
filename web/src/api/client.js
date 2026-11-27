@@ -169,6 +169,11 @@ export async function fetchIndividualFaces(personId) {
   return data.faces;
 }
 
+export async function fetchUnmatchedPhotoIds() {
+  const data = await request("/individuals/unmatched/photos");
+  return data.photo_ids;
+}
+
 export async function fetchIndividualRejections(personId) {
   const data = await request(`/individuals/${personId}/rejections`);
   return data.faces;

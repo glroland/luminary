@@ -2703,6 +2703,25 @@
         "summary": "Create Individual"
       }
     },
+    "/api/individuals/unmatched/photos": {
+      "get": {
+        "description": "Photos with detected (human) faces but none matched to an individual.",
+        "operationId": "get_unmatched_photo_ids_api_individuals_unmatched_photos_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaggedPhotoIds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Unmatched Photo Ids"
+      }
+    },
     "/api/individuals/{person_id}": {
       "delete": {
         "operationId": "remove_individual_api_individuals__person_id__delete",

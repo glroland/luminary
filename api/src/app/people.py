@@ -74,6 +74,18 @@ def list_individuals() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def list_unmatched_photo_ids() -> list[str]:
+    """Ids of photos where a human face was detected but none of the photo's
+    human faces is tagged to anyone -- backs the sidebar's "Unknown /
+    Unmatched" entry under "By Individual". Pets don't count either way."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT photo_id FROM faces WHERE kind = 'person' "
+            "GROUP BY photo_id HAVING COUNT(person_id) = 0"
+        ).fetchall()
+        return [row["photo_id"] for row in rows]
+
+
 INDIVIDUAL_KINDS = ("person", "pet")
 
 

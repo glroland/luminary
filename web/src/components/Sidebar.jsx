@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { UNMATCHED_INDIVIDUAL } from "../unmatched.js";
 import { individualThumbnailUrl } from "../api/client.js";
 import TripTree from "./TripTree.jsx";
 import DateTree from "./DateTree.jsx";
@@ -283,10 +284,12 @@ export default function Sidebar({
           expanded={individualsExpanded}
           onToggle={() => setIndividualsExpanded((prev) => !prev)}
         >
-          {individuals.length === 0 ? (
-            <p className="sidebar-individuals-empty">No individuals catalogued yet.</p>
-          ) : (
-            <ul className="sidebar-individuals">
+          <ul className="sidebar-individuals">
+            {individuals.length === 0 && (
+              <li>
+                <p className="sidebar-individuals-empty">No individuals catalogued yet.</p>
+              </li>
+            )}
               {individuals.map((individual) => (
                 <li key={individual.id}>
                   <button
@@ -308,8 +311,21 @@ export default function Sidebar({
                   </button>
                 </li>
               ))}
-            </ul>
-          )}
+            <li>
+              <button
+                type="button"
+                className={`sidebar-individual${
+                  selectedIndividual === UNMATCHED_INDIVIDUAL ? " directory-tree-item-active" : ""
+                }`}
+                onClick={() => onSelectIndividual(UNMATCHED_INDIVIDUAL)}
+              >
+                <span className="sidebar-individual-avatar sidebar-individual-initial" aria-hidden="true">
+                  ?
+                </span>
+                Unknown / Unmatched
+              </button>
+            </li>
+          </ul>
         </Section>
 
         <Section
