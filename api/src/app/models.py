@@ -1,6 +1,6 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Photo(BaseModel):
@@ -53,6 +53,25 @@ class Photo(BaseModel):
     # A video's length in seconds; null for everything else (and for a video
     # ffmpeg couldn't read).
     duration_seconds: Optional[float] = None
+    # Display rotation the user set, degrees clockwise, 0-359 in steps of 45.
+    # The original file is never modified: the thumbnail and original
+    # endpoints return the image already turned, so `width`/`height` (the
+    # upright pixels) describe the unrotated image. Only still images can be
+    # rotated.
+    rotation: int = 0
+
+
+class RotationRequest(BaseModel):
+    # Absolute, not relative, so a repeated request is harmless. Any sign is
+    # accepted (-45 == 315); must be a multiple of 45.
+    rotation: int
+
+    @field_validator("rotation")
+    @classmethod
+    def _step(cls, value: int) -> int:
+        if value % 45:
+            raise ValueError("rotation must be a multiple of 45 degrees")
+        return value % 360
 
 
 class PhotoList(BaseModel):

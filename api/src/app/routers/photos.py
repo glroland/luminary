@@ -8,7 +8,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from .. import chat, embeddings, storage, tags
-from ..models import ChatRequest, FaceList, Photo, PhotoList, PhotoSearchResults, PhotoTagList
+from ..models import ChatRequest, FaceList, Photo, PhotoList, PhotoSearchResults, PhotoTagList, RotationRequest
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,14 @@ def get_photo_original(photo_id: str, range_header: Optional[str] = Header(defau
         raise HTTPException(status_code=404, detail="Photo not found")
 
     try:
+        if photo.get("rotation") and photo.get("media_kind") == "image":
+            # The user turned this photo: serve it rotated (the file itself is
+            # untouched). Whole image in memory, like the HEIC path below.
+            original_bytes = storage.read_original_bytes(photo)
+            if original_bytes is None:
+                raise HTTPException(status_code=404, detail="Photo not found")
+            body, content_type = storage.render_rotated(original_bytes, photo["rotation"], exif_transpose=True)
+            return Response(body, media_type=content_type)
         if photo["content_type"] in storage.TRANSCODED_CONTENT_TYPES:
             # HEIC/HEIF: only Safari can display it, so serve a JPEG instead.
             original_bytes = storage.read_original_bytes(photo)
@@ -170,10 +178,25 @@ def get_photo_thumbnail(photo_id: str, request: Request) -> Response:
     candidates = {t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")}
     if f'"{etag}"' in candidates or "*" in candidates:
         return Response(status_code=304, headers=headers)
-    thumbnail = storage.get_thumbnail(photo_id)
-    if not thumbnail:
+    rendered = storage.get_rotated_thumbnail(photo_id)
+    if not rendered:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return Response(content=thumbnail, media_type="image/jpeg", headers=headers)
+    thumbnail, content_type = rendered
+    return Response(content=thumbnail, media_type=content_type, headers=headers)
+
+
+@router.put("/photos/{photo_id}/rotation", response_model=Photo)
+def set_photo_rotation(photo_id: str, body: RotationRequest) -> dict:
+    """Set how far (clockwise, in 45-degree steps) the photo is turned for
+    display. Postgres only: the original on the photos backend is never
+    modified, it's rotated on its way out."""
+    photo = storage.get_photo(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    if photo.get("media_kind", "image") != "image":
+        raise HTTPException(status_code=422, detail="Only still photos can be rotated")
+    storage.set_rotation(photo_id, body.rotation)
+    return storage.get_photo(photo_id)
 
 
 @router.get("/photos/{photo_id}/faces", response_model=FaceList)

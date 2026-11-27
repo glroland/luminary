@@ -879,4 +879,63 @@ describe("PhotoModal", () => {
       expect(container.querySelector(".photo-modal-image-wrap > img")).toBeInTheDocument();
     });
   });
+
+  describe("rotation", () => {
+    it("steps 45 degrees either way and shows the turned image", async () => {
+      const onRotate = vi.fn().mockResolvedValue(undefined);
+      const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} onRotate={onRotate} />);
+      await flush();
+
+      fireEvent.click(screen.getByRole("button", { name: "Rotate right 45°" }));
+      expect(onRotate).toHaveBeenLastCalledWith(PHOTO, 45);
+      fireEvent.click(screen.getByRole("button", { name: "Rotate left 45°" }));
+      expect(onRotate).toHaveBeenLastCalledWith(PHOTO, 315);
+      expect(screen.queryByRole("button", { name: "Reset rotation" })).not.toBeInTheDocument();
+
+      const turned = { ...PHOTO, rotation: 315 };
+      rerender(<PhotoModal photo={turned} onClose={() => {}} onRotate={onRotate} />);
+      await flush();
+      expect(document.querySelector(".photo-modal-image-wrap > img")).toHaveAttribute(
+        "src",
+        expect.stringContaining("/photos/1/original?r=315"),
+      );
+      // Rotating right from 315 wraps to 0; reset goes straight to 0.
+      fireEvent.click(screen.getByRole("button", { name: "Rotate right 45°" }));
+      expect(onRotate).toHaveBeenLastCalledWith(turned, 0);
+      fireEvent.click(screen.getByRole("button", { name: "Reset rotation" }));
+      expect(onRotate).toHaveBeenLastCalledWith(turned, 0);
+      // Download is the untouched file.
+      expect(screen.getByRole("link", { name: /download/i })).toHaveAttribute(
+        "href",
+        expect.not.stringContaining("?r="),
+      );
+    });
+
+    it("rotates with [ and ]", async () => {
+      const onRotate = vi.fn().mockResolvedValue(undefined);
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} onRotate={onRotate} />);
+      await flush();
+      fireEvent.keyDown(window, { key: "]" });
+      expect(onRotate).toHaveBeenLastCalledWith(PHOTO, 45);
+      fireEvent.keyDown(window, { key: "[" });
+      expect(onRotate).toHaveBeenLastCalledWith(PHOTO, 315);
+    });
+
+    it("shows the error when the API refuses", async () => {
+      const onRotate = vi.fn().mockRejectedValue(new Error("Only still photos can be rotated"));
+      render(<PhotoModal photo={PHOTO} onClose={() => {}} onRotate={onRotate} />);
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: "Rotate right 45°" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Only still photos can be rotated");
+    });
+
+    it("offers no rotation for a video or without a handler", async () => {
+      const { rerender } = render(<PhotoModal photo={PHOTO} onClose={() => {}} />);
+      await flush();
+      expect(screen.queryByRole("button", { name: /rotate/i })).not.toBeInTheDocument();
+      rerender(<PhotoModal photo={{ ...PHOTO, media_kind: "video" }} onClose={() => {}} onRotate={vi.fn()} />);
+      await flush();
+      expect(screen.queryByRole("button", { name: /rotate/i })).not.toBeInTheDocument();
+    });
+  });
 });

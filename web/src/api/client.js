@@ -457,8 +457,21 @@ export async function downloadTagCsv(tag) {
   await downloadCsv(`/tags/${tag.id}/photos/csv`, `${slug}.csv`);
 }
 
-export function thumbnailUrl(photoId) {
-  return `${API_BASE}/photos/${photoId}/thumbnail`;
+// `rotation` (photos.rotation) is only a cache key: the thumbnail is served
+// with a one-hour max-age, so without it a freshly turned photo would keep
+// showing the old angle until that expired. The API ignores it.
+export function thumbnailUrl(photoId, rotation = 0) {
+  return `${API_BASE}/photos/${photoId}/thumbnail${rotation ? `?r=${rotation}` : ""}`;
+}
+
+// Turn a still photo to `rotation` degrees clockwise (a multiple of 45, any
+// sign). The file is never modified; resolves to the updated photo.
+export async function setPhotoRotation(photoId, rotation) {
+  return request(`/photos/${photoId}/rotation`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rotation }),
+  });
 }
 
 // Where the API's connection to the photos backend stands: {status
@@ -469,8 +482,8 @@ export async function fetchBackendStatus() {
   return request("/backend/status");
 }
 
-export function originalUrl(photoId) {
-  return `${API_BASE}/photos/${photoId}/original`;
+export function originalUrl(photoId, rotation = 0) {
+  return `${API_BASE}/photos/${photoId}/original${rotation ? `?r=${rotation}` : ""}`;
 }
 
 // Every background job (sync, face matching, descriptions, locations, pets, trips, duplicates) in one

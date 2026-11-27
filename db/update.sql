@@ -110,3 +110,6 @@ CREATE TABLE IF NOT EXISTS individual_groups (
 );
 ALTER TABLE individuals ADD COLUMN IF NOT EXISTS group_id TEXT;
 ALTER TABLE individuals ADD COLUMN IF NOT EXISTS sort_order INTEGER;
+
+-- User-set display rotation (degrees clockwise, 0-359, multiples of 45).
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS rotation INTEGER NOT NULL DEFAULT 0;

@@ -107,6 +107,11 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS pet_detection_done BOOLEAN NOT NULL 
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_kind TEXT NOT NULL DEFAULT 'image';
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION;
 
+-- User-set display rotation (degrees clockwise, 0-359, multiples of 45) for a
+-- photo stored at the wrong angle. Applied when serving the thumbnail and
+-- original; the file itself is never touched.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS rotation INTEGER NOT NULL DEFAULT 0;
+
 -- SHA-256 hex digest of the file's raw bytes (storage.compute_checksum),
 -- for reliably telling whether two files are byte-identical -- unlike
 -- size_bytes, a collision here is cryptographically implausible.

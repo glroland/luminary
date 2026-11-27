@@ -27,7 +27,7 @@ THUMBNAIL_SIZE = (320, 320)
 METADATA_COLUMNS = (
     "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude, "
     "location_name, location_country, location_state, location_city, vlm_description, description, checksum, "
-    "media_kind, duration_seconds"
+    "media_kind, duration_seconds, rotation"
 )
 
 def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
@@ -246,15 +246,92 @@ def get_thumbnail(photo_id: str) -> Optional[bytes]:
 
 
 def get_thumbnail_etag(photo_id: str) -> Optional[str]:
-    """md5 of the stored thumbnail, computed in Postgres so the blob itself
-    isn't transferred -- lets the thumbnail endpoint answer a conditional
-    request (If-None-Match) with a 304 without reading the bytes into the API."""
+    """md5 of the stored thumbnail plus the photo's rotation, computed in
+    Postgres so the blob itself isn't transferred -- lets the thumbnail
+    endpoint answer a conditional request (If-None-Match) with a 304 without
+    reading the bytes into the API. The rotation is part of the tag because
+    the served image is the stored one rotated by it."""
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT md5(thumbnail) AS etag FROM photos WHERE id = %s AND thumbnail IS NOT NULL",
+            "SELECT md5(thumbnail) || '-' || rotation AS etag FROM photos "
+            "WHERE id = %s AND thumbnail IS NOT NULL",
             (photo_id,),
         ).fetchone()
         return row["etag"] if row else None
+
+
+def get_rotated_thumbnail(photo_id: str) -> Optional[tuple[bytes, str]]:
+    """The photo's thumbnail as it should be displayed -- the stored (upright)
+    one turned by the photo's rotation -- as `(bytes, content_type)`."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT thumbnail, rotation FROM photos WHERE id = %s", (photo_id,)).fetchone()
+    if not row or not row["thumbnail"]:
+        return None
+    thumbnail = bytes(row["thumbnail"])
+    if not row["rotation"]:
+        return thumbnail, "image/jpeg"
+    return render_rotated(thumbnail, row["rotation"])
+
+
+# --- Rotation ---------------------------------------------------------------
+# A user-set display rotation for a photo whose pixels are stored at the wrong
+# angle (a scan, a camera with no orientation sensor). It lives only in
+# photos.rotation (degrees clockwise, a multiple of ROTATION_STEP, 0-359): the
+# original on the photos backend is never modified, and the stored thumbnail
+# stays the upright one -- both are turned when served, so setting it back to
+# 0 is lossless and a re-sync (which rebuilds the thumbnail upright) never has
+# to know about it.
+
+ROTATION_STEP = 45
+
+
+def normalize_rotation(degrees: int) -> int:
+    """`degrees` (any sign) as 0-359. Raises ValueError unless it's a multiple
+    of ROTATION_STEP."""
+    if isinstance(degrees, bool) or not isinstance(degrees, int):
+        raise ValueError("rotation must be an integer number of degrees")
+    if degrees % ROTATION_STEP:
+        raise ValueError(f"rotation must be a multiple of {ROTATION_STEP} degrees")
+    return degrees % 360
+
+
+def render_rotated(data: bytes, rotation: int, *, exif_transpose: bool = False) -> tuple[bytes, str]:
+    """`data` (an image) turned `rotation` degrees clockwise, as
+    `(bytes, content_type)`. A quarter turn is an exact pixel transpose,
+    encoded as JPEG; any other angle needs a larger canvas whose corners are
+    empty, so it's encoded as WebP with transparency (the page background
+    shows through) -- JPEG has no alpha. `exif_transpose` first bakes in the
+    file's own orientation tag: the angle the user sees and corrected from."""
+    with Image.open(io.BytesIO(data)) as raw:
+        image = (ImageOps.exif_transpose(raw) or raw) if exif_transpose else raw
+        has_alpha = "A" in image.getbands() or "transparency" in image.info
+        quarter_turns = rotation % 90 == 0
+        buffer = io.BytesIO()
+        if quarter_turns:
+            turned = {
+                90: Image.Transpose.ROTATE_270,
+                180: Image.Transpose.ROTATE_180,
+                270: Image.Transpose.ROTATE_90,
+            }.get(rotation % 360)
+            result = image.transpose(turned) if turned is not None else image.copy()
+            if not has_alpha:
+                result.convert("RGB").save(buffer, "JPEG", quality=90)
+                return buffer.getvalue(), "image/jpeg"
+            result.convert("RGBA").save(buffer, "WEBP", quality=90)
+            return buffer.getvalue(), "image/webp"
+        # PIL rotates counter-clockwise; ours is clockwise.
+        result = image.convert("RGBA").rotate(-rotation, resample=Image.Resampling.BICUBIC, expand=True)
+        result.save(buffer, "WEBP", quality=88)
+        return buffer.getvalue(), "image/webp"
+
+
+def set_rotation(photo_id: str, rotation: int) -> bool:
+    """Store `rotation` (already normalized) for a photo. False if it doesn't
+    exist. Postgres only -- the photos backend is never touched."""
+    with get_connection() as conn:
+        cursor = conn.execute("UPDATE photos SET rotation = %s WHERE id = %s", (rotation, photo_id))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 # Default size of the result list for find_similar_photos below -- enough

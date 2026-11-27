@@ -26,6 +26,7 @@ import {
   mergeTrips,
   removeTripPhotos,
   splitTrip,
+  setPhotoRotation,
   startSync,
   updateTrip,
 } from "./api/client.js";
@@ -231,6 +232,21 @@ export default function App() {
   function handleSelectPhoto(photo, origin) {
     setModalOrigin(origin ?? null);
     setSelectedPhoto(photo);
+  }
+
+  // Turn a photo (45-degree steps, see rotation.js). The API rotates the
+  // images it serves; here every copy of the photo the page holds -- the
+  // list, the open photo, the search results (which are copies) -- takes the
+  // new angle, which also changes the thumbnail/original URLs and so reloads
+  // them. A rejection is the caller's to show.
+  async function handleRotatePhoto(photo, rotation) {
+    const updated = await setPhotoRotation(photo.id, rotation);
+    const turn = (candidate) =>
+      candidate.id === updated.id ? { ...candidate, rotation: updated.rotation } : candidate;
+    setPhotos((prev) => prev.map(turn));
+    setSelectedPhoto((prev) => (prev ? turn(prev) : prev));
+    setSearchResults((prev) => (prev ? prev.map(turn) : prev));
+    setLastSearchResults((prev) => (prev ? prev.map(turn) : prev));
   }
 
   const loadPhotos = useCallback(async () => {
@@ -886,6 +902,7 @@ export default function App() {
           origin={modalOrigin}
           chatBoxes={chatBoxes}
           onNavigate={setSelectedPhoto}
+          onRotate={handleRotatePhoto}
           onClose={() => {
             setSelectedPhoto(null);
             // Tags may have been added/removed on this photo in the modal.

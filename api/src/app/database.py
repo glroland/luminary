@@ -175,6 +175,9 @@ def init_db() -> None:
         # metadata-only, so existing rows read 'image' with no backfill.
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_kind TEXT NOT NULL DEFAULT 'image'")
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION")
+        # User-set display rotation, degrees clockwise (0-359, multiples of
+        # 45). Applied when serving, never to the file -- see storage.py.
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS rotation INTEGER NOT NULL DEFAULT 0")
 
         # Catalog of named individuals faces can be manually tagged as --
         # see people.py / routers/individuals.py.

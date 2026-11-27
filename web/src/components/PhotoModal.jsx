@@ -15,6 +15,7 @@ import {
   untagPhoto,
 } from "../api/client.js";
 import { isVideo } from "../media.js";
+import { ROTATION_STEP, canRotate, rotateBox, rotatedBy } from "../rotation.js";
 import PhotoMap from "./PhotoMap.jsx";
 import VideoPlayer from "./VideoPlayer.jsx";
 
@@ -77,12 +78,20 @@ function measureVisibleImageRect(img) {
 // against imgRect (see measureVisibleImageRect) -- shared by the chat
 // grounding boxes and the stored-faces overlay below, which otherwise
 // differ only in styling/source.
+//
+// When the photo is shown turned (photo.rotation), the boxes are still in
+// the upright photo's pixels but the displayed image is the turned canvas,
+// so they're mapped onto it first (rotation.js's rotateBox).
 function boxStyle(box, photo, imgRect) {
+  const turned = photo.rotation ? rotateBox(box, photo.width, photo.height, photo.rotation) : null;
+  const { x1, y1, x2, y2 } = turned ?? box;
+  const width = turned ? turned.width : photo.width;
+  const height = turned ? turned.height : photo.height;
   return {
-    left: `${imgRect.left + (box.x1 / photo.width) * imgRect.width}px`,
-    top: `${imgRect.top + (box.y1 / photo.height) * imgRect.height}px`,
-    width: `${((box.x2 - box.x1) / photo.width) * imgRect.width}px`,
-    height: `${((box.y2 - box.y1) / photo.height) * imgRect.height}px`,
+    left: `${imgRect.left + (x1 / width) * imgRect.width}px`,
+    top: `${imgRect.top + (y1 / height) * imgRect.height}px`,
+    width: `${((x2 - x1) / width) * imgRect.width}px`,
+    height: `${((y2 - y1) / height) * imgRect.height}px`,
   };
 }
 
@@ -111,6 +120,7 @@ export default function PhotoModal({
   onNavigate = null,
   origin = null,
   chatBoxes: boxes = NO_BOXES,
+  onRotate = null,
 }) {
   const photoIndex = photo && photos && onNavigate ? photos.findIndex((candidate) => candidate.id === photo.id) : -1;
   const previousPhoto = photoIndex > 0 ? photos[photoIndex - 1] : null;
@@ -191,6 +201,14 @@ export default function PhotoModal({
   const [catalogTags, setCatalogTags] = useState(null);
   const [tagToAdd, setTagToAdd] = useState("");
   const [tagActionError, setTagActionError] = useState(null);
+  const [rotateError, setRotateError] = useState(null);
+  // The key handler below lives in an effect; it reaches the current
+  // onRotate/photo through this ref rather than re-subscribing on each change.
+  const rotateRef = useRef(null);
+  rotateRef.current = (rotation) => {
+    setRotateError(null);
+    return Promise.resolve(onRotate?.(photo, rotation)).catch((err) => setRotateError(err.message));
+  };
 
   function setTagMenu(updater) {
     setTagMenuState((prev) => {
@@ -358,6 +376,12 @@ export default function PhotoModal({
         if (!document.fullscreenElement) onClose();
         return;
       }
+      // [ and ] turn the photo a step counter-clockwise / clockwise.
+      if ((event.key === "[" || event.key === "]") && onRotate && canRotate(photo)) {
+        event.preventDefault();
+        rotateRef.current(rotatedBy(photo.rotation, event.key === "[" ? -ROTATION_STEP : ROTATION_STEP));
+        return;
+      }
       if (event.key.toLowerCase() !== "f") return;
       // Faces are only detected in stills.
       if (isVideo(photo)) return;
@@ -372,7 +396,7 @@ export default function PhotoModal({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [photo, previousPhoto, nextPhoto, onNavigate, onClose]);
+  }, [photo, previousPhoto, nextPhoto, onNavigate, onClose, onRotate]);
 
   // Same reasoning as the "f" handler above, for the other source of box
   // overlays: a chat reply landing while the image is still zoomed in from
@@ -592,6 +616,39 @@ export default function PhotoModal({
     >
       <div className="photo-modal" ref={modalRef} onClick={(event) => event.stopPropagation()}>
         <div className="photo-modal-toolbar">
+          {onRotate && canRotate(photo) && (
+            <div className="photo-modal-rotate" role="group" aria-label="Rotate photo">
+              <button
+                type="button"
+                className="close-button"
+                onClick={() => rotateRef.current(rotatedBy(photo.rotation, -ROTATION_STEP))}
+                aria-label="Rotate left 45°"
+                title="Rotate left 45° ( [ )"
+              >
+                ↺ 45°
+              </button>
+              <button
+                type="button"
+                className="close-button"
+                onClick={() => rotateRef.current(rotatedBy(photo.rotation, ROTATION_STEP))}
+                aria-label="Rotate right 45°"
+                title="Rotate right 45° ( ] )"
+              >
+                ↻ 45°
+              </button>
+              {!!photo.rotation && (
+                <button
+                  type="button"
+                  className="close-button"
+                  onClick={() => rotateRef.current(0)}
+                  aria-label="Reset rotation"
+                  title="Back to the original angle"
+                >
+                  {photo.rotation}° ✕
+                </button>
+              )}
+            </div>
+          )}
           <button type="button" className="close-button" onClick={toggleFullscreen}>
             {isFullscreen ? "Exit full screen" : "Full screen"}
           </button>
@@ -616,9 +673,9 @@ export default function PhotoModal({
               // Keyed so each photo gets a fresh element: the fade-in
               // replays, and the previous photo doesn't linger on screen
               // while the next original is still downloading.
-              key={photo.id}
+              key={`${photo.id}:${photo.rotation || 0}`}
               ref={imgRef}
-              src={originalUrl(photo.id)}
+              src={originalUrl(photo.id, photo.rotation)}
               alt={photo.filename}
               onLoad={() => {
                 setImageLoaded(true);
@@ -634,6 +691,11 @@ export default function PhotoModal({
                   : undefined
               }
             />
+            )}
+            {rotateError && (
+              <p role="alert" className="photo-modal-rotate-error">
+                {rotateError}
+              </p>
             )}
             {showBackendStatus && (
               <div
@@ -732,7 +794,7 @@ export default function PhotoModal({
                   aria-label={`View ${candidate.filename}`}
                   aria-current={candidate.id === photo.id ? "true" : undefined}
                 >
-                  <img src={thumbnailUrl(candidate.id)} alt="" loading="lazy" />
+                  <img src={thumbnailUrl(candidate.id, candidate.rotation)} alt="" loading="lazy" />
                 </button>
               ))}
             </div>

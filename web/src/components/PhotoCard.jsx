@@ -124,7 +124,7 @@ export default function PhotoCard({ photo, onSelect, onContextMenu, selected = f
           ref={(img) => {
             if (img?.complete && img.naturalWidth > 0) setLoaded(true);
           }}
-          src={thumbnailUrl(photo.id)}
+          src={thumbnailUrl(photo.id, photo.rotation)}
           alt={photo.filename}
           loading="lazy"
           decoding="async"

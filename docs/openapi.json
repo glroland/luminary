@@ -1215,6 +1215,11 @@
             "title": "Media Kind",
             "type": "string"
           },
+          "rotation": {
+            "default": 0,
+            "title": "Rotation",
+            "type": "integer"
+          },
           "size_bytes": {
             "title": "Size Bytes",
             "type": "integer"
@@ -1412,6 +1417,11 @@
             "title": "Media Kind",
             "type": "string"
           },
+          "rotation": {
+            "default": 0,
+            "title": "Rotation",
+            "type": "integer"
+          },
           "similarity": {
             "title": "Similarity",
             "type": "number"
@@ -1535,6 +1545,19 @@
           "faces"
         ],
         "title": "RejectedFaceList",
+        "type": "object"
+      },
+      "RotationRequest": {
+        "properties": {
+          "rotation": {
+            "title": "Rotation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rotation"
+        ],
+        "title": "RotationRequest",
         "type": "object"
       },
       "SearchListEntry": {
@@ -3662,6 +3685,56 @@
           }
         },
         "summary": "Get Photo Original"
+      }
+    },
+    "/api/photos/{photo_id}/rotation": {
+      "put": {
+        "description": "Set how far (clockwise, in 45-degree steps) the photo is turned for\ndisplay. Postgres only: the original on the photos backend is never\nmodified, it's rotated on its way out.",
+        "operationId": "set_photo_rotation_api_photos__photo_id__rotation_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "photo_id",
+            "required": true,
+            "schema": {
+              "title": "Photo Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Photo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Photo Rotation"
       }
     },
     "/api/photos/{photo_id}/similar": {

@@ -1621,6 +1621,24 @@ textarea {
   cursor: pointer;
 }
 
+.photo-modal-rotate {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.photo-modal-rotate-error {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  margin: 0;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
 @media (max-width: 700px) {
   .photo-modal {
     flex-direction: column;
