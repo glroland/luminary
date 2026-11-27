@@ -84,6 +84,10 @@ textarea {
 .app {
   display: flex;
   min-height: 100vh;
+  /* iPad/iPhone Safari: 100vh is the viewport with its toolbars retracted,
+     so it's taller than what's visible and the page scrolls by the
+     difference on first load. dvh tracks the visible area. */
+  min-height: 100dvh;
 }
 
 /* Full width on purpose -- the gallery is meant to read as a wall of
@@ -1541,6 +1545,7 @@ textarea {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   background: linear-gradient(180deg, var(--surface-2), var(--surface));
   border-right: 0 solid var(--border);
   display: flex;
