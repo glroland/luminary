@@ -3,7 +3,7 @@ import io
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from .. import chat, embeddings, storage, tags
@@ -139,11 +139,21 @@ def get_photo_original(photo_id: str) -> Response:
 
 
 @router.get("/photos/{photo_id}/thumbnail")
-def get_photo_thumbnail(photo_id: str) -> Response:
+def get_photo_thumbnail(photo_id: str, request: Request) -> Response:
+    # Short max-age plus an ETag: the browser reuses its copy for an hour
+    # without asking, then revalidates with If-None-Match and gets a 304
+    # (no blob read) unless a re-sync actually changed the thumbnail.
+    etag = storage.get_thumbnail_etag(photo_id)
+    if not etag:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    headers = {"ETag": f'"{etag}"', "Cache-Control": "public, max-age=3600"}
+    candidates = {t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")}
+    if f'"{etag}"' in candidates or "*" in candidates:
+        return Response(status_code=304, headers=headers)
     thumbnail = storage.get_thumbnail(photo_id)
     if not thumbnail:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return Response(content=thumbnail, media_type="image/jpeg")
+    return Response(content=thumbnail, media_type="image/jpeg", headers=headers)
 
 
 @router.get("/photos/{photo_id}/faces", response_model=FaceList)

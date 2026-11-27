@@ -45,3 +45,19 @@ def test_small_heic_is_reencoded_for_chat():
     photo_bytes, content_type = chat._downscale_for_chat(buffer.getvalue(), "image/heic")
     assert content_type == "image/jpeg"
     assert Image.open(io.BytesIO(photo_bytes)).format == "JPEG"
+
+
+def test_thumbnail_etag_revalidation(client, tmp_path):
+    from conftest import sync_and_wait, write_image
+
+    write_image(tmp_path / "a.jpg")
+    sync_and_wait(client)
+    photo = client.get("/api/photos").json()["photos"][0]
+    url = f"/api/photos/{photo['id']}/thumbnail"
+    first = client.get(url)
+    assert first.status_code == 200
+    assert "max-age" in first.headers["cache-control"]
+    etag = first.headers["etag"]
+    second = client.get(url, headers={"If-None-Match": etag})
+    assert second.status_code == 304
+    assert client.get(url, headers={"If-None-Match": '"other"'}).status_code == 200

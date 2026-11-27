@@ -234,6 +234,18 @@ def get_thumbnail(photo_id: str) -> Optional[bytes]:
         return row["thumbnail"] if row else None
 
 
+def get_thumbnail_etag(photo_id: str) -> Optional[str]:
+    """md5 of the stored thumbnail, computed in Postgres so the blob itself
+    isn't transferred -- lets the thumbnail endpoint answer a conditional
+    request (If-None-Match) with a 304 without reading the bytes into the API."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT md5(thumbnail) AS etag FROM photos WHERE id = %s AND thumbnail IS NOT NULL",
+            (photo_id,),
+        ).fetchone()
+        return row["etag"] if row else None
+
+
 # Default size of the result list for find_similar_photos below -- enough
 # for a small grid without pulling in most of a modest-sized library.
 SIMILAR_PHOTOS_LIMIT = 12
