@@ -4,7 +4,18 @@ import psycopg
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import people
-from ..models import CreateIndividualRequest, Individual, IndividualList, RejectedFaceList, TaggedFaceList, TaggedPhotoIds
+from ..models import (
+    CreateIndividualRequest,
+    Individual,
+    IndividualGroup,
+    IndividualGroupList,
+    IndividualGroupRequest,
+    IndividualList,
+    RejectedFaceList,
+    TaggedFaceList,
+    TaggedPhotoIds,
+    UpdateIndividualRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,23 +39,67 @@ def create_individual(body: CreateIndividualRequest) -> dict:
     if not name:
         raise HTTPException(status_code=422, detail="Name must not be empty")
     try:
-        return people.create_individual(name, body.kind)
+        if body.group_id is not None and not people.group_exists(body.group_id):
+            raise HTTPException(status_code=422, detail="Group not found")
+        return people.create_individual(name, body.kind, body.group_id, body.sort_order)
     except psycopg.errors.UniqueViolation:
         raise HTTPException(status_code=409, detail=f"An individual named {name!r} already exists")
 
 
 @router.patch("/individuals/{person_id}", response_model=Individual)
-def update_individual(person_id: str, body: CreateIndividualRequest) -> dict:
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Name must not be empty")
+def update_individual(person_id: str, body: UpdateIndividualRequest) -> dict:
+    changes = {key: getattr(body, key) for key in body.model_fields_set}
+    if "name" in changes:
+        changes["name"] = (changes["name"] or "").strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=422, detail="Name must not be empty")
+    if changes.get("group_id") is not None and not people.group_exists(changes["group_id"]):
+        raise HTTPException(status_code=422, detail="Group not found")
     try:
-        individual = people.update_individual(person_id, name)
+        individual = people.update_individual(person_id, changes)
     except psycopg.errors.UniqueViolation:
-        raise HTTPException(status_code=409, detail=f"An individual named {name!r} already exists")
+        raise HTTPException(status_code=409, detail=f"An individual named {changes['name']!r} already exists")
     if not individual:
         raise HTTPException(status_code=404, detail="Individual not found")
     return individual
+
+
+@router.get("/individual-groups", response_model=IndividualGroupList)
+def get_groups() -> dict:
+    return {"groups": people.list_groups()}
+
+
+@router.post("/individual-groups", response_model=IndividualGroup, status_code=201)
+def create_group(body: IndividualGroupRequest) -> dict:
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name must not be empty")
+    try:
+        return people.create_group(name, body.sort_order)
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail=f"A group named {name!r} already exists")
+
+
+@router.patch("/individual-groups/{group_id}", response_model=IndividualGroup)
+def update_group(group_id: str, body: IndividualGroupRequest) -> dict:
+    changes = {key: getattr(body, key) for key in body.model_fields_set}
+    if "name" in changes:
+        changes["name"] = (changes["name"] or "").strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=422, detail="Name must not be empty")
+    try:
+        group = people.update_group(group_id, changes)
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail=f"A group named {changes['name']!r} already exists")
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return group
+
+
+@router.delete("/individual-groups/{group_id}", status_code=204)
+def remove_group(group_id: str) -> None:
+    if not people.delete_group(group_id):
+        raise HTTPException(status_code=404, detail="Group not found")
 
 
 @router.delete("/individuals/{person_id}", status_code=204)

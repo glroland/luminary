@@ -2971,3 +2971,37 @@ textarea {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* "By Individual" groups: a small label over the group's members. */
+.sidebar-individual-group > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sidebar-individual-group-name {
+  margin: 0.5rem 0 0.15rem;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, inherit);
+  opacity: 0.8;
+}
+.management-groups {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+}
+.management-groups li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+.management-order-input {
+  width: 4.5rem;
+}
+.management-individual-group-select {
+  max-width: 10rem;
+}

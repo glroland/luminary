@@ -22,6 +22,7 @@ describe("App", () => {
     vi.restoreAllMocks();
     vi.spyOn(client, "fetchJobs").mockResolvedValue(IDLE_JOBS);
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+    vi.spyOn(client, "fetchIndividualGroups").mockResolvedValue([]);
     vi.spyOn(client, "fetchTags").mockResolvedValue([]);
     vi.spyOn(client, "fetchTrips").mockResolvedValue([]);
   });

@@ -368,3 +368,27 @@ function propsFor(overrides) {
     ...overrides,
   };
 }
+
+describe("Sidebar individual groups", () => {
+  it("shows grouped individuals under their group, ordered by number then name", () => {
+    renderSidebar({
+      open: true,
+      individuals: [
+        { id: "a", name: "Zoe", group_id: "g1", sort_order: 1 },
+        { id: "b", name: "Amy", group_id: "g1", sort_order: null },
+        { id: "c", name: "Max", group_id: "g1", sort_order: null },
+        { id: "d", name: "Solo", group_id: null, sort_order: null },
+      ],
+      individualGroups: [
+        { id: "g2", name: "Empty", sort_order: 1 },
+        { id: "g1", name: "Family", sort_order: null },
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /by individual/i }));
+
+    expect(screen.getByText("Family")).toBeInTheDocument();
+    expect(screen.queryByText("Empty")).not.toBeInTheDocument(); // empty groups are hidden
+    const names = screen.getAllByRole("button", { name: /^(Zoe|Amy|Max|Solo)$/ }).map((b) => b.textContent.slice(1));
+    expect(names).toEqual(["Zoe", "Amy", "Max", "Solo"]);
+  });
+});

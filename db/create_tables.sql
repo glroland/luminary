@@ -222,6 +222,18 @@ CREATE TABLE IF NOT EXISTS individuals (
 );
 ALTER TABLE individuals ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person';
 
+-- Optional groups for individuals/pets ("By Individual" in the sidebar).
+-- sort_order is optional on both: NULL sorts after numbered ones, then by
+-- name. individuals.group_id logically references individual_groups.id (no
+-- FK; people.delete_group clears it explicitly).
+CREATE TABLE IF NOT EXISTS individual_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    sort_order INTEGER
+);
+ALTER TABLE individuals ADD COLUMN IF NOT EXISTS group_id TEXT;
+ALTER TABLE individuals ADD COLUMN IF NOT EXISTS sort_order INTEGER;
+
 -- Catalog of free-form tags whole photos can be tagged with (see
 -- `photo_tags` below) -- tags.py / routers/tags.py, routers/photos.py's
 -- photo-tag endpoints.

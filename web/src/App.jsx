@@ -12,6 +12,7 @@ import TripHeader from "./components/TripHeader.jsx";
 import {
   fetchIndividualFaces,
   fetchUnmatchedPhotoIds,
+  fetchIndividualGroups,
   fetchIndividuals,
   fetchPhotos,
   fetchJobs,
@@ -156,6 +157,7 @@ export default function App() {
   // is just a read-only copy kept here so Sidebar can render it without
   // every page needing its own fetch.
   const [individuals, setIndividuals] = useState([]);
+  const [individualGroups, setIndividualGroups] = useState([]);
   // null means no individual filter; otherwise a person id, matched against
   // individualPhotoIds below (that person's tagged photos, fetched
   // whenever the selection changes).
@@ -247,6 +249,9 @@ export default function App() {
   const loadIndividuals = useCallback(() => {
     fetchIndividuals()
       .then(setIndividuals)
+      .catch((err) => setError(err.message));
+    fetchIndividualGroups()
+      .then(setIndividualGroups)
       .catch((err) => setError(err.message));
   }, []);
 
@@ -627,6 +632,7 @@ export default function App() {
           resetGrid();
         }}
         individuals={individuals}
+        individualGroups={individualGroups}
         selectedIndividual={selectedIndividual}
         onSelectIndividual={(personId) => {
           setSelectedIndividual(personId);
@@ -817,6 +823,7 @@ export default function App() {
               setSearchResults(null);
               setLastSearchResults(null);
               setIndividuals([]);
+              setIndividualGroups([]);
               setTags([]);
               setTrips([]);
               setSelectedPhoto(null);

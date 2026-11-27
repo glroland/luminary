@@ -261,3 +261,64 @@ def test_delete_individual_triggers_description_enrichment_once_per_affected_pho
 def test_delete_unknown_individual_returns_404(client):
     response = client.delete("/api/individuals/does-not-exist")
     assert response.status_code == 404
+
+
+def _names(client):
+    return [i["name"] for i in client.get("/api/individuals").json()["individuals"]]
+
+
+def test_group_crud_and_ordering(client):
+    zed = client.post("/api/individual-groups", json={"name": "Zed"}).json()
+    family = client.post("/api/individual-groups", json={"name": "Family", "sort_order": 2}).json()
+    friends = client.post("/api/individual-groups", json={"name": "Friends", "sort_order": 1}).json()
+    assert client.post("/api/individual-groups", json={"name": "Family"}).status_code == 409
+    assert client.post("/api/individual-groups", json={"name": " "}).status_code == 422
+
+    names = [g["name"] for g in client.get("/api/individual-groups").json()["groups"]]
+    assert names == ["Friends", "Family", "Zed"]  # numbered first, unnumbered after
+
+    renamed = client.patch(f"/api/individual-groups/{zed['id']}", json={"sort_order": 0}).json()
+    assert renamed["name"] == "Zed" and renamed["sort_order"] == 0
+    cleared = client.patch(f"/api/individual-groups/{zed['id']}", json={"sort_order": None}).json()
+    assert cleared["sort_order"] is None
+    assert client.patch("/api/individual-groups/nope", json={"name": "x"}).status_code == 404
+
+    assert client.delete(f"/api/individual-groups/{friends['id']}").status_code == 204
+    assert client.delete(f"/api/individual-groups/{friends['id']}").status_code == 404
+    assert family["sort_order"] == 2
+
+
+def test_assign_individuals_to_group_with_order(client):
+    group = client.post("/api/individual-groups", json={"name": "Family"}).json()
+    ids = {n: client.post("/api/individuals", json={"name": n}).json()["id"] for n in ("Cara", "Abe", "Bea")}
+
+    assert _names(client) == ["Abe", "Bea", "Cara"]
+    for name in ids:
+        assert client.patch(f"/api/individuals/{ids[name]}", json={"group_id": group["id"]}).status_code == 200
+    client.patch(f"/api/individuals/{ids['Cara']}", json={"sort_order": 1})
+    client.patch(f"/api/individuals/{ids['Bea']}", json={"sort_order": 2})
+    assert _names(client) == ["Cara", "Bea", "Abe"]
+
+    # Partial PATCH leaves other fields alone; explicit null clears.
+    renamed = client.patch(f"/api/individuals/{ids['Cara']}", json={"name": "Clara"}).json()
+    assert renamed["group_id"] == group["id"] and renamed["sort_order"] == 1
+    cleared = client.patch(f"/api/individuals/{ids['Cara']}", json={"sort_order": None}).json()
+    assert cleared["sort_order"] is None and cleared["name"] == "Clara"
+    assert _names(client) == ["Bea", "Abe", "Clara"]
+
+    assert client.patch(f"/api/individuals/{ids['Abe']}", json={"group_id": "nope"}).status_code == 422
+    assert client.patch(f"/api/individuals/{ids['Abe']}", json={"name": " "}).status_code == 422
+
+    # Deleting the group ungroups, never deletes, its members.
+    client.delete(f"/api/individual-groups/{group['id']}")
+    listed = client.get("/api/individuals").json()["individuals"]
+    assert len(listed) == 3 and all(i["group_id"] is None for i in listed)
+
+
+def test_create_individual_in_group(client):
+    group = client.post("/api/individual-groups", json={"name": "Pets"}).json()
+    created = client.post(
+        "/api/individuals", json={"name": "Rex", "kind": "pet", "group_id": group["id"], "sort_order": 3}
+    ).json()
+    assert created["group_id"] == group["id"] and created["sort_order"] == 3
+    assert client.post("/api/individuals", json={"name": "X", "group_id": "nope"}).status_code == 422

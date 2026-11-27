@@ -152,12 +152,42 @@ export async function untagFace(faceId) {
   await request(`/faces/${faceId}/tag`, { method: "DELETE" });
 }
 
-export async function updateIndividual(personId, name) {
+// `changes` holds only what should change: { name?, group_id?, sort_order? }.
+// An explicit null group_id / sort_order clears it. A bare string is a rename
+// (kept for existing callers).
+export async function updateIndividual(personId, changes) {
+  const body = typeof changes === "string" ? { name: changes } : changes;
   return request(`/individuals/${personId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(body),
   });
+}
+
+export async function fetchIndividualGroups() {
+  const data = await request("/individual-groups");
+  return data.groups;
+}
+
+export async function createIndividualGroup(name, sortOrder = null) {
+  return request("/individual-groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, sort_order: sortOrder }),
+  });
+}
+
+// `changes`: { name?, sort_order? } -- null sort_order clears the order.
+export async function updateIndividualGroup(groupId, changes) {
+  return request(`/individual-groups/${groupId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+  });
+}
+
+export async function deleteIndividualGroup(groupId) {
+  await request(`/individual-groups/${groupId}`, { method: "DELETE" });
 }
 
 export async function deleteIndividual(personId) {

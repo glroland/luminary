@@ -150,6 +150,10 @@ class Individual(BaseModel):
     # GET /api/individuals/{id}/thumbnail, same split as Photo/thumbnail.
     has_representative_thumbnail: bool
     created_at: str
+    # Optional grouping for the sidebar; `sort_order` orders the individual
+    # within its group (null = after numbered ones, then alphabetical).
+    group_id: Optional[str] = None
+    sort_order: Optional[int] = None
 
 
 class IndividualList(BaseModel):
@@ -158,8 +162,34 @@ class IndividualList(BaseModel):
 
 class CreateIndividualRequest(BaseModel):
     name: str
-    # Ignored by PATCH (rename) -- an individual's kind is fixed at creation.
+    # An individual's kind is fixed at creation.
     kind: Literal["person", "pet"] = "person"
+    group_id: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class UpdateIndividualRequest(BaseModel):
+    # PATCH: only the fields present in the body change; an explicit null
+    # for group_id / sort_order clears it.
+    name: Optional[str] = None
+    group_id: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class IndividualGroup(BaseModel):
+    id: str
+    name: str
+    # null = after numbered groups, then alphabetical.
+    sort_order: Optional[int] = None
+
+
+class IndividualGroupList(BaseModel):
+    groups: list[IndividualGroup]
+
+
+class IndividualGroupRequest(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[int] = None
 
 
 class TagFaceRequest(BaseModel):

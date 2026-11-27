@@ -101,3 +101,12 @@ CREATE TABLE IF NOT EXISTS trip_exclusions (
 -- Movies (docs/video-support.md).
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_kind TEXT NOT NULL DEFAULT 'image';
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION;
+
+-- Optional groups for individuals/pets ("By Individual" in the sidebar).
+CREATE TABLE IF NOT EXISTS individual_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    sort_order INTEGER
+);
+ALTER TABLE individuals ADD COLUMN IF NOT EXISTS group_id TEXT;
+ALTER TABLE individuals ADD COLUMN IF NOT EXISTS sort_order INTEGER;

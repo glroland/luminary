@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import {
   cancelJob,
   createIndividual,
+  createIndividualGroup,
   createTag,
   deleteIndividual,
+  deleteIndividualGroup,
   deleteRejection,
   deleteTag,
   downloadDuplicatesCsv,
@@ -12,6 +14,7 @@ import {
   faceThumbnailUrl,
   fetchIndividualFaces,
   fetchIndividualRejections,
+  fetchIndividualGroups,
   fetchIndividuals,
   fetchTags,
   individualThumbnailUrl,
@@ -26,8 +29,10 @@ import {
   rejectionThumbnailUrl,
   untagFace,
   updateIndividual,
+  updateIndividualGroup,
   updateTag,
 } from "../api/client.js";
+import { parseOrder, sortIndividuals } from "../individuals.js";
 import JobControl from "./JobControl.jsx";
 import TripsManagement from "./TripsManagement.jsx";
 
@@ -47,6 +52,13 @@ const SOURCE_PREVIEW_DELAY_MS =
 
 export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, onNavigateToPhoto, onPurged, onTripsChanged }) {
   const [individuals, setIndividuals] = useState(null);
+  // Optional groups for the sidebar's "By Individual" (individual.group_id).
+  const [groups, setGroups] = useState([]);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupOrder, setNewGroupOrder] = useState("");
+  const [editingGroupId, setEditingGroupId] = useState(null);
+  const [groupDraft, setGroupDraft] = useState({ name: "", order: "" });
+  const [groupError, setGroupError] = useState(null);
   // Photo a hovered auto-matched face came from, shown in a popup after the
   // pointer rests on the face for SOURCE_PREVIEW_DELAY_MS.
   const [previewPhotoId, setPreviewPhotoId] = useState(null);
@@ -127,6 +139,9 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     fetchIndividuals()
       .then(setIndividuals)
       .catch((err) => setPageError(err.message));
+    fetchIndividualGroups()
+      .then(setGroups)
+      .catch((err) => setPageError(err.message));
     fetchTags()
       .then(setTags)
       .catch((err) => setTagsError(err.message));
@@ -148,8 +163,66 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     return undefined;
   }, [jobs]);
 
-  function sortByName(list) {
-    return [...list].sort((a, b) => a.name.localeCompare(b.name));
+  const sortByName = sortIndividuals;
+
+  function handleAddGroup(event) {
+    event.preventDefault();
+    const name = newGroupName.trim();
+    const order = parseOrder(newGroupOrder);
+    if (!name) return;
+    if (order === undefined) return setGroupError("Order must be a whole number (or empty).");
+    createIndividualGroup(name, order)
+      .then((created) => {
+        setGroups((prev) => sortIndividuals([...prev, created]));
+        setNewGroupName("");
+        setNewGroupOrder("");
+        setGroupError(null);
+      })
+      .catch((err) => setGroupError(err.message));
+  }
+
+  function saveGroup(groupId) {
+    const name = groupDraft.name.trim();
+    const order = parseOrder(groupDraft.order);
+    if (!name) return;
+    if (order === undefined) return setGroupError("Order must be a whole number (or empty).");
+    updateIndividualGroup(groupId, { name, sort_order: order })
+      .then((updated) => {
+        setGroups((prev) => sortIndividuals(prev.map((group) => (group.id === groupId ? updated : group))));
+        setEditingGroupId(null);
+        setGroupError(null);
+      })
+      .catch((err) => setGroupError(err.message));
+  }
+
+  function handleDeleteGroup(groupId) {
+    deleteIndividualGroup(groupId)
+      .then(() => {
+        setGroups((prev) => prev.filter((group) => group.id !== groupId));
+        // Members are kept, just ungrouped.
+        setIndividuals((prev) =>
+          sortIndividuals(prev.map((individual) => (individual.group_id === groupId ? { ...individual, group_id: null } : individual))),
+        );
+        setGroupError(null);
+      })
+      .catch((err) => setGroupError(err.message));
+  }
+
+  // Changes an individual's group and/or order; `changes` is the PATCH body.
+  function handleOrganize(personId, changes) {
+    updateIndividual(personId, changes)
+      .then((updated) => {
+        setIndividuals((prev) => sortIndividuals(prev.map((individual) => (individual.id === personId ? updated : individual))));
+        setPageError(null);
+      })
+      .catch((err) => setPageError(err.message));
+  }
+
+  function handleOrderBlur(individual, text) {
+    const order = parseOrder(text);
+    if (order === undefined) return setPageError("Order must be a whole number (or empty).");
+    if (order === (individual.sort_order ?? null)) return;
+    handleOrganize(individual.id, { sort_order: order });
   }
 
   function loadRejections(personId) {
@@ -410,6 +483,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     purgeDatabase()
       .then(() => {
         setIndividuals([]);
+        setGroups([]);
         setFacesByIndividual({});
         setExpandedIds(new Set());
         setTags([]);
@@ -606,6 +680,90 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
         </p>
       )}
 
+      <h3>Groups</h3>
+      <p className="management-hint">
+        Optionally group individuals and pets; groups appear under &ldquo;By Individual&rdquo;. A lower order number
+        comes first; with no number, items sort alphabetically after the numbered ones.
+      </p>
+      <form className="management-add-person" onSubmit={handleAddGroup}>
+        <input
+          type="text"
+          value={newGroupName}
+          onChange={(event) => setNewGroupName(event.target.value)}
+          placeholder="Add a group…"
+        />
+        <input
+          type="number"
+          className="management-order-input"
+          aria-label="New group order"
+          value={newGroupOrder}
+          onChange={(event) => setNewGroupOrder(event.target.value)}
+          placeholder="Order"
+        />
+        <button type="submit" disabled={!newGroupName.trim()}>
+          Add group
+        </button>
+      </form>
+      {groupError && (
+        <p role="alert" className="error">
+          {groupError}
+        </p>
+      )}
+      {groups.length > 0 && (
+        <ul className="management-groups">
+          {groups.map((group) =>
+            editingGroupId === group.id ? (
+              <li key={group.id}>
+                <input
+                  aria-label="Group name"
+                  value={groupDraft.name}
+                  onChange={(event) => setGroupDraft((prev) => ({ ...prev, name: event.target.value }))}
+                />
+                <input
+                  type="number"
+                  className="management-order-input"
+                  aria-label="Group order"
+                  value={groupDraft.order}
+                  placeholder="Order"
+                  onChange={(event) => setGroupDraft((prev) => ({ ...prev, order: event.target.value }))}
+                />
+                <button type="button" onClick={() => saveGroup(group.id)} disabled={!groupDraft.name.trim()}>
+                  Save
+                </button>
+                <button type="button" onClick={() => setEditingGroupId(null)}>
+                  Cancel
+                </button>
+              </li>
+            ) : (
+              <li key={group.id}>
+                <span className="management-individual-name">
+                  {group.name}
+                  {group.sort_order !== null && <span className="management-pet-badge">#{group.sort_order}</span>}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingGroupId(group.id);
+                    setGroupDraft({ name: group.name, order: group.sort_order ?? "" });
+                  }}
+                  aria-label={`Edit group ${group.name}`}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="management-delete"
+                  onClick={() => handleDeleteGroup(group.id)}
+                  aria-label={`Delete group ${group.name}`}
+                >
+                  Delete
+                </button>
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+
       {individuals === null ? (
         <p>Loading…</p>
       ) : individuals.length === 0 ? (
@@ -653,6 +811,32 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
                   )}
 
                   <span className="management-individual-actions">
+                    {!renaming && (
+                      <>
+                        <select
+                          className="management-individual-group-select"
+                          aria-label={`Group for ${individual.name}`}
+                          value={individual.group_id ?? ""}
+                          onChange={(event) => handleOrganize(individual.id, { group_id: event.target.value || null })}
+                        >
+                          <option value="">No group</option>
+                          {groups.map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          key={`${individual.id}-${individual.sort_order ?? ""}`}
+                          type="number"
+                          className="management-order-input"
+                          aria-label={`Order for ${individual.name}`}
+                          placeholder="Order"
+                          defaultValue={individual.sort_order ?? ""}
+                          onBlur={(event) => handleOrderBlur(individual, event.target.value)}
+                        />
+                      </>
+                    )}
                     {renaming ? (
                       <>
                         <button type="button" onClick={() => saveRename(individual.id)} disabled={!renameDraft.trim()}>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { UNMATCHED_INDIVIDUAL } from "../unmatched.js";
 import { individualThumbnailUrl } from "../api/client.js";
+import { buildIndividualSections } from "../individuals.js";
 import TripTree from "./TripTree.jsx";
 import DateTree from "./DateTree.jsx";
 import DirectoryTree from "./DirectoryTree.jsx";
@@ -148,6 +149,7 @@ export default function Sidebar({
   selectedDirectory,
   onSelectDirectory,
   individuals,
+  individualGroups = [],
   selectedIndividual,
   onSelectIndividual,
   tags = [],
@@ -171,6 +173,32 @@ export default function Sidebar({
   onClearSearch = () => {},
 }) {
   const tree = useMemo(() => buildTree(photos), [photos]);
+  const individualSections = useMemo(
+    () => buildIndividualSections(individuals, individualGroups),
+    [individuals, individualGroups],
+  );
+
+  function renderIndividual(individual) {
+    return (
+      <li key={individual.id}>
+        <button
+          type="button"
+          className={`sidebar-individual${selectedIndividual === individual.id ? " directory-tree-item-active" : ""}`}
+          onClick={() => onSelectIndividual(individual.id)}
+        >
+          {individual.has_representative_thumbnail ? (
+            <img className="sidebar-individual-avatar" src={individualThumbnailUrl(individual.id)} alt="" />
+          ) : (
+            // No tagged face yet: an initial stands in for the avatar.
+            <span className="sidebar-individual-avatar sidebar-individual-initial" aria-hidden="true">
+              {individual.name.trim().charAt(0).toUpperCase()}
+            </span>
+          )}
+          {individual.name}
+        </button>
+      </li>
+    );
+  }
   const dateTree = useMemo(() => buildDateTree(photos), [photos]);
   const [foldersExpanded, setFoldersExpanded] = useState(false);
   const [individualsExpanded, setIndividualsExpanded] = useState(false);
@@ -290,27 +318,13 @@ export default function Sidebar({
                 <p className="sidebar-individuals-empty">No individuals catalogued yet.</p>
               </li>
             )}
-              {individuals.map((individual) => (
-                <li key={individual.id}>
-                  <button
-                    type="button"
-                    className={`sidebar-individual${
-                      selectedIndividual === individual.id ? " directory-tree-item-active" : ""
-                    }`}
-                    onClick={() => onSelectIndividual(individual.id)}
-                  >
-                    {individual.has_representative_thumbnail ? (
-                      <img className="sidebar-individual-avatar" src={individualThumbnailUrl(individual.id)} alt="" />
-                    ) : (
-                      // No tagged face yet: an initial stands in for the avatar.
-                      <span className="sidebar-individual-avatar sidebar-individual-initial" aria-hidden="true">
-                        {individual.name.trim().charAt(0).toUpperCase()}
-                      </span>
-                    )}
-                    {individual.name}
-                  </button>
+              {individualSections.sections.map(({ group, members }) => (
+                <li key={`group-${group.id}`} className="sidebar-individual-group">
+                  <p className="sidebar-individual-group-name">{group.name}</p>
+                  <ul>{members.map(renderIndividual)}</ul>
                 </li>
               ))}
+              {individualSections.ungrouped.map(renderIndividual)}
             <li>
               <button
                 type="button"

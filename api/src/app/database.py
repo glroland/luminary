@@ -193,6 +193,19 @@ def init_db() -> None:
         # row-level backfill (which must never live in init_db -- see
         # backfill_data()).
         conn.execute("ALTER TABLE individuals ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'person'")
+        # Optional grouping of individuals/pets for the sidebar's "By
+        # Individual" -- see db/create_tables.sql. All nullable, so no backfill.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS individual_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                sort_order INTEGER
+            )
+            """
+        )
+        conn.execute("ALTER TABLE individuals ADD COLUMN IF NOT EXISTS group_id TEXT")
+        conn.execute("ALTER TABLE individuals ADD COLUMN IF NOT EXISTS sort_order INTEGER")
 
         # Catalog of free-form tags whole photos can be tagged with -- see
         # tags.py / routers/tags.py (tag CRUD) and routers/photos.py's

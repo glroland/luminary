@@ -708,6 +708,7 @@ def purge_all() -> None:
         conn.execute("DELETE FROM faces")
         conn.execute("DELETE FROM face_rejections")
         conn.execute("DELETE FROM individuals")
+        conn.execute("DELETE FROM individual_groups")
         conn.execute("DELETE FROM photo_tags")
         conn.execute("DELETE FROM tags")
         conn.execute("DELETE FROM trip_photos")

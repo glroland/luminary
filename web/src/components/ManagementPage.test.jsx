@@ -12,6 +12,7 @@ describe("ManagementPage", () => {
     // defaulted to empty here so tests that don't care about tags aren't
     // affected by it; tests that do override this themselves.
     vi.spyOn(client, "fetchTags").mockResolvedValue([]);
+    vi.spyOn(client, "fetchIndividualGroups").mockResolvedValue([]);
     vi.spyOn(client, "fetchHomes").mockResolvedValue([]);
     vi.spyOn(client, "fetchDismissedTrips").mockResolvedValue([]);
     // Expanding an individual also fetches its unmatched auto-tags.
@@ -699,5 +700,37 @@ describe("ManagementPage", () => {
       expect(deleteMock).toHaveBeenCalledWith("t1");
       await waitFor(() => expect(screen.queryByText("Vacation")).not.toBeInTheDocument());
     });
+  });
+
+  it("assigns an individual to a group and sets an order", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([ALICE]);
+    vi.spyOn(client, "fetchIndividualGroups").mockResolvedValue([{ id: "g1", name: "Family", sort_order: null }]);
+    const update = vi
+      .spyOn(client, "updateIndividual")
+      .mockResolvedValue({ ...ALICE, group_id: "g1", sort_order: null });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+
+    fireEvent.change(await screen.findByLabelText("Group for Alice"), { target: { value: "g1" } });
+    await waitFor(() => expect(update).toHaveBeenCalledWith("p1", { group_id: "g1" }));
+
+    const order = screen.getByLabelText("Order for Alice");
+    fireEvent.change(order, { target: { value: "3" } });
+    fireEvent.blur(order);
+    await waitFor(() => expect(update).toHaveBeenCalledWith("p1", { sort_order: 3 }));
+  });
+
+  it("creates a group with an optional order", async () => {
+    vi.spyOn(client, "fetchIndividuals").mockResolvedValue([]);
+    const create = vi
+      .spyOn(client, "createIndividualGroup")
+      .mockResolvedValue({ id: "g1", name: "Family", sort_order: null });
+
+    render(<ManagementPage onBack={() => {}} onNavigateToPhoto={() => {}} />);
+
+    fireEvent.change(await screen.findByPlaceholderText("Add a group…"), { target: { value: "Family" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add group" }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith("Family", null));
+    expect(await screen.findByText("Family")).toBeInTheDocument();
   });
 });

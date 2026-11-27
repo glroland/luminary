@@ -69,7 +69,7 @@ def list_individuals() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT id, name, kind, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, "
-            "created_at FROM individuals ORDER BY name"
+            "created_at, group_id, sort_order FROM individuals ORDER BY sort_order NULLS LAST, name"
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -95,7 +95,9 @@ class KindMismatch(Exception):
     Mapped to a 409 by routers/faces.py."""
 
 
-def create_individual(name: str, kind: str = "person") -> dict:
+def create_individual(
+    name: str, kind: str = "person", group_id: Optional[str] = None, sort_order: Optional[int] = None
+) -> dict:
     """Raises psycopg.errors.UniqueViolation (via get_connection, which logs
     and re-raises any psycopg.Error) if `name` is already catalogued --
     left for the router to map to a 409, rather than checked here first and
@@ -104,8 +106,9 @@ def create_individual(name: str, kind: str = "person") -> dict:
     created_at = datetime.now(timezone.utc).isoformat()
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO individuals (id, name, kind, created_at) VALUES (%s, %s, %s, %s)",
-            (individual_id, name, kind, created_at),
+            "INSERT INTO individuals (id, name, kind, created_at, group_id, sort_order) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (individual_id, name, kind, created_at, group_id, sort_order),
         )
         conn.commit()
     return {
@@ -114,6 +117,8 @@ def create_individual(name: str, kind: str = "person") -> dict:
         "kind": kind,
         "has_representative_thumbnail": False,
         "created_at": created_at,
+        "group_id": group_id,
+        "sort_order": sort_order,
     }
 
 
@@ -121,23 +126,87 @@ def get_individual(person_id: str) -> Optional[dict]:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id, name, kind, (representative_thumbnail IS NOT NULL) AS has_representative_thumbnail, "
-            "created_at FROM individuals WHERE id = %s",
+            "created_at, group_id, sort_order FROM individuals WHERE id = %s",
             (person_id,),
         ).fetchone()
         return dict(row) if row else None
 
 
-def update_individual(person_id: str, name: str) -> Optional[dict]:
-    """Rename an individual. Returns the updated row, or None if `person_id`
-    doesn't exist. Raises psycopg.errors.UniqueViolation (see
-    create_individual's docstring) if `name` collides with another
-    individual."""
+def update_individual(person_id: str, changes: dict) -> Optional[dict]:
+    """Update an individual's `name`, `group_id` and/or `sort_order` -- only
+    the keys present in `changes` are written (None clears group/order).
+    Returns the updated row, or None if `person_id` doesn't exist. Raises
+    psycopg.errors.UniqueViolation (see create_individual's docstring) if
+    `name` collides with another individual."""
+    allowed = [key for key in ("name", "group_id", "sort_order") if key in changes]
     with get_connection() as conn:
-        cursor = conn.execute("UPDATE individuals SET name = %s WHERE id = %s", (name, person_id))
-        conn.commit()
-        if cursor.rowcount == 0:
-            return None
+        if allowed:
+            assignments = ", ".join(f"{key} = %s" for key in allowed)
+            cursor = conn.execute(
+                f"UPDATE individuals SET {assignments} WHERE id = %s",
+                [changes[key] for key in allowed] + [person_id],
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
     return get_individual(person_id)
+
+
+# --- Groups -----------------------------------------------------------------
+# Optional grouping of individuals/pets for the sidebar's "By Individual".
+
+
+def list_groups() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, sort_order FROM individual_groups ORDER BY sort_order NULLS LAST, name"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def create_group(name: str, sort_order: Optional[int] = None) -> dict:
+    """Raises psycopg.errors.UniqueViolation on a duplicate name."""
+    group_id = str(uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO individual_groups (id, name, sort_order) VALUES (%s, %s, %s)",
+            (group_id, name, sort_order),
+        )
+        conn.commit()
+    return {"id": group_id, "name": name, "sort_order": sort_order}
+
+
+def update_group(group_id: str, changes: dict) -> Optional[dict]:
+    """Same partial-update contract as update_individual."""
+    allowed = [key for key in ("name", "sort_order") if key in changes]
+    with get_connection() as conn:
+        if allowed:
+            assignments = ", ".join(f"{key} = %s" for key in allowed)
+            cursor = conn.execute(
+                f"UPDATE individual_groups SET {assignments} WHERE id = %s",
+                [changes[key] for key in allowed] + [group_id],
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
+        row = conn.execute(
+            "SELECT id, name, sort_order FROM individual_groups WHERE id = %s", (group_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def group_exists(group_id: str) -> bool:
+    with get_connection() as conn:
+        return conn.execute("SELECT 1 FROM individual_groups WHERE id = %s", (group_id,)).fetchone() is not None
+
+
+def delete_group(group_id: str) -> bool:
+    """Delete a group; its members become ungrouped (never deleted)."""
+    with get_connection() as conn:
+        conn.execute("UPDATE individuals SET group_id = NULL WHERE group_id = %s", (group_id,))
+        cursor = conn.execute("DELETE FROM individual_groups WHERE id = %s", (group_id,))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def delete_individual(person_id: str) -> bool:

@@ -122,7 +122,7 @@ def client(tmp_path, monkeypatch):
         # No reranker in tests unless one opts in (it would download a model).
         monkeypatch.setenv("LUMINARY_RERANKER_MODEL", "")
         with get_connection() as conn:
-            conn.execute("TRUNCATE TABLE photos, faces, face_rejections, individuals, tags, photo_tags, photo_embeddings, "
+            conn.execute("TRUNCATE TABLE photos, faces, face_rejections, individuals, individual_groups, tags, photo_tags, photo_embeddings, "
                 "homes, trips, trip_photos, trip_exclusions")
             conn.commit()
         yield test_client

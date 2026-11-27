@@ -850,6 +850,16 @@ cached) is also per-pod, in-memory state — same caveat.
   "who's in this photo" changing is one of the facts `photos.description`
   is composed from.)
 
+- **Individual groups** (`people.py`'s "Groups" section, `routers/individuals.py`'s
+  `/individual-groups`, `web/src/individuals.js`): optional. `individual_groups`
+  (`id`, unique `name`, nullable `sort_order`) plus `individuals.group_id`/
+  `sort_order`, all nullable; no FK, `delete_group` ungroups members (never
+  deletes them). Ordering everywhere (SQL and `compareByOrder`): numbered
+  first ascending, then the rest alphabetically. PATCH bodies are partial
+  (`model_fields_set`); explicit `null` clears. The sidebar's "By Individual"
+  shows non-empty groups (group order) then ungrouped individuals; groups are
+  managed on the Manage page.
+
 - `pet_detection.py` finds cats and dogs (torchvision's COCO Faster R-CNN
   MobileNetV3, no new dependency; weights cached by `download_models.py`) and
   returns the same box dicts as `face_detection.detect_faces` plus
