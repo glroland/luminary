@@ -9,5 +9,3 @@ release notes
 login and roles
 
 support multiple replicas
-
-slow to load first image.  preload or show loading rather than just black indefinitely.
