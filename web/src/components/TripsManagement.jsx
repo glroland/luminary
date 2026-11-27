@@ -12,7 +12,7 @@ import {
 import { formatTripRange } from "../trips.js";
 
 const REBUILD_LATER =
-  "Another job was running, so trips were not rebuilt. Run Rebuild Trips above when it has finished.";
+  "Another job was running, so trips were not rebuilt. Run Rebuild Trips when it has finished.";
 
 function describeHome(home) {
   const place = [home.city, home.state, home.country].filter(Boolean).join(", ");
@@ -94,10 +94,10 @@ function HomeForm({ initial = blank, submitLabel, onSubmit, onCancel }) {
 
 // The Manage page's trips section: where home is (detected, then confirmed
 // or entered by the user -- see trips.py), trips made by hand, and dismissed
-// trips with a way to bring them back. The Rebuild Trips button itself lives
-// with the other jobs above. `onTripsChanged` tells App.jsx to reload the
+// trips with a way to bring them back. The Rebuild Trips button is passed in as
+// `rebuildControl` (it needs the page's job plumbing). `onTripsChanged` tells App.jsx to reload the
 // sidebar's trip list.
-export default function TripsManagement({ jobs, onTripsChanged = () => {} }) {
+export default function TripsManagement({ jobs, onTripsChanged = () => {}, rebuildControl = null }) {
   const [homes, setHomes] = useState(null);
   const [dismissed, setDismissed] = useState(null);
   const [error, setError] = useState(null);
@@ -157,6 +157,15 @@ export default function TripsManagement({ jobs, onTripsChanged = () => {} }) {
         <p role="status" className="trips-notice">
           {notice}
         </p>
+      )}
+
+      {rebuildControl && (
+        <div className="management-refresh-row">
+          <div className="management-refresh-control">{rebuildControl}</div>
+          <p className="management-refresh-description">Finds trips: runs of photos that have both a date and GPS coordinates and were taken away
+            from home. Home is worked out from where most of your days are spent. It also runs after
+            every sync. Photos without a date or location are never placed in a trip automatically.</p>
+        </div>
       )}
 
       <h3>Where home is</h3>

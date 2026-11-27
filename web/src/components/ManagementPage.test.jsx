@@ -248,7 +248,7 @@ describe("ManagementPage", () => {
     it("shows every start button enabled when nothing is running", async () => {
       renderPage(snapshot());
       await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
-      for (const name of ["Refresh", "Refresh Descriptions", "Refresh Locations", "Rebuild Trips", "Full Face Refresh"]) {
+      for (const name of ["Refresh", "Refresh Descriptions", "Refresh Locations", "Full Face Refresh"]) {
         expect(screen.getByRole("button", { name })).toBeEnabled();
       }
       expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
@@ -287,7 +287,7 @@ describe("ManagementPage", () => {
       const { rerender } = renderPage(snapshot(), { onJobsChange });
       await waitFor(() => expect(screen.getByText("Alice")).toBeInTheDocument());
 
-      fireEvent.click(screen.getByRole("button", { name: "Detect Pets" }));
+      fireEvent.click(screen.getByRole("button", { name: "Scan for Pets" }));
       expect(startMock).toHaveBeenCalled();
 
       rerender(
@@ -299,7 +299,7 @@ describe("ManagementPage", () => {
         />
       );
       expect(screen.getByText("Looking for pets… 40%")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Detect Pets" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Scan for Pets" })).not.toBeInTheDocument();
     });
 
     it("shows 'Cancelling' (disabled) until the system is ready, then flips back to the start button", async () => {

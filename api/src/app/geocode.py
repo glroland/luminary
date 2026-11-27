@@ -57,7 +57,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
-from . import jobs, trips
+from . import enrich, jobs, trips
 from .config import get_geocode_base_url, get_geocode_user_agent, get_geocode_zoom
 from .database import get_connection
 
@@ -387,6 +387,11 @@ async def _run_refresh() -> None:
                 if jobs.cancelled():
                     return
                 updated = await loop.run_in_executor(_executor, _refresh_one, photo_id)
+            if updated:
+                # location_name is one of the facts the description is composed
+                # from, so recompose it now (best-effort, never raises) rather
+                # than making the user run Refresh Descriptions afterward.
+                await loop.run_in_executor(_executor, enrich.enrich_description, photo_id)
             progress.record(updated)
 
         await asyncio.gather(*(handle(photo_id) for photo_id in photo_ids))

@@ -97,6 +97,7 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
   // "Done" text can show for a moment, then go away -- an error stays up
   // (it lives in the server's snapshot until the next run replaces it).
   const [justFinished, setJustFinished] = useState(null);
+  const [rescanPets, setRescanPets] = useState(false);
   const previousActiveRef = useRef(null);
   const [purgeError, setPurgeError] = useState(null);
 
@@ -220,12 +221,8 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
     startJob(refreshTrips);
   }
 
-  function handleRefreshPets() {
-    startJob(() => refreshPets(false));
-  }
-
-  function handleRescanPets() {
-    startJob(() => refreshPets(true));
+  function handleScanPets() {
+    startJob(() => refreshPets(rescanPets));
   }
 
   // Re-detects every photo's faces against the current detection settings
@@ -494,66 +491,31 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
         <div className="management-refresh-row">
           <div className="management-refresh-control">
             <JobControl
-              kind="trips"
-              jobs={jobs}
-              justFinished={justFinished}
-              idleLabel="Rebuild Trips"
-              running={(_state, pct) => `Finding trips… ${pct}%`}
-              done={(state) =>
-                state.homes === 0
-                  ? "No home location found, so no trips could be told apart"
-                  : `Done -- ${state.created} new, ${state.updated} updated, ${state.removed} removed`
-              }
-              failed={(state) => `Trip detection failed${state.error ? `: ${state.error}` : ""}`}
-              onStart={handleRebuildTrips}
-              onCancel={handleCancel}
-            />
-          </div>
-          <p className="management-refresh-description">
-            Finds trips: runs of photos that have both a date and GPS coordinates and were taken away
-            from home. Home is worked out from where most of your days are spent. It also runs after
-            every sync. Photos without a date or location are never placed in a trip automatically.
-          </p>
-        </div>
-
-        <div className="management-refresh-row">
-          <div className="management-refresh-control">
-            <JobControl
               kind="pets"
               jobs={jobs}
               justFinished={justFinished}
-              idleLabel="Detect Pets"
+              idleLabel="Scan for Pets"
               running={(_state, pct) => `Looking for pets… ${pct}%`}
               done={(state) => `Done -- ${state.found} found`}
               failed={(state) => `Pet detection failed${state.error ? `: ${state.error}` : ""}`}
-              onStart={handleRefreshPets}
+              onStart={handleScanPets}
               onCancel={handleCancel}
             />
+            <label>
+              <input
+                type="checkbox"
+                checked={rescanPets}
+                onChange={(event) => setRescanPets(event.target.checked)}
+              />{" "}
+              Rescan photos already scanned
+            </label>
           </div>
           <p className="management-refresh-description">
             Finds cats and dogs in photos indexed before pet detection existed, so they can be tagged.
-            Safe to run any time: it only adds pet boxes and never touches people or their tags.
-          </p>
-        </div>
-
-        <div className="management-refresh-row">
-          <div className="management-refresh-control">
-            <JobControl
-              kind="pets"
-              jobs={jobs}
-              justFinished={justFinished}
-              idleLabel="Rescan All Photos for Pets"
-              running={(_state, pct) => `Rescanning for pets… ${pct}%`}
-              done={(state) => `Done -- ${state.found} found`}
-              failed={(state) => `Pet rescan failed${state.error ? `: ${state.error}` : ""}`}
-              onStart={handleRescanPets}
-              onCancel={handleCancel}
-            />
-          </div>
-          <p className="management-refresh-description">
-            Looks for pets in every photo again, including ones already scanned. Use it if Detect Pets
-            found nothing. People and their tags are untouched, but existing pet boxes are replaced,
-            so pet tags are lost.
+            By default it only visits photos not yet scanned, and only adds pet boxes -- people and
+            their tags are never touched. Tick &quot;Rescan photos already scanned&quot; to look at every
+            photo again (use it if the first scan found nothing); existing pet boxes are then
+            replaced, so pet tags are lost.
           </p>
         </div>
 
@@ -857,7 +819,29 @@ export default function ManagementPage({ jobs, onJobsChange, onRefresh, onBack, 
       )}
 
       <h2>Trips</h2>
-      <TripsManagement jobs={jobs} onTripsChanged={onTripsChanged} />
+      <TripsManagement
+        jobs={jobs}
+        onTripsChanged={onTripsChanged}
+        rebuildControl={
+          <>
+            <JobControl
+              kind="trips"
+              jobs={jobs}
+              justFinished={justFinished}
+              idleLabel="Rebuild Trips"
+              running={(_state, pct) => `Finding trips… ${pct}%`}
+              done={(state) =>
+                state.homes === 0
+                  ? "No home location found, so no trips could be told apart"
+                  : `Done -- ${state.created} new, ${state.updated} updated, ${state.removed} removed`
+              }
+              failed={(state) => `Trip detection failed${state.error ? `: ${state.error}` : ""}`}
+              onStart={handleRebuildTrips}
+              onCancel={handleCancel}
+            />
+          </>
+        }
+      />
 
       <div className="management-danger-zone">
         <h3>Danger zone</h3>

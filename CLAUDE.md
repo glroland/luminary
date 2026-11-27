@@ -854,7 +854,7 @@ cached) is also per-pod, in-memory state — same caveat.
   human and a pet candidate is read once per pass. Existing libraries aren't
   re-scanned by sync (their `face_detection_done` is already TRUE), so
   `pets.py` is the **non-destructive backfill** (`POST /api/pets/refresh`,
-  the Manage page's "Detect Pets"): it visits only photos with `NOT
+  the Manage page's "Scan for Pets" (its "Rescan photos already scanned" checkbox passes `rescan`)): it visits only photos with `NOT
   pet_detection_done`, calls `replace_faces(..., kinds=["pet"])` and sets the
   flag, so it never touches human faces or tags, is idempotent (a second run
   finds nothing), and leaves a photo owed (retried next run) if its original
@@ -1201,7 +1201,7 @@ cached) is also per-pod, in-memory state — same caveat.
   and "Refresh Locations" (`geocode.py`'s backend, `POST
   /api/locations/refresh` — re-geocodes every photo that already has GPS
   coordinates, since there's no automatic backfill for `location_name`
-  the way there isn't one for `latitude`/`longitude`), and "Detect Pets"
+  the way there isn't one for `latitude`/`longitude`), and "Scan for Pets"
   (`pets.py`'s backend, `POST /api/pets/refresh` — the non-destructive pet
   backfill for photos indexed before pets existed; its progress shows
   `found`, not `updated`). The buttons
