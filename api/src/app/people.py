@@ -174,12 +174,14 @@ def get_representative_thumbnail(person_id: str) -> Optional[bytes]:
 
 def list_faces_for_individual(person_id: str) -> list[dict]:
     """Every face currently tagged to `person_id` -- the data behind the
-    management page's per-individual accordion. Ordered by id purely for a
-    stable, deterministic response; `faces` has no timestamp column to
-    order by "most recently tagged" (see this module's docstring)."""
+    management page's per-individual accordion. Newest photo first (undated
+    photos last), id as a stable tiebreak."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, photo_id, tag_source, match_confidence FROM faces WHERE person_id = %s ORDER BY id", (person_id,)
+            "SELECT f.id, f.photo_id, f.tag_source, f.match_confidence FROM faces f "
+            "JOIN photos p ON p.id = f.photo_id WHERE f.person_id = %s "
+            "ORDER BY p.created_at DESC NULLS LAST, f.id",
+            (person_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -190,7 +192,8 @@ def list_rejections_for_individual(person_id: str) -> list[dict]:
     those are served per rejection by get_rejection_thumbnail."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, photo_id FROM face_rejections WHERE person_id = %s ORDER BY created_at, id",
+            "SELECT r.id, r.photo_id FROM face_rejections r LEFT JOIN photos p ON p.id = r.photo_id "
+            "WHERE r.person_id = %s ORDER BY p.created_at DESC NULLS LAST, r.id",
             (person_id,),
         ).fetchall()
         return [dict(row) for row in rows]
