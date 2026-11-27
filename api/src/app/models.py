@@ -46,6 +46,13 @@ class Photo(BaseModel):
     # sync.py's `needs_checksum`), which happens for every new/changed file
     # and is lazily backfilled for any already-indexed photo missing it.
     checksum: Optional[str] = None
+    # "image", "video", or "animated" (an animated GIF/WebP/APNG: still
+    # served and shown as an image, but flagged so the gallery can badge it).
+    # See docs/video-support.md. A video's `thumbnail` is its poster frame.
+    media_kind: Literal["image", "video", "animated"] = "image"
+    # A video's length in seconds; null for everything else (and for a video
+    # ffmpeg couldn't read).
+    duration_seconds: Optional[float] = None
 
 
 class PhotoList(BaseModel):

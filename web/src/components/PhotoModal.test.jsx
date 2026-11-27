@@ -824,4 +824,59 @@ describe("PhotoModal", () => {
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
   });
+  describe("videos", () => {
+    const VIDEO = { ...PHOTO, id: "9", filename: "clip.mp4", media_kind: "video", duration_seconds: 12 };
+
+    it("plays a video in place of the image", async () => {
+      const { container } = render(<PhotoModal photo={VIDEO} onClose={() => {}} />);
+      await flush();
+      const player = container.querySelector("video");
+      expect(player).toHaveAttribute("src", expect.stringContaining("/photos/9/original"));
+      expect(container.querySelector(".photo-modal-image-wrap > img")).not.toBeInTheDocument();
+    });
+
+    it("ignores the face shortcut for a video", async () => {
+      render(<PhotoModal photo={VIDEO} onClose={() => {}} />);
+      await flush();
+      pressF();
+      await flush();
+      expect(screen.queryByRole("heading", { name: /^people$/i })).not.toBeInTheDocument();
+    });
+
+    it("leaves the arrow keys to a focused player but navigates otherwise", async () => {
+      const onNavigate = vi.fn();
+      const other = { ...PHOTO, id: "10", filename: "next.jpg" };
+      const { container } = render(
+        <PhotoModal photo={VIDEO} photos={[VIDEO, other]} onNavigate={onNavigate} onClose={() => {}} />
+      );
+      await flush();
+
+      fireEvent.keyDown(container.querySelector("video"), { key: "ArrowRight" });
+      expect(onNavigate).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+      expect(onNavigate).toHaveBeenCalledWith(other);
+    });
+
+    it("stops showing the backend status once the video has metadata", async () => {
+      client.fetchBackendStatus.mockResolvedValue({
+        status: "connecting", message: "Connecting", steps: [], error: null, elapsed_seconds: 1,
+      });
+      const { container } = render(<PhotoModal photo={VIDEO} onClose={() => {}} />);
+      await flush();
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      fireEvent.loadedMetadata(container.querySelector("video"));
+      await flush();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("still shows an image for an animated image", async () => {
+      const { container } = render(
+        <PhotoModal photo={{ ...PHOTO, id: "11", filename: "a.gif", media_kind: "animated" }} onClose={() => {}} />
+      );
+      await flush();
+      expect(container.querySelector("video")).not.toBeInTheDocument();
+      expect(container.querySelector(".photo-modal-image-wrap > img")).toBeInTheDocument();
+    });
+  });
 });

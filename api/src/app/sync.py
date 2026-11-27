@@ -65,10 +65,13 @@ a refresh is already running (e.g. a "Full Face Refresh" is in flight).
 """
 
 import asyncio
+import contextlib
 import io
 import logging
 import mimetypes
 import os.path
+import shutil
+import tempfile
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -77,8 +80,27 @@ from typing import Optional
 
 from PIL import Image, ImageOps
 
-from . import chat, enrich, face_detection, geocode, jobs, perceptual, pet_detection, recognition, storage, trips
-from .config import get_max_concurrency, get_pet_detection_enabled
+from . import (
+    chat,
+    enrich,
+    face_detection,
+    geocode,
+    jobs,
+    perceptual,
+    pet_detection,
+    recognition,
+    storage,
+    trips,
+    video,
+)
+from .config import (
+    get_index_live_photo_videos,
+    get_index_videos,
+    get_max_concurrency,
+    get_pet_detection_enabled,
+    get_video_concurrency,
+    get_video_max_probe_bytes,
+)
 from .database import get_connection
 from .storage import THUMBNAIL_SIZE, _extract_exif, _fs_and_root
 
@@ -102,7 +124,53 @@ IMAGE_EXTENSIONS = {
     ".heif",
 }
 
+# Movies (docs/video-support.md). ffprobe/ffmpeg need a seekable local file,
+# and each probe may be a multi-GB temp copy, so far fewer run at once than
+# the image workers above. Read once at import, like MAX_CONCURRENCY.
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi"}
+_VIDEO_CONTENT_TYPES = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+}
+# Image formats that can hold several frames; only these are checked for
+# animation (a multi-image HEIC, say, is not a moving picture).
+_ANIMATABLE_FORMATS = {"GIF", "WEBP", "PNG", "APNG"}
+_video_slots = threading.BoundedSemaphore(get_video_concurrency())
+
 _executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
+
+
+def select_media_paths(all_paths: list[str]) -> list[str]:
+    """The discovered files sync indexes: images, plus (unless switched off)
+    movies. A `.mov` that is the companion clip of a Live Photo -- a
+    same-stem image in the same directory -- is left out unless
+    LUMINARY_INDEX_LIVE_PHOTO_VIDEOS is set: it would otherwise appear as a
+    second tile next to its still."""
+    index_videos = get_index_videos()
+    keep_live_clips = get_index_live_photo_videos()
+    image_stems = set()
+    if index_videos and not keep_live_clips:
+        for path in all_paths:
+            stem, extension = os.path.splitext(path)
+            if extension.lower() in IMAGE_EXTENSIONS:
+                image_stems.add(stem.lower())
+
+    selected = []
+    for path in all_paths:
+        stem, extension = os.path.splitext(path)
+        extension = extension.lower()
+        if extension in IMAGE_EXTENSIONS:
+            selected.append(path)
+        elif index_videos and extension in VIDEO_EXTENSIONS:
+            if extension == ".mov" and stem.lower() in image_stems:
+                logger.info("%s: skipping the video half of a Live Photo", path)
+                continue
+            selected.append(path)
+    return selected
 
 
 class _SyncProgress:
@@ -268,6 +336,9 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     info = storage.retry_transient(fs.info, path)
     size = info.get("size") or 0
 
+    if os.path.splitext(relative_path)[1].lower() in VIDEO_EXTENSIONS:
+        return _sync_one_video(fs, path, relative_path, existing_row, info, size)
+
     content_changed = not existing_row or existing_row["size_bytes"] != size
     needs_thumbnail = content_changed or not existing_row["has_thumbnail"]
     needs_florence = content_changed or not existing_row["face_detection_done"]
@@ -370,6 +441,13 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
         rgb = None
         with fs.open(path, "rb") as f:
             with Image.open(f) as raw_image:
+                # An animated GIF/WebP/APNG is still an image to everything
+                # else, but the gallery badges it as a moving picture.
+                fields["media_kind"] = (
+                    "animated"
+                    if raw_image.format in _ANIMATABLE_FORMATS and getattr(raw_image, "is_animated", False)
+                    else "image"
+                )
                 # Camera sensors commonly store pixels in landscape with an
                 # EXIF Orientation tag saying how to rotate for display (e.g.
                 # a portrait shot held sideways) -- bake that rotation in
@@ -448,8 +526,22 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
     fields["content_type"] = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
     fields["size_bytes"] = size
 
-    photo_id = existing_row["id"] if existing_row else str(uuid.uuid4())
+    photo_id = _write_row(existing_row, relative_path, fields)
 
+    # Only now, with the photo row safely in place (vlm_description still
+    # NULL/stale-cleared) and a usable decoded image in hand, attempt the
+    # caption+face-detection pipeline -- see its docstring for why it
+    # writes `vlm_description` last.
+    if rgb_image is not None and needs_florence:
+        _run_florence_pipeline(photo_id, rgb_image, relative_path)
+
+    return "updated" if existing_row else "inserted"
+
+
+def _write_row(existing_row: Optional[dict], relative_path: str, fields: dict) -> str:
+    """UPDATE the photo's row (or INSERT a new one) from `fields`; returns
+    its id."""
+    photo_id = existing_row["id"] if existing_row else str(uuid.uuid4())
     with get_connection() as conn:
         if existing_row:
             set_clause = ", ".join(f"{column} = %s" for column in fields)
@@ -464,13 +556,169 @@ def _sync_one_file(fs, path: str, relative_path: str, existing_row: Optional[dic
             placeholders = ", ".join("%s" for _ in fields)
             conn.execute(f"INSERT INTO photos ({columns}) VALUES ({placeholders})", tuple(fields.values()))
         conn.commit()
+    return photo_id
 
-    # Only now, with the photo row safely in place (vlm_description still
-    # NULL/stale-cleared) and a usable decoded image in hand, attempt the
-    # caption+face-detection pipeline -- see its docstring for why it
-    # writes `vlm_description` last.
-    if rgb_image is not None and needs_florence:
-        _run_florence_pipeline(photo_id, rgb_image, relative_path)
+
+@contextlib.contextmanager
+def _local_video(fs, path: str, size: int):
+    """A local filesystem path ffmpeg can seek in. A local backend is read
+    in place; anything else (SMB/S3/HTTP) is copied to a temp file that is
+    removed afterwards -- read-only against the backend either way. Yields
+    None when the file is too big to copy (LUMINARY_VIDEO_MAX_PROBE_BYTES)."""
+    from fsspec.implementations.local import LocalFileSystem
+
+    if isinstance(fs, LocalFileSystem):
+        yield path
+        return
+    if size > get_video_max_probe_bytes():
+        yield None
+        return
+
+    suffix = os.path.splitext(path)[1]
+    handle, temp_path = tempfile.mkstemp(prefix="luminary-video-", suffix=suffix)
+    try:
+        with os.fdopen(handle, "wb") as out:
+
+            def copy():
+                out.seek(0)
+                out.truncate()
+                with fs.open(path, "rb") as source:
+                    shutil.copyfileobj(source, out, 1024 * 1024)
+
+            storage.retry_transient(copy)
+        yield temp_path
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_path)
+
+
+def _read_video(fs, path: str, relative_path: str, size: int):
+    """Best-effort probe + poster of one movie: (VideoInfo, poster image),
+    either of which is None when it couldn't be had -- a missing ffmpeg, an
+    oversized or corrupt file are logged and the movie is indexed with
+    metadata only, never failed."""
+    if not video.available():
+        logger.warning("ffmpeg/ffprobe not found; indexing %r without a poster or duration", relative_path)
+        return None, None
+    with _video_slots:
+        try:
+            with _local_video(fs, path, size) as local_path:
+                if local_path is None:
+                    logger.warning(
+                        "%r is %d bytes, over LUMINARY_VIDEO_MAX_PROBE_BYTES; indexing it without a poster",
+                        relative_path,
+                        size,
+                    )
+                    return None, None
+                info = video.probe(local_path)
+                try:
+                    poster = video.poster(local_path, info.duration)
+                except video.VideoError:
+                    logger.warning("No poster frame for %r", relative_path, exc_info=True)
+                    poster = None
+                return info, poster
+        except Exception:
+            logger.warning("Could not read video %r; indexing metadata only", relative_path, exc_info=True)
+            return None, None
+
+
+def _sync_one_video(fs, path: str, relative_path: str, existing_row: Optional[dict], info: dict, size: int) -> str:
+    """_sync_one_file for a movie (docs/video-support.md). Same "unchanged"
+    fast path and same reconciliation outcomes, but: the thumbnail is a
+    poster frame, the date/GPS come from the container, and it is never
+    captioned or scanned for faces/pets (those flags are written TRUE so the
+    backfills and Full Face Refresh never pick it up)."""
+    content_changed = not existing_row or existing_row["size_bytes"] != size
+    needs_thumbnail = content_changed or not existing_row["has_thumbnail"]
+    needs_checksum = content_changed or not existing_row["checksum"]
+    needs_date = content_changed or not existing_row["has_created_at"]
+
+    if not existing_row:
+        logger.info("%s: new video -- inserting", path)
+    elif content_changed:
+        logger.info(
+            "%s: video changed (%d -> %d bytes); metadata and poster will be recomputed",
+            path,
+            existing_row["size_bytes"],
+            size,
+        )
+    elif needs_thumbnail or needs_checksum or needs_date:
+        logger.info("%s: no content change, but backfilling missing poster/checksum/date", path)
+    else:
+        logger.info("%s: no change detected", path)
+    if existing_row and not (content_changed or needs_thumbnail or needs_checksum or needs_date):
+        return "unchanged"
+
+    fields: dict = {}
+    if content_changed:
+        fields.update(
+            width=None,
+            height=None,
+            duration_seconds=None,
+            created_at=None,
+            latitude=None,
+            longitude=None,
+            **geocode.location_fields(None),
+            thumbnail=None,
+            vlm_description=None,
+            description=None,
+            checksum=None,
+            phash=None,
+            phash_done=False,
+        )
+    if needs_checksum:
+        fields["checksum"] = _compute_checksum(fs, path, relative_path)
+
+    video_info = poster = None
+    if needs_thumbnail or needs_date:
+        video_info, poster = _read_video(fs, path, relative_path, size)
+
+    if video_info is not None:
+        if video_info.duration is not None:
+            fields["duration_seconds"] = video_info.duration
+        if video_info.width and video_info.height:
+            fields["width"], fields["height"] = video_info.width, video_info.height
+        if video_info.created_at is not None and needs_date:
+            fields["created_at"] = video_info.created_at.isoformat()
+        if video_info.latitude is not None and video_info.longitude is not None and needs_thumbnail:
+            fields["latitude"], fields["longitude"] = video_info.latitude, video_info.longitude
+    if poster is not None and needs_thumbnail:
+        if not fields.get("width"):
+            fields["width"], fields["height"] = poster.size
+        thumbnail = poster.copy()
+        thumbnail.thumbnail(THUMBNAIL_SIZE)
+        buffer = io.BytesIO()
+        thumbnail.save(buffer, "JPEG")
+        fields["thumbnail"] = buffer.getvalue()
+        fields["phash"] = perceptual.dhash_from_bytes(fields["thumbnail"])
+        fields["phash_done"] = True
+
+    if needs_date and fields.get("created_at") is None:
+        modified_at = storage.file_modified_at(info)
+        if modified_at is not None:
+            fields["created_at"] = modified_at.isoformat()
+
+    if needs_thumbnail and fields.get("latitude") is not None and fields.get("longitude") is not None:
+        fields.update(
+            geocode.location_fields(_describe_location(fields["latitude"], fields["longitude"], relative_path))
+        )
+
+    fields["media_kind"] = "video"
+    fields["content_type"] = _VIDEO_CONTENT_TYPES.get(
+        os.path.splitext(relative_path)[1].lower(),
+        mimetypes.guess_type(relative_path)[0] or "application/octet-stream",
+    )
+    fields["size_bytes"] = size
+    # Never face/pet scanned. TRUE up front so no backfill ever visits it.
+    fields["face_detection_done"] = True
+    fields["pet_detection_done"] = True
+
+    photo_id = _write_row(existing_row, relative_path, fields)
+
+    # A video has no caption, so its description is composed from the
+    # filename and place alone (best-effort; a no-op when not configured).
+    if content_changed or not existing_row:
+        enrich.enrich_description(photo_id)
 
     return "updated" if existing_row else "inserted"
 
@@ -670,7 +918,7 @@ async def _run_sync() -> None:
     try:
         fs, root = await loop.run_in_executor(_executor, _fs_and_root)
         all_paths = await loop.run_in_executor(_executor, fs.find, root)
-        paths = [p for p in all_paths if os.path.splitext(p)[1].lower() in IMAGE_EXTENSIONS]
+        paths = select_media_paths(all_paths)
         existing = await loop.run_in_executor(_executor, _load_existing)
 
         logger.info("Sync found %d photo(s) under %s", len(paths), root)

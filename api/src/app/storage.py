@@ -4,8 +4,9 @@ import logging
 import re
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 import fsspec
 import psycopg
@@ -25,7 +26,8 @@ THUMBNAIL_SIZE = (320, 320)
 # photo's thumbnail bytes get read off disk just to list filenames.
 METADATA_COLUMNS = (
     "id, filename, content_type, size_bytes, width, height, created_at, latitude, longitude, "
-    "location_name, location_country, location_state, location_city, vlm_description, description, checksum"
+    "location_name, location_country, location_state, location_city, vlm_description, description, checksum, "
+    "media_kind, duration_seconds"
 )
 
 def _fs_and_root() -> tuple[fsspec.AbstractFileSystem, str]:
@@ -88,9 +90,25 @@ def retry_transient(fn, *args, **kwargs):
             delay *= 2
 
 
-def _iter_file(fs: fsspec.AbstractFileSystem, path: str, chunk_size: int = 1024 * 1024):
+def _iter_file(
+    fs: fsspec.AbstractFileSystem,
+    path: str,
+    chunk_size: int = 1024 * 1024,
+    start: int = 0,
+    length: Optional[int] = None,
+):
+    """The file's bytes in chunks; `start`/`length` select a byte range
+    (HTTP Range requests for video playback)."""
     with fs.open(path, "rb") as f:
-        while chunk := f.read(chunk_size):
+        if start:
+            f.seek(start)
+        remaining = length
+        while remaining is None or remaining > 0:
+            chunk = f.read(chunk_size if remaining is None else min(chunk_size, remaining))
+            if not chunk:
+                break
+            if remaining is not None:
+                remaining -= len(chunk)
             yield chunk
 
 
@@ -563,6 +581,72 @@ def stream_original(metadata: dict):
         return _iter_file(fs, path) if fs.exists(path) else None
 
     return _with_reconnect(open_stream)
+
+
+class RangeNotSatisfiable(Exception):
+    """The requested byte range lies outside the file (HTTP 416)."""
+
+    def __init__(self, total: int):
+        super().__init__(f"range not satisfiable for a {total}-byte file")
+        self.total = total
+
+
+@dataclass
+class OriginalRange:
+    total: int  # size of the whole file
+    start: int
+    end: int  # inclusive
+    chunks: Iterator[bytes]
+    partial: bool = True  # False: the header wasn't a usable range, this is the whole file
+
+
+_RANGE_RE = re.compile(r"^\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*$")
+
+
+def parse_byte_range(header: str, total: int) -> Optional[tuple[int, int]]:
+    """Resolve a single-range `Range: bytes=...` header against a file of
+    `total` bytes to an inclusive (start, end). None if the header isn't a
+    single byte range we understand (the caller then serves the whole file,
+    which HTTP allows); raises RangeNotSatisfiable if it is one that falls
+    outside the file. `a-b`, `a-` and the suffix form `-n` are supported."""
+    match = _RANGE_RE.match(header or "")
+    if not match:
+        return None
+    first, last = match.groups()
+    if first == "" and last == "":
+        return None
+    if first == "":  # suffix: the last n bytes
+        length = int(last)
+        if length == 0 or total == 0:
+            raise RangeNotSatisfiable(total)
+        return max(0, total - length), total - 1
+    start = int(first)
+    end = total - 1 if last == "" else min(int(last), total - 1)
+    if start >= total or end < start:
+        raise RangeNotSatisfiable(total)
+    return start, end
+
+
+def stream_original_range(metadata: dict, range_header: str) -> Optional[OriginalRange]:
+    """Like stream_original, for one `Range` header. The size comes from the
+    backend itself (not the indexed `size_bytes`, which can be stale), so the
+    Content-Range/Content-Length the caller sends are always true. None if
+    the file is missing. A header that isn't a single byte range gives the
+    whole file with `partial=False`; one outside the file raises
+    RangeNotSatisfiable (HTTP 416)."""
+
+    def open_range(fs, root):
+        path = f"{root}/{metadata['filename']}"
+        if not fs.exists(path):
+            return None
+        total = int(retry_transient(fs.info, path).get("size") or 0)
+        resolved = parse_byte_range(range_header, total)
+        if resolved is None:
+            return OriginalRange(total, 0, total - 1, _iter_file(fs, path), partial=False)
+        start, end = resolved
+        return OriginalRange(total, start, end, _iter_file(fs, path, start=start, length=end - start + 1))
+
+    return _with_reconnect(open_range)
 
 
 def read_original_bytes(metadata: dict) -> Optional[bytes]:

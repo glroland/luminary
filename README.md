@@ -86,7 +86,7 @@ target/               (generated, gitignored) local venv and pytest cache --
 | POST   | `/api/photos`               | Always `403` — uploads are disabled; see "Data safety" |
 | GET    | `/api/photos/{id}`          | Get metadata for one photo          |
 | GET    | `/api/photos/{id}/thumbnail`| Thumbnail JPEG (served from Postgres) |
-| GET    | `/api/photos/{id}/original` | Original file, streamed from the photos backend |
+| GET    | `/api/photos/{id}/original` | Original file, streamed from the photos backend (a video honours `Range`, answering `206`) |
 | DELETE | `/api/photos/{id}`          | Remove a photo from the index only — does not touch the source file |
 | POST   | `/api/sync`                 | Start a background reconciliation of the Postgres index against the configured photos backend (insert rows for new files, update rows for changed files, delete rows for files no longer present) |
 | GET    | `/api/sync/status`          | Progress of the current/last sync: `{status, processed, total, inserted, updated, deleted, failed, error}` |
@@ -597,6 +597,27 @@ way. Pets are matched with their own model (DINOv2) and their own
 thresholds (`LUMINARY_PET_MATCH_THRESHOLD`), never against people. If the
 pet model can't load, pets are skipped and people are still matched.
 
+### Movies
+
+Movie files (`.mp4 .m4v .mov .webm .mkv .avi`) in the library are indexed like
+photos and shown in the gallery with their poster frame, a video-camera icon
+and their length; animated GIF/WebP/PNG get the icon too. Clicking one plays
+it in the viewer with the browser's own player — originals are streamed as-is
+(with HTTP `Range` support so seeking works) and never transcoded, so a file
+plays only if your browser can decode it (H.264 `.mp4`/`.mov` everywhere; the
+viewer offers a download link when it can't). The poster, date, GPS and
+duration are read with `ffmpeg`/`ffprobe` (in the container image); movies are
+not captioned or scanned for faces/pets. Read-only like everything else.
+The `.mov` half of an iPhone Live Photo is skipped. See
+`docs/video-support.md`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LUMINARY_INDEX_VIDEOS` | `1` | `0` indexes images only |
+| `LUMINARY_INDEX_LIVE_PHOTO_VIDEOS` | `0` | `1` also indexes Live Photo `.mov` clips |
+| `LUMINARY_VIDEO_MAX_PROBE_BYTES` | `2147483648` | Larger movies on a non-local backend are indexed without a poster (they'd have to be copied to a temp file first) |
+| `LUMINARY_VIDEO_CONCURRENCY` | `2` | Movies probed at once |
+
 ### Description enrichment
 
 The description shown in the UI (`photos.description`) isn't Florence-2's
@@ -696,7 +717,10 @@ instead of erroring.
 ## Local development
 
 Requires Python 3.12+, Node 20+, `podman` (or `docker`), and a reachable
-Postgres server (see "Database" above) on your `PATH`/network.
+Postgres server (see "Database" above) on your `PATH`/network. Movie
+indexing also needs `ffmpeg` (which includes `ffprobe`) on your `PATH`
+(`brew install ffmpeg`); without it videos are still listed, just without a
+poster or duration.
 
 ```bash
 make install     # creates target/venv, installs web/node_modules, downloads the models into target/model-cache

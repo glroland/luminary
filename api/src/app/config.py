@@ -460,3 +460,38 @@ def get_trip_home_min_days() -> int:
 def get_trip_stop_radius_km() -> float:
     """Photos this close together become one stop on a trip's map."""
     return _env_number("LUMINARY_TRIP_STOP_RADIUS_KM", 2.0)
+
+
+# --- Video support (video.py, sync.py) -------------------------------------
+
+
+def _flag(name: str, default: str) -> bool:
+    return os.environ.get(name, default).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def get_index_videos() -> bool:
+    """Whether sync.py indexes movie files (see docs/video-support.md). On
+    by default; `LUMINARY_INDEX_VIDEOS=0` makes sync see only images."""
+    return _flag("LUMINARY_INDEX_VIDEOS", "1")
+
+
+def get_index_live_photo_videos() -> bool:
+    """Whether the `.mov` half of an iPhone Live Photo is indexed as a video
+    of its own. Off by default: it would show up as a second tile next to
+    its still (same stem, same directory)."""
+    return _flag("LUMINARY_INDEX_LIVE_PHOTO_VIDEOS", "0")
+
+
+def get_video_max_probe_bytes() -> int:
+    """Largest video sync will copy to a local temp file to probe and take a
+    poster frame from (ffmpeg needs a seekable file, and a non-local backend
+    has to be copied first). A bigger file is still indexed, with metadata
+    only. Default 2 GiB; a local-path backend is never copied, so it is
+    never subject to this."""
+    return int(os.environ.get("LUMINARY_VIDEO_MAX_PROBE_BYTES", str(2 * 1024**3)))
+
+
+def get_video_concurrency() -> int:
+    """How many videos sync probes at once -- each may be a multi-GB temp
+    copy, so far fewer than get_max_concurrency()'s image workers."""
+    return max(1, int(os.environ.get("LUMINARY_VIDEO_CONCURRENCY", "2")))

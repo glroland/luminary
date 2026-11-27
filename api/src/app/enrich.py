@@ -106,7 +106,7 @@ def _photo_facts(photo_id: str) -> Optional[dict]:
     call was still in flight)."""
     with get_connection() as conn:
         photo = conn.execute(
-            "SELECT filename, vlm_description, location_name FROM photos WHERE id = %s", (photo_id,)
+            "SELECT filename, vlm_description, location_name, media_kind FROM photos WHERE id = %s", (photo_id,)
         ).fetchone()
         if not photo:
             return None
@@ -119,13 +119,16 @@ def _photo_facts(photo_id: str) -> Optional[dict]:
         "filename": photo["filename"],
         "vlm_description": photo["vlm_description"],
         "location_name": photo["location_name"],
+        "media_kind": photo["media_kind"],
         "individuals": [row["name"] for row in individuals if row["kind"] != "pet"],
         "pets": [row["name"] for row in individuals if row["kind"] == "pet"],
     }
 
 
 def _build_prompt(facts: dict) -> str:
-    lines = [f"Photo filename/path: {facts['filename']}"]
+    # A movie has no caption to build on -- only its name and place.
+    noun = "video" if facts.get("media_kind") == "video" else "photo"
+    lines = [f"{noun.capitalize()} filename/path: {facts['filename']}"]
     if facts["vlm_description"]:
         lines.append(f"Automated image caption: {facts['vlm_description']}")
     if facts["location_name"]:
@@ -135,7 +138,7 @@ def _build_prompt(facts: dict) -> str:
     if facts.get("pets"):
         lines.append(f"Pets identified in the photo (animals, not people): {', '.join(facts['pets'])}")
     lines.append(
-        "\nWrite a detailed, natural-language description (3-5 sentences) of this photo for a "
+        f"\nWrite a detailed, natural-language description (3-5 sentences) of this {noun} for a "
         "personal photo library, weaving in whichever of the facts above are useful. Describe the "
         "scene vividly -- setting, mood, notable details -- rather than a one-line summary. Don't "
         "invent details beyond what's given above, don't mention the filename literally, and don't "

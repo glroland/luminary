@@ -112,6 +112,10 @@ spec:
               value: {{ .Values.env.faceMinSize | quote }}
             - name: LUMINARY_MAX_CONCURRENCY
               value: {{ .Values.env.maxConcurrency | quote }}
+            # sync.py copies a movie from a non-local photos backend here to
+            # probe it (docs/video-support.md); /data is the writable volume.
+            - name: TMPDIR
+              value: /data
             - name: PORT
               value: {{ .Values.global.apiPort | quote }}
           volumeMounts:

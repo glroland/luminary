@@ -170,6 +170,11 @@ def init_db() -> None:
         # indexed before pet detection existed have that one TRUE, and the
         # pets backfill must be able to tell them apart from scanned ones.
         conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS pet_detection_done BOOLEAN NOT NULL DEFAULT FALSE")
+        # 'image' | 'video' | 'animated' (animated GIF/WebP/APNG), and a video's
+        # length -- see docs/video-support.md. A constant DEFAULT is
+        # metadata-only, so existing rows read 'image' with no backfill.
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_kind TEXT NOT NULL DEFAULT 'image'")
+        conn.execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION")
 
         # Catalog of named individuals faces can be manually tagged as --
         # see people.py / routers/individuals.py.
@@ -450,6 +455,16 @@ def backfill_data() -> None:
         "UPDATE photos SET face_detection_done = TRUE WHERE id IN ("
         "SELECT id FROM photos WHERE NOT face_detection_done AND EXISTS "
         "(SELECT 1 FROM faces WHERE faces.photo_id = photos.id) LIMIT %s)",
+    )
+    # An existing GIF is almost always animated, and re-reading every one to
+    # check isn't worth it. Sync classifies exactly whenever it (re)reads a
+    # file (a static GIF it re-reads goes back to 'image', and this puts it
+    # right back -- a rare, harmless mislabel). WebP/APNG are classified
+    # only when sync next reads them.
+    _backfill_in_batches(
+        "photos.media_kind (gif)",
+        "UPDATE photos SET media_kind = 'animated' WHERE id IN ("
+        "SELECT id FROM photos WHERE media_kind = 'image' AND lower(filename) LIKE '%%.gif' LIMIT %s)",
     )
     _backfill_phashes()
 

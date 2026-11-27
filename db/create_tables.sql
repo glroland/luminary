@@ -101,6 +101,12 @@ ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detection_done BOOLEAN NOT NULL
 -- can find photos indexed before pets existed.
 ALTER TABLE photos ADD COLUMN IF NOT EXISTS pet_detection_done BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- Movies (docs/video-support.md): 'image' | 'video' | 'animated' (animated
+-- GIF/WebP/APNG, shown with the video-camera icon but still an <img>), and a
+-- video's length. A video's `thumbnail` is its poster frame.
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_kind TEXT NOT NULL DEFAULT 'image';
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION;
+
 -- SHA-256 hex digest of the file's raw bytes (storage.compute_checksum),
 -- for reliably telling whether two files are byte-identical -- unlike
 -- size_bytes, a collision here is cryptographically implausible.

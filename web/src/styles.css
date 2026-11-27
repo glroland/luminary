@@ -451,6 +451,40 @@ textarea {
   padding-right: 3.2rem;
 }
 
+/* Video-camera badge (and a video's length) for videos and animated images,
+   bottom-right: literal colours, like the score badge, since it sits on a
+   photo in either theme. A score badge on the same tile stacks above it. */
+.photo-card-motion {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.35rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.68);
+  color: #ffffff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.photo-card-motion svg {
+  display: block;
+}
+
+.photo-card-moving .photo-card-overlay {
+  padding-right: 3.2rem;
+}
+
+.photo-card-moving.photo-card-scored .photo-card-score {
+  bottom: 2rem;
+}
+
 /* Description tooltip, shown after the pointer has rested on the card for
    1s (the transition-delay on :hover). Leaving the card hides it at once,
    since the non-hover rule has no delay. pointer-events: none so it never
@@ -640,6 +674,46 @@ textarea {
 
 /* Shown over the empty image pane only while the API is (re)connecting to
    the photo server -- see PhotoModal.jsx. Never in a normal open. */
+/* A video fills the image pane like the <img> does. */
+.photo-modal-image-wrap > .video-player {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+  animation: photo-in 0.25s ease;
+}
+
+/* A video this browser can't decode: poster plus a download link. */
+.photo-modal-image-wrap > .video-player-unsupported {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1rem;
+  color: #ffffff;
+  text-align: center;
+}
+
+.video-player-unsupported img {
+  max-width: 100%;
+  min-height: 0;
+  flex: 1;
+  object-fit: contain;
+}
+
+.video-player-unsupported-message p {
+  margin: 0 0 0.4rem;
+}
+
+.video-player-unsupported-message a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .photo-modal-backend-status {
   position: absolute;
   inset: 0;

@@ -14,7 +14,9 @@ import {
   untagFace,
   untagPhoto,
 } from "../api/client.js";
+import { isVideo } from "../media.js";
 import PhotoMap from "./PhotoMap.jsx";
+import VideoPlayer from "./VideoPlayer.jsx";
 
 // Sentinel `hoveredId` for the face menu's "Unmatch" entry (never a real
 // individual id).
@@ -339,7 +341,10 @@ export default function PhotoModal({
           target.isContentEditable);
       if (isEditable) return;
 
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      // A focused <video> uses the arrows (and space) to seek/play.
+      const inPlayer = target instanceof HTMLElement && target.tagName === "VIDEO";
+
+      if (!inPlayer && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
         const destination = event.key === "ArrowLeft" ? previousPhoto : nextPhoto;
         if (destination) {
           event.preventDefault();
@@ -354,6 +359,8 @@ export default function PhotoModal({
         return;
       }
       if (event.key.toLowerCase() !== "f") return;
+      // Faces are only detected in stills.
+      if (isVideo(photo)) return;
 
       // Face boxes are positioned from imgRect, not the live (possibly
       // scaled) image -- leaving a hover-zoom engaged while they're shown
@@ -602,6 +609,9 @@ export default function PhotoModal({
 
         <div className="photo-modal-image-pane">
           <div className="photo-modal-image-wrap">
+            {isVideo(photo) ? (
+              <VideoPlayer key={photo.id} photo={photo} onReady={() => setImageLoaded(true)} />
+            ) : (
             <img
               // Keyed so each photo gets a fresh element: the fade-in
               // replays, and the previous photo doesn't linger on screen
@@ -624,6 +634,7 @@ export default function PhotoModal({
                   : undefined
               }
             />
+            )}
             {showBackendStatus && (
               <div
                 className="photo-modal-backend-status"

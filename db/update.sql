@@ -97,3 +97,7 @@ CREATE TABLE IF NOT EXISTS trip_exclusions (
     photo_id TEXT NOT NULL,
     PRIMARY KEY (trip_id, photo_id)
 );
+
+-- Movies (docs/video-support.md).
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS media_kind TEXT NOT NULL DEFAULT 'image';
+ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISION;

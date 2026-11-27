@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { thumbnailUrl } from "../api/client.js";
+import { formatDuration, isMoving, isVideo } from "../media.js";
 
 // Keep in step with .photo-card-tooltip's width/offset in styles.css.
 const TOOLTIP_WIDTH_PX = 280;
@@ -29,6 +30,10 @@ function formatDate(createdAt) {
 // App.jsx's handleSearchResults); it's shown as a percentage badge in the
 // tile's bottom-right corner, always visible rather than hover-only.
 //
+// A video or animated image carries a video-camera badge in the tile's
+// bottom-right corner (always visible); a video also shows its length. A
+// search-score badge on the same tile moves up above it.
+//
 // `loaded` is the one piece of state: it flips once the thumbnail has
 // arrived (or failed -- an errored image must not stay invisible) and
 // drives the fade-in and the end of the shimmer placeholder. The ref
@@ -38,6 +43,8 @@ export default function PhotoCard({ photo, onSelect, onContextMenu, selected = f
   const [loaded, setLoaded] = useState(false);
   const date = formatDate(photo.created_at);
   const hasScore = typeof photo.search_score === "number";
+  const moving = isMoving(photo);
+  const duration = isVideo(photo) ? formatDuration(photo.duration_seconds) : null;
   const pressRef = useRef({ timer: null, x: 0, y: 0 });
 
   useEffect(() => () => clearTimeout(pressRef.current.timer), []);
@@ -101,7 +108,7 @@ export default function PhotoCard({ photo, onSelect, onContextMenu, selected = f
 
   return (
     <div
-      className={`photo-card${loaded ? " photo-card-loaded" : ""}${hasScore ? " photo-card-scored" : ""}${selected ? " photo-card-selected" : ""}`}
+      className={`photo-card${loaded ? " photo-card-loaded" : ""}${hasScore ? " photo-card-scored" : ""}${moving ? " photo-card-moving" : ""}${selected ? " photo-card-selected" : ""}`}
       data-photo-id={photo.id}
       aria-selected={selected}
       onContextMenu={onContextMenu}
@@ -133,6 +140,22 @@ export default function PhotoCard({ photo, onSelect, onContextMenu, selected = f
         {selected && (
           <span className="photo-card-check" aria-hidden="true">
             ✓
+          </span>
+        )}
+        {moving && (
+          <span
+            className="photo-card-motion"
+            role="img"
+            aria-label={isVideo(photo) ? (duration ? `Video, ${duration}` : "Video") : "Animated image"}
+            title={isVideo(photo) ? "Video" : "Animated image"}
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+              <path
+                fill="currentColor"
+                d="M4 6.5A2.5 2.5 0 0 1 6.5 4h7A2.5 2.5 0 0 1 16 6.5v2.9l4.2-2.6a.8.8 0 0 1 1.2.7v8.9a.8.8 0 0 1-1.2.7L16 14.6v2.9a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 4 17.5z"
+              />
+            </svg>
+            {duration && <span className="photo-card-motion-duration">{duration}</span>}
           </span>
         )}
         {hasScore && (

@@ -2,8 +2,9 @@ import csv
 import io
 import json
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from .. import chat, embeddings, storage, tags
@@ -110,7 +111,7 @@ def get_photo(photo_id: str) -> dict:
 
 
 @router.get("/photos/{photo_id}/original")
-def get_photo_original(photo_id: str) -> Response:
+def get_photo_original(photo_id: str, range_header: Optional[str] = Header(default=None, alias="Range")) -> Response:
     photo = storage.get_photo(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -122,6 +123,8 @@ def get_photo_original(photo_id: str) -> Response:
             if original_bytes is None:
                 raise HTTPException(status_code=404, detail="Photo not found")
             return Response(storage.transcode_to_jpeg(original_bytes), media_type="image/jpeg")
+        if range_header and photo.get("media_kind") == "video":
+            return _original_range_response(photo, range_header)
         stream = storage.stream_original(photo)
     except HTTPException:
         raise
@@ -135,7 +138,24 @@ def get_photo_original(photo_id: str) -> Response:
 
     if not stream:
         raise HTTPException(status_code=404, detail="Photo not found")
-    return StreamingResponse(stream, media_type=photo["content_type"])
+    return StreamingResponse(stream, media_type=photo["content_type"], headers={"Accept-Ranges": "bytes"})
+
+
+def _original_range_response(photo: dict, range_header: str) -> Response:
+    """A video's original honouring `Range` (206). Browsers won't seek -- and
+    some won't even start an MP4 -- without it."""
+    try:
+        original = storage.stream_original_range(photo, range_header)
+    except storage.RangeNotSatisfiable as exc:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{exc.total}"})
+    if original is None:
+        raise HTTPException(status_code=404, detail="Photo not found")
+    headers = {"Accept-Ranges": "bytes"}
+    if not original.partial:
+        return StreamingResponse(original.chunks, media_type=photo["content_type"], headers=headers)
+    headers["Content-Range"] = f"bytes {original.start}-{original.end}/{original.total}"
+    headers["Content-Length"] = str(original.end - original.start + 1)
+    return StreamingResponse(original.chunks, status_code=206, media_type=photo["content_type"], headers=headers)
 
 
 @router.get("/photos/{photo_id}/thumbnail")
@@ -226,6 +246,10 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
     photo = storage.get_photo(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
+
+    if photo.get("media_kind") == "video":
+        # The vision model is sent stills, not movies (docs/video-support.md).
+        raise HTTPException(status_code=422, detail="Chat about a single photo isn't supported for videos")
 
     try:
         original_bytes = storage.read_original_bytes(photo)

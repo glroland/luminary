@@ -444,6 +444,31 @@ cached) is also per-pod, in-memory state — same caveat.
   change calls `rebuild_after_home_change()`, which returns false (surfaced as
   `rebuild_started`) when another job holds the slot.
 
+- **Movies** (`video.py`, `sync.py`'s `_sync_one_video`, `docs/video-support.md`):
+  videos are rows in `photos` with `media_kind = 'video'` (`'animated'` is an
+  animated GIF/WebP/APNG that is still an `<img>`; `'image'` the default).
+  `sync.select_media_paths` adds `sync.VIDEO_EXTENSIONS` to discovery
+  (`LUMINARY_INDEX_VIDEOS=0` turns it off) and drops the `.mov` half of a Live
+  Photo (same-stem image beside it; `LUMINARY_INDEX_LIVE_PHOTO_VIDEOS=1` keeps
+  it). `video.py` wraps the `ffprobe`/`ffmpeg` binaries (poster frame,
+  duration, rotation-corrected size, creation time, ISO 6709 GPS); they need a
+  seekable local file, so `_local_video` reads a local backend in place and
+  otherwise copies to a temp file (capped by `LUMINARY_VIDEO_MAX_PROBE_BYTES`,
+  `TMPDIR` is `/data` in Helm) — still read-only against the backend. Like
+  everything optional here, a missing `ffmpeg`, an oversized or corrupt file
+  indexes the row with metadata only and never fails the sync, and the app
+  imports fine without the binaries (`video.available()`). A video is never
+  captioned or scanned for faces/pets: `_sync_one_video` writes
+  `face_detection_done`/`pet_detection_done` TRUE, and `recognition._list_photos`
+  and `pets._photos_to_scan` exclude `media_kind = 'video'` — add the same
+  guard to any new job that reads originals as images. Its description is
+  composed by `enrich.py` from filename + place only. **No transcoding**:
+  `GET /photos/{id}/original` streams the file as-is and, for a video,
+  honours `Range` (`storage.stream_original_range`/`parse_byte_range`; the size
+  comes from the backend, not `size_bytes`) — browsers won't seek without it.
+  `POST /photos/{id}/chat` on a video is `422`. Existing GIFs are marked
+  animated by a startup backfill; WebP/APNG only when sync next reads them.
+
 - `duplicates.py` (`routers/duplicates.py`) is the background job behind the
   Manage page's "Identify Duplicates" for the *similar* and *all* types: the
   hash comparison plus thumbnail verification (`storage.find_similar_photos`)
@@ -1111,6 +1136,18 @@ cached) is also per-pod, in-memory state — same caveat.
   back to `"gallery"`, and opens it in `PhotoModal.jsx` — it does nothing
   if the photo isn't found (e.g. deleted since the list was loaded) rather
   than fetching it separately.
+- **Movies in the web UI** (`media.js`, `VideoPlayer.jsx`): `PhotoCard` shows a
+  video-camera badge (`.photo-card-motion`, bottom-right, always visible) on
+  `media_kind` `video` *and* `animated`, plus a video's length; a search-score
+  badge on the same tile stacks above it. `PhotoModal` renders `VideoPlayer`
+  (a native `<video controls>` streaming `originalUrl`, poster from the
+  thumbnail) in place of the `<img>` for a video; the hover-zoom/face/chat-box
+  machinery is `<img>`-only and simply doesn't apply (`imgRect` stays null),
+  the "f" shortcut is ignored, and arrow keys belong to a focused `<video>`.
+  On the element's `error` it falls back to the poster plus a download link —
+  `canPlayType` is deliberately not consulted (Chrome says "" for
+  `video/quicktime` but plays H.264 `.mov`). `VideoPlayer` is the one seam to
+  swap in a WASM decoder later. An animated image is still an `<img>`.
 - `Sidebar.jsx` is the collapsible left sidebar: a hamburger toggle button
   (always rendered, `aria-expanded`) plus a `position: fixed` panel+
   backdrop that only exist when open (`sidebar-open` class slides it in via

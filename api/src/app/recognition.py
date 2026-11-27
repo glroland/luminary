@@ -409,7 +409,8 @@ def _photos_with_tagged_faces() -> list[str]:
 
 def _list_photos() -> list[dict]:
     with get_connection() as conn:
-        return [dict(row) for row in conn.execute("SELECT id, filename FROM photos").fetchall()]
+        rows = conn.execute("SELECT id, filename FROM photos WHERE media_kind <> 'video'").fetchall()
+        return [dict(row) for row in rows]
 
 
 def _redetect_photo_faces(photo: dict) -> Optional[int]:

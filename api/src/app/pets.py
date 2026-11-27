@@ -96,7 +96,8 @@ _thread: Optional[threading.Thread] = None
 
 
 def _photos_to_scan(rescan: bool = False) -> list[dict]:
-    where = "" if rescan else " WHERE NOT pet_detection_done"
+    # Movies are never scanned for pets (docs/video-support.md).
+    where = " WHERE media_kind <> 'video'" if rescan else " WHERE media_kind <> 'video' AND NOT pet_detection_done"
     with get_connection() as conn:
         rows = conn.execute(f"SELECT id, filename FROM photos{where}").fetchall()
         return [dict(row) for row in rows]

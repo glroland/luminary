@@ -992,6 +992,17 @@
             ],
             "title": "Description"
           },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
@@ -1076,6 +1087,16 @@
               }
             ],
             "title": "Longitude"
+          },
+          "media_kind": {
+            "default": "image",
+            "enum": [
+              "image",
+              "video",
+              "animated"
+            ],
+            "title": "Media Kind",
+            "type": "string"
           },
           "size_bytes": {
             "title": "Size Bytes",
@@ -1168,6 +1189,17 @@
             ],
             "title": "Description"
           },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
@@ -1252,6 +1284,16 @@
               }
             ],
             "title": "Longitude"
+          },
+          "media_kind": {
+            "default": "image",
+            "enum": [
+              "image",
+              "video",
+              "animated"
+            ],
+            "title": "Media Kind",
+            "type": "string"
           },
           "similarity": {
             "title": "Similarity",
@@ -3272,6 +3314,22 @@
             "schema": {
               "title": "Photo Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
             }
           }
         ],
