@@ -178,6 +178,21 @@ export default function Sidebar({
     [individuals, individualGroups],
   );
 
+  const unmatchedButton = (
+    <button
+      type="button"
+      className={`sidebar-individual${
+        selectedIndividual === UNMATCHED_INDIVIDUAL ? " directory-tree-item-active" : ""
+      }`}
+      onClick={() => onSelectIndividual(UNMATCHED_INDIVIDUAL)}
+    >
+      <span className="sidebar-individual-avatar sidebar-individual-initial" aria-hidden="true">
+        ?
+      </span>
+      Unknown / Unmatched
+    </button>
+  );
+
   function renderIndividual(individual) {
     return (
       <li key={individual.id}>
@@ -325,20 +340,16 @@ export default function Sidebar({
                 </li>
               ))}
               {individualSections.ungrouped.map(renderIndividual)}
-            <li>
-              <button
-                type="button"
-                className={`sidebar-individual${
-                  selectedIndividual === UNMATCHED_INDIVIDUAL ? " directory-tree-item-active" : ""
-                }`}
-                onClick={() => onSelectIndividual(UNMATCHED_INDIVIDUAL)}
-              >
-                <span className="sidebar-individual-avatar sidebar-individual-initial" aria-hidden="true">
-                  ?
-                </span>
-                Unknown / Unmatched
-              </button>
-            </li>
+            {individualSections.sections.length > 0 ? (
+              <li className="sidebar-individual-group">
+                <p className="sidebar-individual-group-name">OTHER</p>
+                <ul>
+                  <li>{unmatchedButton}</li>
+                </ul>
+              </li>
+            ) : (
+              <li>{unmatchedButton}</li>
+            )}
           </ul>
         </Section>
 
