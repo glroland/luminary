@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useAuth } from "../auth.jsx";
 import { UNMATCHED_INDIVIDUAL } from "../unmatched.js";
 import { individualThumbnailUrl } from "../api/client.js";
 import { buildIndividualSections } from "../individuals.js";
@@ -172,6 +173,8 @@ export default function Sidebar({
   onSearchResults = () => {},
   onClearSearch = () => {},
 }) {
+  // Manage is for admins only (the API refuses it to anyone else too).
+  const { isAdmin } = useAuth();
   const tree = useMemo(() => buildTree(photos), [photos]);
   const individualSections = useMemo(
     () => buildIndividualSections(individuals, individualGroups),
@@ -410,6 +413,7 @@ export default function Sidebar({
         </Section>
       </nav>
 
+      {isAdmin && (
       <div className="sidebar-footer">
         <a
           href="#manage"
@@ -423,6 +427,7 @@ export default function Sidebar({
           Manage
         </a>
       </div>
+      )}
     </aside>
   );
 }

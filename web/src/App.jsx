@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AboutDialog from "./components/AboutDialog.jsx";
+import LoginDialog from "./components/LoginDialog.jsx";
+import LoginScreen from "./components/LoginScreen.jsx";
+import { useAuth } from "./auth.jsx";
 import ChatWidget from "./components/ChatWidget.jsx";
 import Logo from "./components/Logo.jsx";
 import ManagementPage from "./components/ManagementPage.jsx";
@@ -10,7 +13,7 @@ import Sidebar from "./components/Sidebar.jsx";
 import SortControl, { SORT_OPTIONS } from "./components/SortControl.jsx";
 import TripHeader from "./components/TripHeader.jsx";
 import {
-  fetchIndividualFaces,
+  fetchIndividualPhotoIds,
   fetchUnmatchedPhotoIds,
   fetchIndividualGroups,
   fetchIndividuals,
@@ -121,6 +124,10 @@ function comparePhotos(a, b, sortOrder) {
 }
 
 export default function App() {
+  // Who is using the app. The API enforces the same rules (docs/security.md);
+  // here it decides what to show.
+  const { loading: authLoading, authenticated, isAdmin, canSignIn, authEnabled, logout } = useAuth();
+  const [loginOpen, setLoginOpen] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   // Boxes the floating chat's object search located in selectedPhoto
@@ -133,7 +140,9 @@ export default function App() {
   // GET /api/jobs) -- null until first fetched.
   const [jobs, setJobs] = useState(null);
   const previousJobsActiveRef = useRef(null);
-  const [view, setView] = useState("gallery"); // "gallery" | "manage"
+  const [requestedView, setView] = useState("gallery"); // "gallery" | "manage"
+  // Only an admin may see the Manage page, whatever was asked for.
+  const view = isAdmin ? requestedView : "gallery";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // null means no filter (all photos); otherwise a directory path as it
   // appears in photo.filename, matched by directoryOf() below including
@@ -297,6 +306,8 @@ export default function App() {
 
   const refreshJobs = useCallback(
     (known) => {
+      // Job status is admin-only (the API refuses it to guests).
+      if (!isAdmin) return Promise.resolve();
       if (known) {
         setJobs(known);
         return Promise.resolve();
@@ -305,16 +316,18 @@ export default function App() {
         .then(setJobs)
         .catch(() => {});
     },
-    []
+    [isAdmin]
   );
 
+  // Nothing is fetched until the API has said who this is (and let them in).
   useEffect(() => {
+    if (!authenticated) return;
     loadPhotos();
     loadIndividuals();
     loadTags();
     loadTrips();
     refreshJobs();
-  }, [loadPhotos, loadIndividuals, loadTags, loadTrips, refreshJobs]);
+  }, [authenticated, loadPhotos, loadIndividuals, loadTags, loadTrips, refreshJobs]);
 
   // Keep the job snapshot fresh while it can matter: any job running (it
   // may be someone else's, and ending one reloads the gallery), or the
@@ -357,7 +370,7 @@ export default function App() {
     const ids =
       selectedIndividual === UNMATCHED_INDIVIDUAL
         ? fetchUnmatchedPhotoIds()
-        : fetchIndividualFaces(selectedIndividual).then((faces) => faces.map((face) => face.photo_id));
+        : fetchIndividualPhotoIds(selectedIndividual);
     ids
       .then((list) => {
         if (!cancelled) setIndividualPhotoIds(new Set(list));
@@ -625,6 +638,10 @@ export default function App() {
   // stuck section header. Stable identity: it's a PhotoGrid effect dep.
   const handleToggleSidebar = useCallback(() => setSidebarOpen((prev) => !prev), []);
 
+  // Wait for the session check, then (if sign-in is required) the login screen.
+  if (authLoading) return null;
+  if (!authenticated) return <LoginScreen />;
+
   return (
     <div className="app">
       {/* A traditional sidebar: it's a column in this flex layout, not a
@@ -797,6 +814,16 @@ export default function App() {
             >
               <span aria-hidden="true">{theme === "dark" ? "\u2600" : "\u263E"}</span>
             </button>
+            {canSignIn && (
+              <button type="button" className="signin-button" onClick={() => setLoginOpen(true)}>
+                Sign in
+              </button>
+            )}
+            {authEnabled && isAdmin && (
+              <button type="button" className="signin-button" onClick={() => logout()}>
+                Sign out
+              </button>
+            )}
             <button
               type="button"
               className="theme-toggle about-button"
@@ -809,6 +836,7 @@ export default function App() {
           </div>
         </header>
         {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+        {loginOpen && <LoginDialog onClose={() => setLoginOpen(false)} />}
         {error && (
           <p className="error" role="alert">
             {error}
@@ -859,10 +887,10 @@ export default function App() {
               <TripHeader
                 trip={trips.find((trip) => trip.id === selectedTrip)}
                 otherTrips={trips.filter((trip) => trip.id !== selectedTrip)}
-                onRename={handleRenameTrip}
-                onMerge={handleMergeTrip}
-                onSplit={handleSplitTrip}
-                onDismiss={handleDismissTrip}
+                onRename={isAdmin ? handleRenameTrip : undefined}
+                onMerge={isAdmin ? handleMergeTrip : undefined}
+                onSplit={isAdmin ? handleSplitTrip : undefined}
+                onDismiss={isAdmin ? handleDismissTrip : undefined}
                 locations={tripLocations}
                 selectedStop={selectedStop}
                 onSelectStop={(index) => {
@@ -881,9 +909,9 @@ export default function App() {
             onSelect={handleSelectPhoto}
             trips={trips}
             currentTripId={selectedTrip}
-            onAddToTrip={handleAddToTrip}
-            onRemoveFromTrip={handleRemoveFromTrip}
-            onSetTripCover={handleSetTripCover}
+            onAddToTrip={isAdmin ? handleAddToTrip : null}
+            onRemoveFromTrip={isAdmin ? handleRemoveFromTrip : null}
+            onSetTripCover={isAdmin ? handleSetTripCover : null}
             emptyMessage={
               searchResults === null
                 ? "No photos yet."
@@ -902,7 +930,7 @@ export default function App() {
           origin={modalOrigin}
           chatBoxes={chatBoxes}
           onNavigate={setSelectedPhoto}
-          onRotate={handleRotatePhoto}
+          onRotate={isAdmin ? handleRotatePhoto : null}
           onClose={() => {
             setSelectedPhoto(null);
             // Tags may have been added/removed on this photo in the modal.

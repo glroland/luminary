@@ -116,6 +116,15 @@ def get_individual_thumbnail(person_id: str) -> Response:
     return Response(content=thumbnail, media_type="image/jpeg")
 
 
+@router.get("/individuals/{person_id}/photos", response_model=TaggedPhotoIds)
+def get_individual_photo_ids(person_id: str) -> dict:
+    """Backs the sidebar's "By Individual" filter (photo ids only; the
+    individual's tagged faces are Manage-page data, see /faces below)."""
+    if not people.get_individual(person_id):
+        raise HTTPException(status_code=404, detail="Individual not found")
+    return {"photo_ids": people.list_photo_ids_for_individual(person_id)}
+
+
 @router.get("/individuals/{person_id}/faces", response_model=TaggedFaceList)
 def get_individual_faces(person_id: str) -> dict:
     if not people.get_individual(person_id):

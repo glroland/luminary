@@ -15,6 +15,7 @@ import {
   untagPhoto,
 } from "../api/client.js";
 import { isVideo } from "../media.js";
+import { useAuth } from "../auth.jsx";
 import { ROTATION_STEP, canRotate, rotateBox, rotatedBy } from "../rotation.js";
 import PhotoMap from "./PhotoMap.jsx";
 import VideoPlayer from "./VideoPlayer.jsx";
@@ -120,8 +121,12 @@ export default function PhotoModal({
   onNavigate = null,
   origin = null,
   chatBoxes: boxes = NO_BOXES,
-  onRotate = null,
+  onRotate: onRotateProp = null,
 }) {
+  // Everything that changes data (rotate, tag, add people/tags) is for
+  // admins; the API refuses it to anyone else too (docs/security.md).
+  const { isAdmin } = useAuth();
+  const onRotate = isAdmin ? onRotateProp : null;
   const photoIndex = photo && photos && onNavigate ? photos.findIndex((candidate) => candidate.id === photo.id) : -1;
   const previousPhoto = photoIndex > 0 ? photos[photoIndex - 1] : null;
   const nextPhoto = photoIndex !== -1 && photoIndex < photos.length - 1 ? photos[photoIndex + 1] : null;
@@ -519,7 +524,7 @@ export default function PhotoModal({
   }, [menuOpen]);
 
   function handleFaceMouseDown(event, faceId) {
-    if (event.button !== 2) return;
+    if (!isAdmin || event.button !== 2) return;
     // The actual menu-open signal is the "contextmenu" event below -- this
     // preventDefault just stops any other native right-click handling on
     // mousedown itself, mirroring handleFaceContextMenu.
@@ -739,8 +744,8 @@ export default function PhotoModal({
                     key={box.id ?? index}
                     className={`photo-modal-bbox photo-modal-bbox-face${box.kind === "pet" ? " photo-modal-bbox-pet" : ""}${box.person_id ? " photo-modal-bbox-face-tagged" : ""}`}
                     style={boxStyle(box, photo, imgRect)}
-                    onMouseDown={box.id ? (event) => handleFaceMouseDown(event, box.id) : undefined}
-                    onContextMenu={box.id ? handleFaceContextMenu : undefined}
+                    onMouseDown={box.id && isAdmin ? (event) => handleFaceMouseDown(event, box.id) : undefined}
+                    onContextMenu={box.id && isAdmin ? handleFaceContextMenu : undefined}
                   >
                     {taggedName && <span className="photo-modal-bbox-label">{taggedName}</span>}
                     {box.detection_confidence != null && (
@@ -853,18 +858,20 @@ export default function PhotoModal({
                 {photoTags.map((tag) => (
                   <li key={tag.id} className="photo-modal-tag-chip">
                     <span>{tag.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveTag(tag.id)}
-                      aria-label={`Remove tag ${tag.name}`}
-                    >
-                      ×
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTag(tag.id)}
+                        aria-label={`Remove tag ${tag.name}`}
+                      >
+                        ×
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
-            {catalogTags !== null && catalogTags.length === 0 ? (
+            {!isAdmin ? null : catalogTags !== null && catalogTags.length === 0 ? (
               <p className="photo-modal-tags-empty">
                 No tags catalogued yet -- add one from the Manage page.
               </p>
@@ -901,7 +908,9 @@ export default function PhotoModal({
                 <p className="photo-modal-people-loading">Loading…</p>
               ) : individuals.length === 0 ? (
                 <p className="photo-modal-people-empty">
-                  No individuals catalogued yet -- add one below, then right-click and hold a face box to tag it.
+                  {isAdmin
+                    ? "No individuals catalogued yet -- add one below, then right-click and hold a face box to tag it."
+                    : "No individuals catalogued yet."}
                 </p>
               ) : (
                 <ul className="photo-modal-people-list">
@@ -919,6 +928,7 @@ export default function PhotoModal({
                   ))}
                 </ul>
               )}
+              {isAdmin && (
               <form className="photo-modal-add-person" onSubmit={handleAddIndividual}>
                 <input
                   type="text"
@@ -938,6 +948,7 @@ export default function PhotoModal({
                   Add
                 </button>
               </form>
+              )}
               {addPersonError && (
                 <p role="alert" className="photo-modal-people-error">
                   {addPersonError}

@@ -1,8 +1,17 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
+// Called when the API says the session has ended (401), so the app can ask
+// who the user is again (auth.jsx). Not called for the login attempt itself.
+let unauthorizedHandler = null;
+
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = handler;
+}
+
 async function request(path, options = {}) {
   let response;
   try {
+    // The session cookie is HttpOnly and same-origin, which fetch sends by default.
     response = await fetch(`${API_BASE}${path}`, options);
   } catch {
     throw new Error("Could not connect to the API. Is it running?");
@@ -16,10 +25,34 @@ async function request(path, options = {}) {
   const data = isJson ? await response.json().catch(() => null) : null;
 
   if (!response.ok) {
+    if (response.status === 401 && unauthorizedHandler && !path.startsWith("/auth/login")) {
+      unauthorizedHandler();
+    }
+    if (response.status === 403 && !data?.detail) {
+      throw new Error("Administrator access is required.");
+    }
     throw new Error(data?.detail || `Could not connect to the API (HTTP ${response.status}).`);
   }
 
   return data;
+}
+
+// --- Sign-in (docs/security.md) ---
+
+export async function fetchSession() {
+  return request("/auth/session");
+}
+
+export async function login(password) {
+  return request("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function logout() {
+  return request("/auth/logout", { method: "POST" });
 }
 
 export async function fetchPhotos() {
@@ -78,6 +111,7 @@ export async function chatAboutPhoto(photoId, message, history, onChunk, searchL
 
   if (!response.ok) {
     const data = isJson ? await response.json().catch(() => null) : null;
+    if (response.status === 401 && unauthorizedHandler) unauthorizedHandler();
     throw new Error(data?.detail || `Could not connect to the API (HTTP ${response.status}).`);
   }
 
@@ -192,6 +226,13 @@ export async function deleteIndividualGroup(groupId) {
 
 export async function deleteIndividual(personId) {
   await request(`/individuals/${personId}`, { method: "DELETE" });
+}
+
+// Photo ids only -- what the sidebar's "By Individual" filter needs, and
+// open to guests (fetchIndividualFaces below is Manage data).
+export async function fetchIndividualPhotoIds(personId) {
+  const data = await request(`/individuals/${personId}/photos`);
+  return data.photo_ids;
 }
 
 export async function fetchIndividualFaces(personId) {

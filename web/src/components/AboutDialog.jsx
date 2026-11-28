@@ -27,7 +27,8 @@ export default function AboutDialog({ onClose }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const rows = about
+  // Deployment details come back only for an admin; a guest sees the version.
+  const rows = about?.photos_source != null
     ? [
         ["Photo album source", about.photos_source],
         ["Chat model", about.chat_model || "Not configured"],

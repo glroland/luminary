@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from .. import chat, embeddings, storage, tags
+from .. import auth, chat, embeddings, storage, tags
 from ..models import ChatRequest, FaceList, Photo, PhotoList, PhotoSearchResults, PhotoTagList, RotationRequest
 
 logger = logging.getLogger(__name__)
@@ -258,14 +258,14 @@ def purge_database() -> None:
 
 
 @router.post("/chat")
-def chat_about_library(body: ChatRequest):
+def chat_about_library(body: ChatRequest, request: Request):
     """Chat with no photo open: the model has its photo-search tools, but
     no image to look at."""
-    return _chat(None, None, body, "the library")
+    return _chat(None, None, body, "the library", auth.current_principal(request).role)
 
 
 @router.post("/photos/{photo_id}/chat")
-def chat_about_photo(photo_id: str, body: ChatRequest):
+def chat_about_photo(photo_id: str, body: ChatRequest, request: Request):
     photo = storage.get_photo(photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -285,12 +285,13 @@ def chat_about_photo(photo_id: str, body: ChatRequest):
     if original_bytes is None:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    return _chat(original_bytes, photo["content_type"], body, f"photo {photo_id}")
+    return _chat(original_bytes, photo["content_type"], body, f"photo {photo_id}", auth.current_principal(request).role)
 
 
-def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
+def _chat(photo_bytes, content_type, body: ChatRequest, subject: str, role: str):
     """Shared by both chat routes. `photo_bytes`/`content_type` are None
-    when no photo is open; `subject` only labels log lines."""
+    when no photo is open; `subject` only labels log lines. `role` is the
+    caller's, from their session -- it decides which chat tools run."""
     history = [turn.model_dump() for turn in body.history]
     # The search list as the web UI last received it -- the server keeps no
     # conversation state, so this is how a follow-up message can narrow or
@@ -308,7 +309,7 @@ def _chat(photo_bytes, content_type, body: ChatRequest, subject: str):
     # subclass the openai SDK raises when parsing a non-conforming response
     # from a self-hosted server -- a backend failure, not a bad request.
     try:
-        events = iter(chat.ask_events(photo_bytes, content_type, body.message, history, search_list))
+        events = iter(chat.ask_events(photo_bytes, content_type, body.message, history, search_list, role=role))
         first = next(events, None)
     except chat.ChatNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))

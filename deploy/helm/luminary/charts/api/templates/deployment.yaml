@@ -59,6 +59,31 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.env.databaseCredentialsSecret }}
                   key: password
+            # Authentication/authorization (docs/security.md). Enabled, the
+            # API refuses to start without the admin password and session
+            # secret from authCredentialsSecret.
+            - name: LUMINARY_AUTH_ENABLED
+              value: {{ .Values.env.auth.enabled | quote }}
+            - name: LUMINARY_GUEST_MODE_ENABLED
+              value: {{ .Values.env.auth.guestMode | quote }}
+            {{- if .Values.env.auth.enabled }}
+            - name: LUMINARY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.auth.credentialsSecret }}
+                  key: adminPassword
+            - name: LUMINARY_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.auth.credentialsSecret }}
+                  key: sessionSecret
+            - name: LUMINARY_GUEST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.auth.credentialsSecret }}
+                  key: guestPassword
+                  optional: true
+            {{- end }}
             - name: LUMINARY_CORS_ORIGINS
               value: {{ .Values.env.corsOrigins | quote }}
             {{- if .Values.env.openaiBaseUrl }}

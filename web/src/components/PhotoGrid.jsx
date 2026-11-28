@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPhotoTags, fetchTags, tagPhoto, untagPhoto } from "../api/client.js";
+import { useAuth } from "../auth.jsx";
 import PhotoCard from "./PhotoCard.jsx";
 
 // How many more photos each scroll-to-the-bottom reveals (and how many
@@ -102,6 +103,8 @@ export default function PhotoGrid({
   onRemoveFromTrip = null,
   onSetTripCover = null,
 }) {
+  // Only an admin can tag or move photos (docs/security.md).
+  const { isAdmin } = useAuth();
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
   const galleryRef = useRef(null);
   // The `data-section-id` of the section whose header is stuck to the top
@@ -322,6 +325,9 @@ export default function PhotoGrid({
   });
 
   function handleContextMenu(event, photo) {
+    // The tag/trip menu changes things, which only an admin may do; a guest
+    // keeps the browser's own menu.
+    if (!isAdmin) return;
     event.preventDefault();
     let photoIds;
     if (selectionRef.current.ids.has(photo.id)) {

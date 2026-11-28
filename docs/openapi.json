@@ -26,16 +26,37 @@
             "title": "Chat Model"
           },
           "database_host": {
-            "title": "Database Host",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Host"
           },
           "database_name": {
-            "title": "Database Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Name"
           },
           "photos_source": {
-            "title": "Photos Source",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Photos Source"
           },
           "version": {
             "anyOf": [
@@ -55,12 +76,7 @@
         },
         "required": [
           "version",
-          "year",
-          "photos_source",
-          "chat_model",
-          "chat_endpoint",
-          "database_name",
-          "database_host"
+          "year"
         ],
         "title": "AboutResponse",
         "type": "object"
@@ -1031,6 +1047,19 @@
         "title": "LocationRefreshStatus",
         "type": "object"
       },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
       "PetRefreshStatus": {
         "properties": {
           "error": {
@@ -1583,6 +1612,51 @@
           "score"
         ],
         "title": "SearchListEntry",
+        "type": "object"
+      },
+      "SessionInfo": {
+        "properties": {
+          "auth_enabled": {
+            "title": "Auth Enabled",
+            "type": "boolean"
+          },
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "guest_mode": {
+            "title": "Guest Mode",
+            "type": "boolean"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          }
+        },
+        "required": [
+          "auth_enabled",
+          "guest_mode",
+          "authenticated"
+        ],
+        "title": "SessionInfo",
         "type": "object"
       },
       "SyncStatus": {
@@ -2283,6 +2357,80 @@
           }
         },
         "summary": "About"
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login"
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "operationId": "logout_api_auth_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout"
+      }
+    },
+    "/api/auth/session": {
+      "get": {
+        "operationId": "get_session_api_auth_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Session"
       }
     },
     "/api/backend/status": {
@@ -3150,6 +3298,46 @@
           }
         },
         "summary": "Get Individual Faces"
+      }
+    },
+    "/api/individuals/{person_id}/photos": {
+      "get": {
+        "description": "Backs the sidebar's \"By Individual\" filter (photo ids only; the\nindividual's tagged faces are Manage-page data, see /faces below).",
+        "operationId": "get_individual_photo_ids_api_individuals__person_id__photos_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "title": "Person Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaggedPhotoIds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Individual Photo Ids"
       }
     },
     "/api/individuals/{person_id}/rejections": {
@@ -4261,7 +4449,7 @@
     },
     "/api/trips": {
       "get": {
-        "description": "Every active trip and day outing, newest first (or the dismissed ones).",
+        "description": "Every active trip and day outing, newest first (or the dismissed ones,\nwhich only the Manage page shows, so only an admin may ask).",
         "operationId": "list_trips_api_trips_get",
         "parameters": [
           {

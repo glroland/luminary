@@ -81,7 +81,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import embeddings, storage, tracing
+from . import auth, embeddings, storage, tracing
 from .config import (
     get_chat_tools,
     get_florence_device,
@@ -135,6 +135,7 @@ def ask(
     message: str,
     history: list[dict],
     search_list: Optional[list[dict]] = None,
+    role: Optional[str] = None,
 ) -> ChatReply:
     """Send one chat message, returning the full reply at once.
     `photo_bytes`/`content_type` are the open photo, or None when none is.
@@ -143,7 +144,7 @@ def ask(
     turn left it ({"id", "filename", "score"} entries; see _Turn), which
     this turn's tools can filter, add to or truncate."""
     reply = ChatReply(text="")
-    for event in _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=False):
+    for event in _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=False, role=role):
         if "text" in event:
             reply.text += event["text"]
         elif "boxes" in event:
@@ -167,6 +168,7 @@ def ask_events(
     message: str,
     history: list[dict],
     search_list: Optional[list[dict]] = None,
+    role: Optional[str] = None,
 ):
     """What the chat routes call: one chat message as an iterator of
     events, each a dict with exactly one key --
@@ -184,7 +186,9 @@ def ask_events(
 
     Config is validated before this returns, not when the iterator is
     first read -- see _ask_openai_events."""
-    return _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=should_stream())
+    return _ask_openai_events(
+        photo_bytes, content_type, message, history, search_list, stream=should_stream(), role=role
+    )
 
 
 def ask_stream(
@@ -193,10 +197,11 @@ def ask_stream(
     message: str,
     history: list[dict],
     search_list: Optional[list[dict]] = None,
+    role: Optional[str] = None,
 ):
     """ask_events() with the reply always streamed token by token,
     whatever LUMINARY_OPENAI_STREAMING says."""
-    return _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=True)
+    return _ask_openai_events(photo_bytes, content_type, message, history, search_list, stream=True, role=role)
 
 
 # --- The chat model: an OpenAI-compatible multimodal endpoint ---------------
@@ -502,8 +507,13 @@ class _Turn:
         photo_bytes: Optional[bytes],
         search_list: Optional[list[dict]] = None,
         span: Optional[tracing.Span] = None,
+        role: Optional[str] = None,
     ):
         self.photo_bytes = photo_bytes  # the open photo's original bytes, or None
+        # The caller's role, from their session (never from the conversation).
+        # None -- a caller that didn't say -- is treated as a guest: the least
+        # that may be done. See _TOOL_ROLES and docs/security.md.
+        self.role = role or auth.GUEST
         # The turn's trace (tracing.py); each tool call is a child span.
         self.span = span or tracing.Span()
         self.boxes: list[dict] = []
@@ -542,6 +552,11 @@ def _chat_tools(round_index: int, turn: _Turn) -> dict:
     tools = list(_SEARCH_TOOLS)
     if turn.photo_bytes is not None and _object_search_available():
         tools.append(_LOCATE_OBJECT_TOOL)
+    # Only what this caller's role may use is offered (and it is checked
+    # again when a call runs, since a model can name a tool it wasn't offered).
+    tools = [tool for tool in tools if _tool_permitted(tool["function"]["name"], turn)]
+    if not tools:
+        return {}
     return {"tools": tools}
 
 
@@ -598,10 +613,20 @@ def _parsed_arguments(call: dict) -> Optional[dict]:
     return arguments if isinstance(arguments, dict) else None
 
 
+def _tool_permitted(name: str, turn: _Turn) -> bool:
+    """Whether the turn's caller may use this tool. A tool with no declared
+    role is refused."""
+    required = _TOOL_ROLES.get(name)
+    return required is not None and auth.role_allows(turn.role, required)
+
+
 def _run_tool_call(call: dict, turn: _Turn) -> str:
     handler = _TOOL_HANDLERS.get(call["name"])
     if handler is None:
         return f"Unknown tool: {call['name']}"
+    if not _tool_permitted(call["name"], turn):
+        logger.warning("Chat tool %s refused for role %s", call["name"], turn.role)
+        return "Not permitted: you don't have access to this tool."
     arguments = _parsed_arguments(call)
     if arguments is None:
         return "Invalid arguments: expected a JSON object."
@@ -866,6 +891,25 @@ def _tool_locate_object(arguments: dict, turn: _Turn) -> str:
     return text
 
 
+# The role each tool needs, enforced by _tool_permitted -- the model decides
+# *which* tool to call, never whether the caller may. Every tool here only
+# reads (or edits this turn's in-memory search list), so all are open to a
+# guest. A tool that changes anything must be declared ADMIN; a tool missing
+# from this table is refused, and tests/test_auth.py checks the two tables
+# name the same tools.
+_TOOL_ROLES = {
+    "search_photos_by_filename": auth.GUEST,
+    "search_photos_semantic": auth.GUEST,
+    "search_photos_by_text": auth.GUEST,
+    "list_individuals": auth.GUEST,
+    "search_photos_by_individual": auth.GUEST,
+    "list_tags": auth.GUEST,
+    "search_photos_by_tag": auth.GUEST,
+    "search_list_stats": auth.GUEST,
+    "truncate_search_list": auth.GUEST,
+    "locate_object": auth.GUEST,
+}
+
 _TOOL_HANDLERS = {
     "search_photos_by_filename": _tool_search_by_filename,
     "search_photos_semantic": _tool_search_semantic,
@@ -887,6 +931,7 @@ def _ask_openai_events(
     history: list[dict],
     search_list: Optional[list[dict]],
     stream: bool,
+    role: Optional[str] = None,
 ):
     """The chat loop behind ask(), ask_events() and ask_stream(): returns
     an iterator of ask_events()'s events. `stream` is whether the model's
@@ -913,7 +958,7 @@ def _ask_openai_events(
                 "search_list_size": len(search_list or []),
             },
         )
-        turn = _Turn(photo_bytes, search_list, span)
+        turn = _Turn(photo_bytes, search_list, span, role)
         reply = ""
         error = None
         try:

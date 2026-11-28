@@ -86,6 +86,17 @@ def list_unmatched_photo_ids() -> list[str]:
         return [row["photo_id"] for row in rows]
 
 
+def list_photo_ids_for_individual(person_id: str) -> list[str]:
+    """Ids of the photos with a face tagged to this individual -- photo ids
+    only (no face crops), which is all the sidebar's "By Individual" filter
+    needs and is safe to show a guest; the faces themselves are Manage data."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT photo_id FROM faces WHERE person_id = %s", (person_id,)
+        ).fetchall()
+        return [row["photo_id"] for row in rows]
+
+
 INDIVIDUAL_KINDS = ("person", "pet")
 
 

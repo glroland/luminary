@@ -1,8 +1,8 @@
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
-from .. import trips
+from .. import auth, trips
 from ..models import (
     Trip,
     TripCreate,
@@ -20,8 +20,11 @@ router = APIRouter()
 
 
 @router.get("/trips", response_model=TripList)
-def list_trips(status: Literal["active", "dismissed"] = "active") -> dict:
-    """Every active trip and day outing, newest first (or the dismissed ones)."""
+def list_trips(request: Request, status: Literal["active", "dismissed"] = "active") -> dict:
+    """Every active trip and day outing, newest first (or the dismissed ones,
+    which only the Manage page shows, so only an admin may ask)."""
+    if status == "dismissed":
+        auth.require_admin(request)
     return {"trips": trips.list_trips(status)}
 
 

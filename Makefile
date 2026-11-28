@@ -121,6 +121,16 @@ LUMINARY_MAX_CONCURRENCY ?= 4
 #   make run-api MLFLOW_TRACKING_URI=https://rh-ai.apps.ocp.home.glroland.com/mlflow`.
 MLFLOW_TRACKING_URI ?=
 
+# Authentication (docs/security.md). Off for local development, so run-api
+# behaves as an admin with no sign-in. To try it locally:
+#   make run-api LUMINARY_AUTH_ENABLED=true LUMINARY_GUEST_MODE_ENABLED=true \
+#     LUMINARY_ADMIN_PASSWORD=admin-pass LUMINARY_SESSION_SECRET=<16+ chars> [LUMINARY_GUEST_PASSWORD=...]
+LUMINARY_AUTH_ENABLED ?= false
+LUMINARY_GUEST_MODE_ENABLED ?= false
+LUMINARY_ADMIN_PASSWORD ?=
+LUMINARY_GUEST_PASSWORD ?=
+LUMINARY_SESSION_SECRET ?=
+
 # Where `install-models` puts the downloaded models. `run-api` reads them
 # from here (HF_HOME/TORCH_HOME, plus HF_HUB_OFFLINE=1 so a cache miss fails
 # loudly instead of downloading) unless LUMINARY_USE_MODEL_CACHE=0, which
@@ -239,6 +249,9 @@ run-api:
 		LUMINARY_FLORENCE_MODEL=$(LUMINARY_FLORENCE_MODEL) LUMINARY_EMBEDDING_MODEL=$(LUMINARY_EMBEDDING_MODEL) \
 		LUMINARY_MAX_CONCURRENCY=$(LUMINARY_MAX_CONCURRENCY) \
 		MLFLOW_TRACKING_URI=$(MLFLOW_TRACKING_URI) \
+		LUMINARY_AUTH_ENABLED=$(LUMINARY_AUTH_ENABLED) LUMINARY_GUEST_MODE_ENABLED=$(LUMINARY_GUEST_MODE_ENABLED) \
+		LUMINARY_ADMIN_PASSWORD=$(LUMINARY_ADMIN_PASSWORD) LUMINARY_GUEST_PASSWORD=$(LUMINARY_GUEST_PASSWORD) \
+		LUMINARY_SESSION_SECRET=$(LUMINARY_SESSION_SECRET) \
 		PYTHONPATH=api/src $(VENV_DIR)/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port 8080
 
 run-web:

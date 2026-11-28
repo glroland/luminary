@@ -40,7 +40,7 @@ def test_chat_returns_reply_and_boxes(client, tmp_path, monkeypatch):
         {"text": "a red square"},
     ]
 
-    def fake_ask(photo_bytes, content_type, message, history, search_list=None):
+    def fake_ask(photo_bytes, content_type, message, history, search_list=None, **kwargs):
         captured["args"] = (content_type, message, history)
         captured["search_list"] = search_list
         return iter(reply_events)
@@ -1083,7 +1083,7 @@ def test_tag_listing_and_search(client, tmp_path):
 def test_library_chat_needs_no_photo(client, monkeypatch):
     captured = {}
 
-    def fake_ask(photo_bytes, content_type, message, history, search_list=None):
+    def fake_ask(photo_bytes, content_type, message, history, search_list=None, **kwargs):
         captured["args"] = (photo_bytes, content_type, message, search_list)
         return iter([{"search_results": [{"id": "p1", "filename": "a.jpg", "score": 1.0}]}, {"text": "Found one."}])
 
@@ -1432,7 +1432,7 @@ def test_ask_events_reports_a_tool_call_before_running_it(monkeypatch):
 def test_chat_endpoint_streams_events(client, tmp_path, monkeypatch):
     photo_id = _get_synced_photo_id(client, tmp_path)
 
-    def fake_ask_stream(photo_bytes, content_type, message, history, search_list=None):
+    def fake_ask_stream(photo_bytes, content_type, message, history, search_list=None, **kwargs):
         return iter([{"text": "Hel"}, {"boxes": [_DOG_BOX]}, {"text": "lo"}])
 
     monkeypatch.setattr(chat, "ask_events", fake_ask_stream)
@@ -1452,7 +1452,7 @@ def test_chat_endpoint_reports_a_mid_stream_failure_in_band(client, tmp_path, mo
         yield {"text": "Hel"}
         raise RuntimeError("connection dropped")
 
-    monkeypatch.setattr(chat, "ask_events", lambda *args: failing_events())
+    monkeypatch.setattr(chat, "ask_events", lambda *args, **kwargs: failing_events())
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 
@@ -1488,7 +1488,7 @@ def test_chat_endpoint_502s_when_the_first_model_call_fails(client, tmp_path, mo
         raise RuntimeError("model not found")
         yield
 
-    monkeypatch.setattr(chat, "ask_events", lambda *args: failing_events())
+    monkeypatch.setattr(chat, "ask_events", lambda *args, **kwargs: failing_events())
 
     response = client.post(f"/api/photos/{photo_id}/chat", json={"message": "hi"})
 

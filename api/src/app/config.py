@@ -495,3 +495,52 @@ def get_video_concurrency() -> int:
     """How many videos sync probes at once -- each may be a multi-GB temp
     copy, so far fewer than get_max_concurrency()'s image workers."""
     return max(1, int(os.environ.get("LUMINARY_VIDEO_CONCURRENCY", "2")))
+
+
+# --- Authentication / authorization (see auth.py, docs/security.md) --------
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on", "enabled")
+
+
+def get_auth_enabled() -> bool:
+    """Whether the API enforces roles at all. Off (the default) means every
+    request is treated as an admin -- local development. The Helm chart
+    turns it on."""
+    return _env_flag("LUMINARY_AUTH_ENABLED", False)
+
+
+def get_guest_mode_enabled() -> bool:
+    """With auth on: whether a visitor with no session is an anonymous,
+    read-only guest (on) or must sign in first (off)."""
+    return _env_flag("LUMINARY_GUEST_MODE_ENABLED", False)
+
+
+def get_admin_password() -> Optional[str]:
+    return os.environ.get("LUMINARY_ADMIN_PASSWORD") or None
+
+
+def get_guest_password() -> Optional[str]:
+    """Optional. A password that signs in as a guest."""
+    return os.environ.get("LUMINARY_GUEST_PASSWORD") or None
+
+
+def get_session_secret() -> Optional[str]:
+    return os.environ.get("LUMINARY_SESSION_SECRET") or None
+
+
+def get_session_ttl_hours() -> float:
+    try:
+        return max(0.01, float(os.environ.get("LUMINARY_SESSION_TTL_HOURS", "12")))
+    except ValueError:
+        return 12.0
+
+
+def get_session_cookie_secure() -> str:
+    """'true', 'false' or 'auto' (Secure when the request came in over HTTPS)."""
+    value = os.environ.get("LUMINARY_SESSION_COOKIE_SECURE", "auto").strip().lower()
+    return value if value in ("true", "false", "auto") else "auto"

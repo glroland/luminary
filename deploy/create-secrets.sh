@@ -22,6 +22,12 @@
 # explicitly -- so it falls back to the same "luminary" placeholder
 # instead) -- press enter to accept.
 #
+# The sign-in secret (luminary-auth-credentials: adminPassword, optional
+# guestPassword, a generated sessionSecret) is always required while the
+# chart's api.env.auth.enabled is true -- see docs/security.md. Prompts
+# default to LUMINARY_ADMIN_PASSWORD/LUMINARY_GUEST_PASSWORD from the
+# environment.
+#
 # The photos-backend and OpenAI secrets are skipped (left blank, nothing
 # created/touched) if you leave their first prompt empty -- e.g. a
 # local/NFS photos backend or S3 via IAM role needs no credentials, and you
@@ -37,6 +43,7 @@ NAMESPACE="${NAMESPACE:-luminary}"
 DB_SECRET_NAME="luminary-db-credentials"
 PHOTOS_SECRET_NAME="luminary-photos-credentials"
 OPENAI_SECRET_NAME="luminary-openai-credentials"
+AUTH_SECRET_NAME="luminary-auth-credentials"
 
 # Name/username aren't secrets, so these fall back to LUMINARY_DATABASE_
 # NAME/_USER from the environment (e.g. already exported for `make
@@ -58,6 +65,8 @@ DB_PASSWORD_DEFAULT="${LUMINARY_DATABASE_PASSWORD:-}"
 # environment if the caller already has them set (e.g. sourced the same
 # profile `make run-api` uses) -- empty if not set, which just means
 # "blank to skip" at the prompt.
+AUTH_ADMIN_PASSWORD_DEFAULT="${LUMINARY_ADMIN_PASSWORD:-}"
+AUTH_GUEST_PASSWORD_DEFAULT="${LUMINARY_GUEST_PASSWORD:-}"
 PHOTOS_USERNAME_DEFAULT="${LUMINARY_PHOTOS_USERNAME:-}"
 PHOTOS_PASSWORD_DEFAULT="${LUMINARY_PHOTOS_PASSWORD:-}"
 OPENAI_API_KEY_DEFAULT="${LUMINARY_OPENAI_API_KEY:-}"
@@ -160,6 +169,22 @@ echo "--- OpenAI-compatible chat endpoint credentials (${OPENAI_SECRET_NAME}, bl
 prompt_secret "OpenAI-compatible endpoint API key" OPENAI_API_KEY "${OPENAI_API_KEY_DEFAULT}" 0
 echo
 
+echo "--- Sign-in credentials (${AUTH_SECRET_NAME}, required while auth is enabled) ---"
+prompt_secret "Admin password" AUTH_ADMIN_PASSWORD "${AUTH_ADMIN_PASSWORD_DEFAULT}" 1
+prompt_secret "Guest password (optional; blank = no guest password)" AUTH_GUEST_PASSWORD "${AUTH_GUEST_PASSWORD_DEFAULT}" 0
+if [ -n "${AUTH_GUEST_PASSWORD}" ] && [ "${AUTH_GUEST_PASSWORD}" = "${AUTH_ADMIN_PASSWORD}" ]; then
+  echo "error: the guest password must differ from the admin password" >&2
+  exit 1
+fi
+# Signs session cookies. Generated here and kept if the secret already
+# exists, so re-running this script doesn't sign everyone out; delete the
+# secret (or its sessionSecret key) to rotate it.
+AUTH_SESSION_SECRET="$(oc get secret "${AUTH_SECRET_NAME}" --namespace "${NAMESPACE}" -o jsonpath='{.data.sessionSecret}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+if [ -z "${AUTH_SESSION_SECRET}" ]; then
+  AUTH_SESSION_SECRET="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
+fi
+echo
+
 oc create secret generic "${DB_SECRET_NAME}" \
   --namespace "${NAMESPACE}" \
   --from-literal=database="${DB_NAME}" \
@@ -189,7 +214,18 @@ else
   echo "Skipped ${OPENAI_SECRET_NAME} (no API key given)"
 fi
 
-unset DB_NAME DB_USERNAME DB_PASSWORD PHOTOS_USERNAME PHOTOS_PASSWORD OPENAI_API_KEY
+# guestPassword is only written when one was given (the chart reads it as optional).
+AUTH_SECRET_ARGS=(--from-literal=adminPassword="${AUTH_ADMIN_PASSWORD}" --from-literal=sessionSecret="${AUTH_SESSION_SECRET}")
+if [ -n "${AUTH_GUEST_PASSWORD}" ]; then
+  AUTH_SECRET_ARGS+=(--from-literal=guestPassword="${AUTH_GUEST_PASSWORD}")
+fi
+oc create secret generic "${AUTH_SECRET_NAME}" \
+  --namespace "${NAMESPACE}" \
+  "${AUTH_SECRET_ARGS[@]}" \
+  --dry-run=client -o yaml | oc apply -f -
+echo "Created/updated ${AUTH_SECRET_NAME}"
+
+unset DB_NAME DB_USERNAME DB_PASSWORD PHOTOS_USERNAME PHOTOS_PASSWORD OPENAI_API_KEY AUTH_ADMIN_PASSWORD AUTH_GUEST_PASSWORD AUTH_SESSION_SECRET AUTH_SECRET_ARGS
 
 echo
 echo "Done. These secret names match deploy/helm/luminary/values.yaml's"

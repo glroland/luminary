@@ -118,7 +118,7 @@ describe("App", () => {
     vi.spyOn(client, "fetchIndividuals").mockResolvedValue([
       { id: "p1", name: "Alice", has_representative_thumbnail: false },
     ]);
-    vi.spyOn(client, "fetchIndividualFaces").mockResolvedValue([{ id: "f1", photo_id: "1", tag_source: "manual" }]);
+    vi.spyOn(client, "fetchIndividualPhotoIds").mockResolvedValue(["1"]);
 
     render(<App />);
     await waitFor(() => expect(screen.getByAltText("beach.jpg")).toBeInTheDocument());

@@ -79,9 +79,17 @@ target/               (generated, gitignored) local venv and pytest cache --
 
 ## API
 
+Every route except `/api/health` and `/api/auth/*` needs a session (or guest
+mode); anything that changes data, plus everything the Manage page uses, is
+admin-only — see "Authentication" under Configuration and
+[docs/security.md](docs/security.md).
+
 | Method | Path                       | Description                        |
 |--------|----------------------------|-------------------------------------|
 | GET    | `/api/health`              | Liveness/readiness check            |
+| GET    | `/api/auth/session`        | Who the caller is: `{auth_enabled, guest_mode, authenticated, role}` |
+| POST   | `/api/auth/login`          | `{password}` → sets the session cookie (admin or guest by password); `401` if wrong, `429` if throttled |
+| POST   | `/api/auth/logout`         | Clears the session cookie |
 | GET    | `/api/photos`               | List indexed photo metadata         |
 | POST   | `/api/photos`               | Always `403` — uploads are disabled; see "Data safety" |
 | GET    | `/api/photos/{id}`          | Get metadata for one photo          |
@@ -137,9 +145,39 @@ Configuration (environment variables):
 | `LUMINARY_DATABASE_NAME`   | `luminary`          | Postgres database name                |
 | `LUMINARY_DATABASE_USER`   | `luminary`          | Postgres role                          |
 | `LUMINARY_DATABASE_PASSWORD` | *(none — required)* | Postgres role's password          |
-| `LUMINARY_CORS_ORIGINS`    | `*`                 | Comma-separated list of allowed origins |
+| `LUMINARY_CORS_ORIGINS`    | `*`                 | Comma-separated list of allowed origins (credentialed only when not `*`) |
+| `LUMINARY_AUTH_ENABLED`    | `false` (Helm: `true`) | Enforce roles — see "Authentication" below. Off: everyone is an admin |
+| `LUMINARY_GUEST_MODE_ENABLED` | `false` (Helm: `true`) | With auth on: visitors with no session browse read-only as guests; off: everyone must sign in |
+| `LUMINARY_ADMIN_PASSWORD`  | *(none — required with auth)* | Password that signs in as an admin |
+| `LUMINARY_GUEST_PASSWORD`  | *(none — optional)* | Password that signs in as a guest |
+| `LUMINARY_SESSION_SECRET`  | *(none — required with auth)* | 16+ random characters; signs session cookies |
+| `LUMINARY_SESSION_TTL_HOURS` | `12`              | Session lifetime |
+| `LUMINARY_SESSION_COOKIE_SECURE` | `auto`        | `true`/`false`/`auto` (Secure over HTTPS) |
 | `LUMINARY_LOG_LEVEL`       | `INFO`              | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `PORT`                     | `8080`              | Port uvicorn listens on                |
+
+### Authentication
+
+Two roles. A **guest** can browse everything (gallery, viewer, sidebar
+trees, the search chat) but change nothing. An **admin** has the full app,
+including the Manage page and every background job. With
+`LUMINARY_AUTH_ENABLED` off (local development) everyone is an admin.
+
+| Auth | Guest mode | What a visitor gets |
+|------|------------|---------------------|
+| off  | n/a        | Admin, no sign-in |
+| on   | on         | Guest with no sign-in; "Sign in" with the admin password for admin |
+| on   | off        | A login screen: admin password → admin, guest password → guest, anything else is refused |
+
+The rules are enforced in the API (every route is in `auth.ROUTE_POLICY`;
+a route not listed is refused) and mirrored in the GUI, which hides what a
+role can't use. The chat's tools run with the caller's role, so the LLM
+can't be used to get around it. The Helm chart turns auth and guest mode
+on; `deploy/create-secrets.sh` creates the `luminary-auth-credentials`
+Secret (admin password, optional guest password, generated session
+secret). To try it locally, e.g. `make run-api LUMINARY_AUTH_ENABLED=true
+LUMINARY_GUEST_MODE_ENABLED=true LUMINARY_ADMIN_PASSWORD=... LUMINARY_SESSION_SECRET=...`.
+Full design, threat notes and the OAuth/OIDC path: [docs/security.md](docs/security.md).
 
 ### Authenticating to the photos backend
 

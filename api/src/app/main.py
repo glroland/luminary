@@ -1,17 +1,17 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import backend_connection, jobs
+from . import auth, backend_connection, jobs
 from .config import get_cors_origins, get_photos_uri, redact_uri
 from .database import init_db, start_backfill
 from .logging_config import configure_logging
 from .tracing import configure_tracing
 from . import trips as trips_module
-from .routers import about, backend, descriptions, duplicates, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
+from .routers import about, auth as auth_router, backend, descriptions, duplicates, faces, health, homes, individuals, jobs as jobs_router, locations, pets, photos, rejections, sync, tags, trips
 
 configure_logging()
 
@@ -24,6 +24,8 @@ async def lifespan(app: FastAPI):
     # Schema only (fast, idempotent DDL) -- row-level backfills run on a
     # background thread instead, so a large library can't hold startup past
     # the liveness probe. See database.backfill_data().
+    # Refuses to start with auth on and no usable password/secret (auth.py).
+    auth.validate_config()
     init_db()
     start_backfill()
     # Connects to the photos backend (and keeps SMB alive) on a background
@@ -37,12 +39,17 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Luminary API")
 
 
-app = FastAPI(title="Luminary API", version="1.0.0", lifespan=lifespan)
+# auth.enforce_policy runs before every route handler and refuses any route
+# not listed in auth.ROUTE_POLICY (docs/security.md).
+app = FastAPI(title="Luminary API", version="1.0.0", lifespan=lifespan, dependencies=[Depends(auth.enforce_policy)])
 
+_cors_origins = get_cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_cors_origins(),
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    # Never credentialed with a wildcard origin: the session cookie must not
+    # be usable from an arbitrary site (docs/security.md).
+    allow_credentials="*" not in _cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -75,6 +82,7 @@ async def log_unhandled_exception(request: Request, exc: Exception) -> JSONRespo
 
 
 app.include_router(health.router, prefix="/api")
+app.include_router(auth_router.router, prefix="/api")
 app.include_router(about.router, prefix="/api")
 app.include_router(backend.router, prefix="/api")
 app.include_router(photos.router, prefix="/api")

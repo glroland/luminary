@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from .. import auth
 from ..config import (
     get_database_host,
     get_database_name,
@@ -24,15 +25,19 @@ class AboutResponse(BaseModel):
     version: Optional[str]
     # Current year by the server's clock (not the browser's).
     year: int
-    photos_source: str
-    chat_model: Optional[str]
-    chat_endpoint: Optional[str]
-    database_name: str
-    database_host: str
+    # Deployment details (where the photos and database are, which model):
+    # null for a non-admin -- a guest only gets the version and year.
+    photos_source: Optional[str] = None
+    chat_model: Optional[str] = None
+    chat_endpoint: Optional[str] = None
+    database_name: Optional[str] = None
+    database_host: Optional[str] = None
 
 
 @router.get("/about", response_model=AboutResponse)
-def about() -> AboutResponse:
+def about(request: Request) -> AboutResponse:
+    if not auth.current_principal(request).is_admin:
+        return AboutResponse(version=get_version(), year=datetime.now().year)
     # Never include credentials: URIs go through redact_uri, and the
     # database/API passwords are not part of this response at all.
     base_url = get_openai_base_url()

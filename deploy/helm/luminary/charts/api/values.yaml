@@ -28,6 +28,20 @@ persistence:
   accessMode: ReadWriteOnce
 env:
   corsOrigins: "*"
+  # --- Authentication/authorization (docs/security.md) ---
+  auth:
+    # Off: every request is an admin (local development). On: guests are
+    # read-only and only an admin may change anything or open Manage.
+    enabled: true
+    # On: a visitor with no session browses as a guest without signing in.
+    # Off: everyone must sign in (admin password = admin, guest password =
+    # guest, anything else is refused).
+    guestMode: true
+    # Name of a Secret (same namespace) with keys `adminPassword`,
+    # `sessionSecret` (random, 16+ characters) and, optionally,
+    # `guestPassword`. Created by deploy/create-secrets.sh. Required while
+    # enabled. Never put these in a values file.
+    credentialsSecret: luminary-auth-credentials
   # fsspec URI for photo storage: a bare path or file:// uses the PVC
   # below; s3://, smb://, https://, etc. point at an external backend
   # instead (set persistence.enabled=false in that case).

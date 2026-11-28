@@ -29,6 +29,19 @@ def client(tmp_path, monkeypatch):
     # Never trace a test run to a real MLflow server because the shell that
     # started it happens to have one configured (see tracing.py).
     monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    # Authentication is off unless a test turns it on (test_auth.py), whatever
+    # the shell that started the run has set.
+    for name in (
+        "LUMINARY_AUTH_ENABLED",
+        "LUMINARY_GUEST_MODE_ENABLED",
+        "LUMINARY_ADMIN_PASSWORD",
+        "LUMINARY_GUEST_PASSWORD",
+        "LUMINARY_SESSION_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    from app import auth as auth_module
+
+    auth_module.reset_throttle()
 
     from app import chat, sync
     from app.database import get_connection

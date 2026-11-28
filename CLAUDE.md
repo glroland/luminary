@@ -76,6 +76,41 @@ expects `dist` there and Node's module resolution requires `node_modules`
 to live alongside `package.json` — both are still covered by `make clean`
 explicitly, just not by the `target/` rename.
 
+## Authentication and authorization
+
+Design: `docs/security.md` (read it before touching auth). Two roles, `guest`
+(read-only browsing, incl. chat) and `admin` (everything, incl. Manage and all
+jobs). `LUMINARY_AUTH_ENABLED` off (the local default) means every request is
+an admin; Helm turns it and `LUMINARY_GUEST_MODE_ENABLED` on. Passwords
+(`LUMINARY_ADMIN_PASSWORD`, optional `LUMINARY_GUEST_PASSWORD`) and
+`LUMINARY_SESSION_SECRET` come from the `luminary-auth-credentials` Secret
+(`deploy/create-secrets.sh`); `auth.validate_config()` refuses startup when
+auth is on and they're missing/weak.
+
+- `auth.py`: `Principal`, `AuthProvider` (v1 `PasswordProvider`; OIDC would be
+  a second provider issuing the *same* signed session cookie), HMAC cookie
+  sessions, login throttle, and `ROUTE_POLICY` — the single table of
+  `(method, path) -> public|user|admin` enforced by the app-level dependency
+  `enforce_policy`. **A route missing from the table is refused (fail
+  closed).** Adding any route means adding its policy; `tests/test_auth.py`
+  fails if the table and the app disagree or a non-GET route isn't
+  admin-only (allowlist: login, logout, chat). Everything the Manage page
+  reads is admin-only too; the sidebar's guest-readable data has its own
+  endpoints (e.g. `GET /individuals/{id}/photos` — ids only — vs the admin-only
+  `/faces`). A handler can narrow further with `auth.require_admin(request)`
+  (`GET /trips?status=dismissed`). `GET /about` gives a guest only version/year.
+- **Chat tools**: the principal's role is threaded
+  `routers/photos.py -> chat.ask_events(role=) -> _Turn.role`; every tool must
+  be declared in `chat._TOOL_ROLES` (undeclared = refused, `None` role = guest),
+  offered tools are filtered by role and the role is re-checked in
+  `_run_tool_call`. Never take a role from the message/history/tool arguments.
+  A tool that mutates anything must be `auth.ADMIN`.
+- Web: `web/src/auth.jsx` (`AuthProvider`/`useAuth`; with no provider the
+  context is an open admin session, which is what component tests get).
+  `isAdmin` hides Manage, tag/face/trip/rotate controls and job polling;
+  `LoginScreen` replaces the app when sign-in is required. GUI checks are
+  convenience only — the API is the authority.
+
 ## API architecture (`api/src/app/`)
 
 **OpenAPI spec**: `docs/openapi.json` is generated from the FastAPI app by

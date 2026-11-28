@@ -46,6 +46,13 @@ api:
     accessMode: ReadWriteOnce
   env:
     corsOrigins: "*"
+    # Authentication/authorization (docs/security.md). Guest mode on: visitors
+    # browse read-only without signing in; only the admin password unlocks
+    # changes and the Manage page. Secret made by deploy/create-secrets.sh.
+    auth:
+      enabled: true
+      guestMode: true
+      credentialsSecret: luminary-auth-credentials
     photosUri: "smb://data.home.glroland.com/photo"
     database:
       host: db.home.glroland.com
