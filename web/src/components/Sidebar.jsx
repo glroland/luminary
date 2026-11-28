@@ -10,6 +10,7 @@ import LocationTree from "./LocationTree.jsx";
 import LocationMapDialog from "./LocationMapDialog.jsx";
 import { LOCATION_UNKNOWN, buildLocationTree } from "../locations.js";
 import { visibleTrips } from "../trips.js";
+import { isVideo } from "../media.js";
 
 // Builds a nested {children: {name: node}} tree of every directory that
 // appears in `photos`' filenames (relative paths, e.g.
@@ -79,6 +80,7 @@ const ICON_PATHS = {
   calendar: "M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM4 10h16M8 3v4M16 3v4",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
   trip: "M4 8h16v11H4zM9 8V5h6v3M4 13h16",
+  film: "M4 5h16v14H4zM8 5v14M16 5v14M4 9h4M4 15h4M16 9h4M16 15h4",
   sliders: "M4 7h10M18 7h2M4 17h2M10 17h10M16 4v6M8 14v6",
 };
 
@@ -156,6 +158,8 @@ export default function Sidebar({
   tags = [],
   selectedTag = null,
   onSelectTag = () => {},
+  selectedType = null,
+  onSelectType = () => {},
   selectedLocation = null,
   onSelectLocation = () => {},
   trips = [],
@@ -226,6 +230,11 @@ export default function Sidebar({
   const [mapOpen, setMapOpen] = useState(false);
   const [datesExpanded, setDatesExpanded] = useState(false);
   const [tripsExpanded, setTripsExpanded] = useState(false);
+  const [typesExpanded, setTypesExpanded] = useState(false);
+  const typeCounts = useMemo(() => {
+    const movies = photos.filter(isVideo).length;
+    return { video: movies, photo: photos.length - movies };
+  }, [photos]);
   const shownTrips = useMemo(() => visibleTrips(trips, showOutings), [trips, showOutings]);
   const noFilter =
     selectedDirectory === null &&
@@ -233,6 +242,7 @@ export default function Sidebar({
     selectedTag === null &&
     selectedLocation === null &&
     selectedTrip === null &&
+    selectedType === null &&
     selectedDate === null &&
     !searchActive;
 
@@ -410,6 +420,27 @@ export default function Sidebar({
             showOutings={showOutings}
             onToggleOutings={onToggleOutings}
           />
+        </Section>
+
+        <Section title="By Type" icon="film" expanded={typesExpanded} onToggle={() => setTypesExpanded((prev) => !prev)}>
+          <ul className="directory-tree">
+            {[
+              ["photo", "Photos"],
+              ["video", "Movies"],
+            ].map(([type, label]) => (
+              <li key={type}>
+                <div
+                  className={`directory-tree-item${selectedType === type ? " directory-tree-item-active" : ""}`}
+                  data-count={typeCounts[type] > 0 ? typeCounts[type].toLocaleString() : undefined}
+                >
+                  <span className="directory-tree-toggle-spacer" aria-hidden="true" />
+                  <button type="button" className="directory-tree-label" onClick={() => onSelectType(type)}>
+                    {label}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </Section>
       </nav>
 

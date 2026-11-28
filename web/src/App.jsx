@@ -37,6 +37,7 @@ import { applyTheme, getStoredTheme } from "./theme.js";
 
 import { matchesLocation } from "./locations.js";
 import { orderByIds } from "./trips.js";
+import { isVideo } from "./media.js";
 
 const POLL_INTERVAL_MS = 1000;
 const SHOW_OUTINGS_KEY = "luminary.showDayOutings";
@@ -162,6 +163,10 @@ export default function App() {
   // null means no location filter; otherwise a locations.js path key (or
   // LOCATION_UNKNOWN) chosen in the sidebar's "By Location" tree.
   const [selectedLocation, setSelectedLocation] = useState(null);
+  // null means no media-type filter; otherwise "photo" (everything that isn't
+  // a movie, animated images included) or "video". Mutually exclusive with
+  // the other filters, same convention.
+  const [selectedType, setSelectedType] = useState(null);
   // The catalogued-individuals list for the sidebar's "Individuals"
   // section; ManagementPage owns the full CRUD lifecycle for these, this
   // is just a read-only copy kept here so Sidebar can render it without
@@ -456,6 +461,7 @@ export default function App() {
   async function handleDismissTrip() {
     await dismissTrip(selectedTrip);
     setSelectedTrip(null);
+    setSelectedType(null);
     loadTrips();
     resetGrid();
   }
@@ -515,6 +521,7 @@ export default function App() {
     setSelectedIndividual(null);
     setSelectedTag(null);
     setSelectedTrip(null);
+    setSelectedType(null);
     setSelectedDate(null);
     setSelectedLocation(null);
     setSelectedPhoto(null);
@@ -594,6 +601,8 @@ export default function App() {
               const dir = directoryOf(photo.filename);
               return dir === selectedDirectory || dir.startsWith(`${selectedDirectory}/`);
             })
+          : selectedType !== null
+            ? photos.filter((photo) => (selectedType === "video") === isVideo(photo))
           : selectedLocation !== null
             ? photos.filter((photo) => matchesLocation(photo, selectedLocation))
           : selectedDate !== null
@@ -616,6 +625,7 @@ export default function App() {
     selectedStop,
     selectedDirectory,
     selectedLocation,
+    selectedType,
     selectedDate,
     sortOrder,
   ]);
@@ -660,6 +670,7 @@ export default function App() {
           setSelectedDate(null);
           setSelectedLocation(null);
           setSelectedTrip(null);
+          setSelectedType(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -674,6 +685,7 @@ export default function App() {
           setSelectedDate(null);
           setSelectedLocation(null);
           setSelectedTrip(null);
+          setSelectedType(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -687,6 +699,7 @@ export default function App() {
           setSelectedDate(null);
           setSelectedLocation(null);
           setSelectedTrip(null);
+          setSelectedType(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -699,6 +712,20 @@ export default function App() {
           setSelectedTag(null);
           setSelectedDate(null);
           setSelectedTrip(null);
+          setSelectedType(null);
+          setSearchResults(null);
+          setView("gallery");
+          resetGrid();
+        }}
+        selectedType={selectedType}
+        onSelectType={(type) => {
+          setSelectedType(type);
+          setSelectedDirectory(null);
+          setSelectedIndividual(null);
+          setSelectedTag(null);
+          setSelectedDate(null);
+          setSelectedLocation(null);
+          setSelectedTrip(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -709,6 +736,7 @@ export default function App() {
         onToggleOutings={handleToggleOutings}
         onSelectTrip={(tripId) => {
           setSelectedTrip(tripId);
+          setSelectedType(null);
           setSelectedDirectory(null);
           setSelectedIndividual(null);
           setSelectedTag(null);
@@ -726,6 +754,7 @@ export default function App() {
           setSelectedIndividual(null);
           setSelectedTag(null);
           setSelectedTrip(null);
+          setSelectedType(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -737,6 +766,7 @@ export default function App() {
           setSelectedDate(null);
           setSelectedLocation(null);
           setSelectedTrip(null);
+          setSelectedType(null);
           setSearchResults(null);
           setView("gallery");
           resetGrid();
@@ -864,6 +894,7 @@ export default function App() {
               setSelectedDate(null);
               setSelectedLocation(null);
               setSelectedTrip(null);
+              setSelectedType(null);
               setSearchResults(null);
               setLastSearchResults(null);
               setIndividuals([]);

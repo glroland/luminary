@@ -154,7 +154,7 @@ describe("Sidebar", () => {
     const headers = screen
       .getAllByRole("button", { name: /^by /i })
       .map((button) => button.textContent.replace("›", "").trim());
-    expect(headers).toEqual(["By Folder", "By Tag", "By Individual", "By Location", "By Date", "By Trip"]);
+    expect(headers).toEqual(["By Folder", "By Tag", "By Individual", "By Location", "By Date", "By Trip", "By Type"]);
     expandSection(/^by tag$/i);
     expect(screen.getByText("Favorites").closest(".directory-tree-item")).toHaveAttribute("data-count", "3");
     expect(screen.getByText("Empty").closest(".directory-tree-item")).not.toHaveAttribute("data-count");
